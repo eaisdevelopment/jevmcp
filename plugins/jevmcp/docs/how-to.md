@@ -262,6 +262,11 @@ Do this before you tell the user a coding task is done, in any project that has 
 
 ## 4. What to do with each label
 
+On a large map a full check can flag dozens of claims. Investigate every DRIFT, the ten or so
+highest-P `review` items, and the `??` items that matter for the task at hand; report the rest as
+counts and say how many you did not open. A first reply the user can act on beats a complete one
+they never see.
+
 The fast model screens; you investigate only what it flags.
 
 | Label | What it means | What you do |

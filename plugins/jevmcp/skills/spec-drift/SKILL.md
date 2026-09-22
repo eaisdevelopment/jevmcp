@@ -134,6 +134,13 @@ items in the repository. Do not start workflows or sub-agents, search outside th
 or build and run code to prove a finding unless the user asks for a deep review; say what you
 would verify and how instead.
 
+**A big spec flags a lot.** A full check on a few hundred sentences can return dozens of
+`review` items; opening every one takes longer than the user is waiting for. In one pass do:
+every **DRIFT**; the highest-P **review** items until they stop being informative (about ten is
+usually plenty); and the **??** items that matter for what the user is doing, since those are
+map problems to fix. Give counts for the rest and say plainly how many you did not open, so the
+user can ask for another pass. One reply beats twenty minutes of silence.
+
 ## Keeping the map honest
 
 - **Code renamed or moved:** the tool names the broken entry and suggests the closest name.

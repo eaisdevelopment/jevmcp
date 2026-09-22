@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.1 — 2026-09-22
+
+Found by running a full check on a real 131-requirement Java project: with about a hundred
+`review` items, an agent that investigates everything flagged runs for a quarter of an hour and
+reports nothing in the meantime. The skill and the recipes now set a budget — every DRIFT, the
+ten or so highest-probability `review` items, the `??` items that matter, and counts for the
+rest, with an honest note of how many were not opened.
+
 ## 1.5.0 — 2026-09-22
 
 **The marketplace is now called `jev`, so installing is `jevmcp@jev`.** The plugin, the server
