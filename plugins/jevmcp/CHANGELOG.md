@@ -1,9 +1,32 @@
 # Changelog
 
+## 1.3.0 — 2026-09-22
+
+**Names say what they mean, and the key is set in one command.**
+
+- Tools renamed so the name carries the subject: `check_drift` → **`check_spec_drift`**,
+  `validate_map` → **`validate_spec_map`**, `draft_map` → **`draft_spec_map`**, `show_payload` →
+  **`preview_spec_check`**. If you had approved a tool by name in `~/.codex/config.toml`, approve
+  the new name once.
+- Every place that says "spec map" now says what it is: the file `spec_map.json` that pairs each
+  sentence of your spec with the code that implements it, written for you by `draft_spec_map`.
+  That definition is in the server's instructions, in each tool's description, in the skill and in
+  both READMEs.
+- **`--set-key`**: store your TypeSafe API key once, from your own terminal. It asks without
+  echoing, writes `~/.config/jevmcp/typesafe.env` (mode 600), survives plugin updates, and is read
+  by any client that cannot hold the key itself — no file to create by hand. `--show-key-source`
+  says where the key would come from, without printing it. When a check finds no key, the error
+  names the exact command instead of talking about environment variables.
+- Codex, unattended: `--approve-for-me` is refused for `check_spec_drift` (Codex's automatic
+  reviewer blocks a tool that sends code to a third party). The README now gives the per-tool
+  approval that does work.
+- The command-line checker is `scripts/spec_drift.py` (was `docdrift.py`); the name "docdrift" is
+  gone from everything a user or a model sees.
+
 ## 1.2.1 — 2026-09-22
 
 Documentation: the README now explains what happens the first time you use it, and what
-`spec_map.json` is. **You never create or edit that file yourself** — `draft_map` writes it and
+`spec_map.json` is. **You never create or edit that file yourself** — `draft_spec_map` writes it and
 the agent reviews it with you. The skill's own description says so too, so an agent explains it
 the same way.
 
@@ -14,7 +37,7 @@ the tools of every future family — CI failure triage, code audit — will be o
 server rather than by a server each. One install, one server process, one API key.
 
 - The server script is `scripts/jevmcp_server.py`; its four tools are unchanged
-  (`check_drift`, `validate_map`, `show_payload`, `draft_map`), as is everything they do.
+  (`check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map`), as is everything they do.
 - In Claude Code the tools are now `mcp__plugin_jevmcp_jevmcp__<tool>`; in `~/.codex/config.toml`
   the table is `[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]`.
 
@@ -37,7 +60,7 @@ First public release.
 
 - **Skill `spec-drift`**: set up a project (find the spec, draft and review a spec map), check
   after every change, read the results, the fast model's blind spots, reporting.
-- **MCP server `docdrift`**: `check_drift`, `validate_map`, `show_payload`, `draft_map`. Finds the
+- **MCP server `docdrift`**: `check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map`. Finds the
   project's spec map on its own; keeps the parsed code in memory and re-reads only changed files.
 - **MCP 2026-07-28**, and still serving clients of earlier revisions (dual-era): stateless
   requests with per-request `_meta`; `server/discover`; `resultType` and the server's identity on

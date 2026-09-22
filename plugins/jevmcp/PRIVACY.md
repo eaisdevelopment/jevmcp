@@ -5,7 +5,7 @@ logs of your conversations.
 
 ## What leaves your machine
 
-Only when a check runs — the MCP tool `check_drift`, or the command line without `--dry-run` —
+Only when a check runs — the MCP tool `check_spec_drift`, or the command line without `--dry-run` —
 and, per requirement being checked:
 
 | Sent | Details |
@@ -32,7 +32,7 @@ The code paired with a requirement is cleaned before it is sent:
     Placeholders such as `${DB_PASSWORD}` are kept: they reveal nothing.
 
   A value that matches none of these (for example `DATABASE_DSN = "..."` written in code) is sent
-  as written. `show_payload` shows you exactly what would go.
+  as written. `preview_spec_check` shows you exactly what would go.
 
 It goes to TypeSafe's API (`https://api.typesafe.ai/v1/systemone`) over HTTPS, authenticated with
 your API key. TypeSafe's own terms and privacy policy govern what it does with requests:
@@ -52,7 +52,7 @@ your API key. TypeSafe's own terms and privacy policy govern what it does with r
 
 ## See it before it is sent
 
-`show_payload` (MCP) or `--dry-run --show-payload` (command line) prints exactly what a check
+`preview_spec_check` (MCP) or `--dry-run --show-payload` (command line) prints exactly what a check
 would send, and sends nothing. The skill asks for your consent before the first check in a
 project.
 

@@ -1,6 +1,6 @@
 ---
 name: spec-drift
-description: Check whether a project's code still matches its design spec or requirements document. A fast model (TypeSafe's Jev) screens every requirement in seconds; you investigate only what it flags. A project is set up once with a spec map (spec_map.json), which pairs each requirement sentence with the code that implements it; the draft_map tool writes it, the user never writes it by hand. Use when the user asks whether code matches the spec, design or requirements; after changing code in a project that has a *spec_map.json (before you finish the task); when a spec is edited; before a release; or to set up spec-drift checking for a project. Works with Java/Spring, JavaScript/TypeScript (Node, NestJS, Express, Hono, Fastify, Next.js) and Python (FastAPI, Flask, Django), and with any other language through line ranges.
+description: Check whether a project's code still matches its design spec or requirements document. A fast model (TypeSafe's Jev) screens every requirement in seconds; you investigate only what it flags. A project is set up once with a spec map (spec_map.json), which pairs each requirement sentence with the code that implements it; the draft_spec_map tool writes it, the user never writes it by hand. Use when the user asks whether code matches the spec, design or requirements; after changing code in a project that has a *spec_map.json (before you finish the task); when a spec is edited; before a release; or to set up spec-drift checking for a project. Works with Java/Spring, JavaScript/TypeScript (Node, NestJS, Express, Hono, Fastify, Next.js) and Python (FastAPI, Flask, Django), and with any other language through line ranges.
 ---
 
 # Spec drift check
@@ -8,40 +8,43 @@ description: Check whether a project's code still matches its design spec or req
 **Division of labour.** The fast model screens every spec requirement against the code that
 implements it and labels each one. **You** spend your effort only on what it flags, on what it
 cannot judge, and on its known blind spots. Do not re-read the whole spec and codebase yourself
-to do its job, and never call the TypeSafe API by hand: docdrift's questions and thresholds are
-measured, pinned and tested.
+to do its job, and never call the TypeSafe API by hand: the checker's questions and thresholds
+are measured, pinned and tested.
 
-A project is set up once: a **spec map** (`spec_map.json`, usually next to the spec) pairs each
-requirement sentence with the code that implements it, or marks it excluded with a reason.
-After that, every check is seconds and fractions of a cent.
+A project is set up once: a **spec map** — the file `spec_map.json` (usually next to the spec,
+committed with the code) that pairs each requirement sentence with the code that implements it, or
+marks it excluded with a reason. **The user never writes it by hand**: `draft_spec_map` writes it
+and you review the entries with the user. After that, every check is seconds and fractions of a cent.
 
 ## The tools
 
-**Use the MCP tools when they are available** (server `jevmcp`): `check_drift`,
-`validate_map`, `show_payload`, `draft_map`. They keep the parsed code in memory and hold the
+**Use the MCP tools when they are available** (server `jevmcp`): `check_spec_drift`,
+`validate_spec_map`, `preview_spec_check`, `draft_spec_map`. They keep the parsed code in memory and hold the
 API key themselves. Pass `project` with the absolute path of the project (your working
 directory) in every call: some clients do not tell the server which project it is in, and it
 is harmless where they do.
 
 Otherwise use the command line, from the project's root. It needs network access to reach
-TypeSafe (and, the first time, to install its Python dependencies); in a sandbox without
-network, use the MCP tools instead.
+TypeSafe (and, the first time, to install its Python dependencies); in a sandbox without network
+- Codex's default sandbox is one - the command line silently reaches nothing, so use the MCP
+tools, which run outside the sandbox. **Never report "no drift" from a run that could not reach
+TypeSafe** (exit 3): say the check did not run.
 
 ```bash
-DD="uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/docdrift.py"
+DD="uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/spec_drift.py"
 $DD --help                      # every option, explained
 ```
 
 If `${CLAUDE_PLUGIN_ROOT}` above is not already a real path, the plugin's `scripts/` folder is
-two folders above this SKILL.md: `../../scripts/docdrift.py`, relative to this file.
+two folders above this SKILL.md: `../../scripts/spec_drift.py`, relative to this file.
 
 | Job | MCP tool | Command line |
 |---|---|---|
-| Check claims about changed files | `check_drift` (default: git's changed files; `files: [...]` to name them) | `$DD --map <map> --changed --jobs 8 --out <tmp>/drift.json` |
-| Full check | `check_drift` with `all: true` | `$DD --map <map> --jobs 8 --out <tmp>/drift.json` |
-| Validate the map (free) | `validate_map` | `$DD --map <map> --dry-run --strict` |
-| See exactly what is sent (free) | `show_payload` | `$DD --map <map> --dry-run --show-payload` |
-| Draft a map for a new project (free) | `draft_map` | `$DD --docs <spec> --draft-map <spec folder>/spec_map.json` |
+| Check claims about changed files | `check_spec_drift` (default: git's changed files; `files: [...]` to name them) | `$DD --map <map> --changed --jobs 8 --out <tmp>/drift.json` |
+| Full check | `check_spec_drift` with `all: true` | `$DD --map <map> --jobs 8 --out <tmp>/drift.json` |
+| Validate the map (free) | `validate_spec_map` | `$DD --map <map> --dry-run --strict` |
+| See exactly what is sent (free) | `preview_spec_check` | `$DD --map <map> --dry-run --show-payload` |
+| Draft a map for a new project (free) | `draft_spec_map` | `$DD --docs <spec> --draft-map <spec folder>/spec_map.json` |
 
 Write results to a temporary folder, not into the repository. Exit codes: **0** no drift ·
 **1** at least one DRIFT · **2** setup or map problem, fix it (the output names each broken
@@ -54,17 +57,17 @@ never block the user's task on it.
   removed, secret-looking values redacted, paths relative) to `api.typesafe.ai`. Before the first
   real check in a project, tell the user that and get a yes, unless they have already said so
   in this conversation or the project's CLAUDE.md or AGENTS.md records it. The dry-run and
-  `show_payload` send nothing and need no consent.
+  `preview_spec_check` send nothing and need no consent.
 - **The key.** The MCP server gets it from the plugin's settings (Claude Code asks for it when
-  the plugin is enabled) or from `TYPESAFE_API_KEY` in the environment that starts the agent
-  (Codex forwards that variable to the server), or from `typesafe.env` in the plugin's data
-  folder (other Agent Plugins clients; the error message names the path); never from the
-  project's own `.env`. The command line uses `--key-file` if given, otherwise
+  the plugin is enabled), from `TYPESAFE_API_KEY` in the environment that starts the agent, or
+  from the file the user stored with `jevmcp_server.py --set-key`; never from the project's own
+  `.env`. If it is missing, the tool error names the one command the user runs in their own
+  terminal — pass that on, and never run it yourself or ask for the key in chat. The command line uses `--key-file` if given, otherwise
   `TYPESAFE_API_KEY`, otherwise a `TYPESAFE_API_KEY=` line in the `.env` of the folder it runs
   from. If the key is missing, tell the user where to set it and stop. Never ask for the key in chat, never print it, never pass it on a command line you
   show.
 
-## A. Setting up a project that has no map
+## A. Setting up a project that has no spec map
 
 1. **Find the spec.** Look for design, specification, requirements or architecture documents
    (Markdown or reStructuredText). If there are several candidates, ask which one is the source
@@ -72,7 +75,7 @@ never block the user's task on it.
 2. **See what the tool can read:** `$DD --docs <spec> --dry-run`. It reports the languages,
    routes and config keys it found, and lists the sentences it cannot pair on its own. If it
    says a parser is missing or a language can only be paired by line range, note it.
-3. **Draft the map** with `draft_map` or `--draft-map`. It suggests code for every sentence;
+3. **Draft the map** with `draft_spec_map` or `--draft-map`. It suggests code for every sentence;
    the suggestions are guesses.
 4. **Review every entry. This is the important step, and it is your job.**
    - The code could contradict the sentence (a number, a name, a format, an ordering, a
@@ -92,7 +95,7 @@ never block the user's task on it.
    - For a long spec, work section by section. If the user wants it done thoroughly, offer a
      second pass that tries to refute each exclusion; it finds real requirements hidden in
      rationale and backlog.
-5. **Validate:** `validate_map` or `--dry-run --strict` must report no problems.
+5. **Validate:** `validate_spec_map` or `--dry-run --strict` must report no problems.
 6. **With consent, run the first full check**, then report (below). Suggest committing the map,
    and adding the free `--dry-run --strict` check to CI so new spec sentences cannot go unmapped.
 
@@ -150,5 +153,5 @@ A short table: claim (spec file:line) · label · P(drifted) · what you found �
 the project, say which findings are new and which are already known.
 
 **Never:** send code without consent, print or ask for the key, treat `??` as a pass, overwrite
-a reviewed map, change docdrift's questions or thresholds, commit without asking, or block the
+a reviewed map, change the checker's questions or thresholds, commit without asking, or block the
 user's task on exit 3.

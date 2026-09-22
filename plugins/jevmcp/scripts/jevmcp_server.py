@@ -11,7 +11,7 @@
 # ///
 """jevmcp: TypeSafe's fast model Jev as tools a coding agent calls (Claude Code, Codex, or any
 MCP client). One server holds every Jev tool; today that is the spec-drift family - the same
-checks as docdrift.py - and further families (CI failure triage, code audit) are added to the
+checks as spec_drift.py - and further families (CI failure triage, code audit) are added to the
 TOOLS list and the dispatch table below, so people keep one server and one API key.
 
 Why a server when the command line exists:
@@ -22,21 +22,22 @@ Why a server when the command line exists:
   * The TypeSafe key stays in this process. The agent calls a tool; it never reads, passes
     or prints the key.
 
-The checks, thresholds and redaction are docdrift.py's own (this file imports it), so the
+The checks, thresholds and redaction are spec_drift.py's own (this file imports it), so the
 command line and the server always judge the same way.
 
 Works in any project: it serves the project it is started in (the client's working folder,
 or CLAUDE_PROJECT_DIR), finds the project's spec map (any file named *spec_map.json) on its
-own, and a project without one can draft it with the draft_map tool.
+own, and a project without one can draft it with the draft_spec_map tool.
 
 Speaks MCP over stdio (newline-delimited JSON-RPC 2.0) with no dependencies beyond
-docdrift's. The plugin packages register it for you and keep the key in the client's own
+the checker's. The plugin packages register it for you and keep the key in the client's own
 settings. To register it by hand instead, e.g. in Claude Code:
 
-  claude mcp add --scope user jevmcp -- uv run --script /path/to/jevmcp_server.py --key-file ~/.config/typesafe.env
+  claude mcp add --scope user jevmcp -- uv run --script /path/to/jevmcp_server.py
 
-where that file holds the line TYPESAFE_API_KEY=... and only you can read it (chmod 600).
-Never put the key itself on a command line or in a settings file.
+and store the key once, in your own terminal:  uv run --script jevmcp_server.py --set-key
+(it asks for the key without echoing it and writes ~/.config/jevmcp/typesafe.env, mode 600).
+Never put the key itself on a command line, in a settings file, or in a chat message.
 
 Closing its input ends the session (the stdio transport's shutdown signal): a request not yet
 answered is dropped, so a client keeps stdin open until it has read the replies.
@@ -47,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import getpass
 import hashlib
 import io
 import json
@@ -62,7 +64,7 @@ import traceback
 from collections import deque
 from pathlib import Path
 
-# The protocol owns stdout. Anything else that prints - docdrift's notes, a library
+# The protocol owns stdout. Anything else that prints - the checker's notes, a library
 # warning - goes to stderr, which Claude Code keeps in its MCP log.
 _PROTOCOL_OUT = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", newline="\n", write_through=True)
 try:
@@ -73,9 +75,9 @@ sys.stdout = sys.stderr
 
 sys.dont_write_bytecode = True                     # never leave a .pyc inside an installed plugin
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import docdrift as dd  # noqa: E402
+import spec_drift as dd  # noqa: E402   # the spec-drift checker: questions, thresholds, redaction
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -93,29 +95,32 @@ SERVER_INFO = {"name": "jevmcp", "title": "jevmcp", "version": VERSION,
 CAPABILITIES = {"tools": {"listChanged": False}}
 
 INSTRUCTIONS = """\
-jevmcp puts TypeSafe's fast model Jev to work. It screens; you spend your effort only on what
-it flags. Today it holds one family of tools, spec drift:
+jevmcp puts TypeSafe's fast model Jev to work: it screens, you spend your effort only on what
+it flags. Today it holds one family of tools, spec drift - does the code still match its
+design spec or requirements document?
 
-Spec drift - does the code still match its design spec? A fast model screens every claim in
-the spec map and labels it.
-- No spec map in the project yet: draft_map, then review every entry before checking.
-- check_drift after changing code (default: claims about the files git reports as changed);
-  all=true for a full check. Labels: DRIFT = investigate each one; review = sorted by
-  P(drifted), investigate from 0.3 up; ?? = NOT a pass (the code shown cannot settle the
-  claim - fix the map entry); ok = spot-check a couple.
-- validate_map after editing the spec or the map (free, sends nothing).
-- show_payload to see exactly what would be sent for some claims (free).
-Never pass or ask for the API key; the server holds it."""
+These tools work off a SPEC MAP: a file in the project (spec_map.json, committed with the
+code) that pairs each sentence of the spec with the code that implements it. The user never
+writes it by hand - draft_spec_map writes it and you review the entries with the user.
+- No spec map in the project yet: draft_spec_map, then review every entry before any check.
+- check_spec_drift after changing code (default: claims about the files git reports as
+  changed); all=true for a full check. Labels: DRIFT = investigate each one; review = sorted
+  by P(drifted), investigate from 0.3 up; ?? = NOT a pass (the code shown cannot settle the
+  claim - fix that entry of the spec map); ok = spot-check a couple.
+- validate_spec_map after editing the spec or the map (free, sends nothing).
+- preview_spec_check to see exactly what would be sent for some claims (free).
+Never pass or ask for the API key; the server holds it. If it is missing, the error says the
+one command the user runs to store it."""
 
 # One list for every tool the server offers. A new family (CI failure triage, code audit) adds
 # its tools here and its methods to Server.call's table - people keep one server and one key.
 SPEC_DRIFT_TOOLS = [
     {
-        "name": "check_drift",
-        "title": "Check code against the spec",
+        "name": "check_spec_drift",
+        "title": "Check the code against the spec",
         # Not read-only: it sends the spec sentences and the paired code to TypeSafe, and sending
         # data out of the user's machine is a write action (OpenAI app guidelines).
-        "annotations": {"title": "Check code against the spec", "readOnlyHint": False, "destructiveHint": False,
+        "annotations": {"title": "Check the code against the spec", "readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": True},
         "description": (
             "Check code against the spec with TypeSafe's fast model and return the results, most "
@@ -132,7 +137,8 @@ SPEC_DRIFT_TOOLS = [
                 "all": {"type": "boolean",
                         "description": "Check every claim in the map - a full check. Default false."},
                 "map": {"type": "string",
-                        "description": "The spec map to use, relative to the project. Leave out: the "
+                        "description": "The spec map (spec_map.json: which code implements which spec "
+                                       "sentence) to use, relative to the project. Leave out: the "
                                        "project's only *spec_map.json is found automatically."},
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
@@ -168,9 +174,9 @@ SPEC_DRIFT_TOOLS = [
         },
     },
     {
-        "name": "validate_map",
-        "title": "Validate the spec map",
-        "annotations": {"title": "Validate the spec map", "readOnlyHint": True, "destructiveHint": False,
+        "name": "validate_spec_map",
+        "title": "Validate the spec map (spec-to-code pairings)",
+        "annotations": {"title": "Validate the spec map (spec-to-code pairings)", "readOnlyHint": True, "destructiveHint": False,
                         "idempotentHint": True, "openWorldHint": False},
         "description": (
             "Check that the spec map still fits the spec and the code - every reference resolves, "
@@ -183,7 +189,8 @@ SPEC_DRIFT_TOOLS = [
                            "description": "Also report unmapped sentences, unreviewed entries, "
                                           "exclusions without a 'why'. Default true."},
                 "map": {"type": "string",
-                        "description": "The spec map to use, relative to the project. Leave out: the "
+                        "description": "The spec map (spec_map.json: which code implements which spec "
+                                       "sentence) to use, relative to the project. Leave out: the "
                                        "project's only *spec_map.json is found automatically."},
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
@@ -207,12 +214,12 @@ SPEC_DRIFT_TOOLS = [
         },
     },
     {
-        "name": "show_payload",
+        "name": "preview_spec_check",
         "title": "Show what a check would send",
         "annotations": {"title": "Show what a check would send", "readOnlyHint": True, "destructiveHint": False,
                         "idempotentHint": True, "openWorldHint": False},
         "description": (
-            "Show exactly what check_drift would send to TypeSafe for some claims: the sentence, the "
+            "Show exactly what check_spec_drift would send to TypeSafe for some claims: the sentence, the "
             "code with comments removed and secrets redacted, any computed values, and the 3 fixed "
             "questions. Free: sends nothing."),
         "inputSchema": {
@@ -224,7 +231,8 @@ SPEC_DRIFT_TOOLS = [
                 "line": {"type": "integer",
                          "description": "Only the claim(s) from this line of the spec."},
                 "map": {"type": "string",
-                        "description": "The spec map to use, relative to the project. Leave out: the "
+                        "description": "The spec map (spec_map.json: which code implements which spec "
+                                       "sentence) to use, relative to the project. Leave out: the "
                                        "project's only *spec_map.json is found automatically."},
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
@@ -235,15 +243,15 @@ SPEC_DRIFT_TOOLS = [
         },
     },
     {
-        "name": "draft_map",
-        "title": "Draft a spec map",
-        "annotations": {"title": "Draft a spec map", "readOnlyHint": False, "destructiveHint": False,
+        "name": "draft_spec_map",
+        "title": "Draft the spec map (pair each requirement with code)",
+        "annotations": {"title": "Draft the spec map (pair each requirement with code)", "readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": False},
         "description": (
             "Set up a project that has no spec map yet: suggest a code location for every sentence of the "
             "spec(s) and write them to a new map file for review. Every entry must then be reviewed - point "
             "'code' at what enforces the sentence and set status 'reviewed', or set status 'excluded' with a "
-            "'why' - before check_drift is worth running. Free: sends nothing. Never overwrites a file."),
+            "'why' - before check_spec_drift is worth running. Free: sends nothing. Never overwrites a file."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -267,6 +275,9 @@ SPEC_DRIFT_TOOLS = [
 TOOLS = [*SPEC_DRIFT_TOOLS]
 
 KEY_FILE_NAME = "typesafe.env"
+# Where `--set-key` stores the key, and the last place the server looks. One path for every
+# client: Codex's own plugin-data folder is an unguessable hash, and a person cannot find it.
+CONFIG_KEY_FILE = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "jevmcp" / KEY_FILE_NAME
 
 
 def _plugin_data_dir() -> Path | None:
@@ -278,14 +289,55 @@ def _plugin_data_dir() -> Path | None:
     return None
 
 
-def _plugin_data_key_file() -> str | None:
-    """The portable place for the key: Agent Plugins forbids secrets in a server's env, so a
-    client with no secret mechanism of its own has the user put it in the plugin's data folder.
-    Used only when TYPESAFE_API_KEY is not already in the environment."""
+def _stored_key_file() -> str | None:
+    """Where the key is stored when the client cannot hold it: the plugin's data folder (clients
+    that provide one) or ~/.config/jevmcp/typesafe.env, written by `--set-key`. Agent Plugins
+    forbids secrets in a server's env, and Codex has no prompt of its own. Used only when
+    TYPESAFE_API_KEY is not already in the environment (Claude Code puts it there itself)."""
     if os.environ.get("TYPESAFE_API_KEY"):
         return None
     folder = _plugin_data_dir()
-    return str(folder / KEY_FILE_NAME) if folder and (folder / KEY_FILE_NAME).is_file() else None
+    if folder and (folder / KEY_FILE_NAME).is_file():
+        return str(folder / KEY_FILE_NAME)
+    return str(CONFIG_KEY_FILE) if CONFIG_KEY_FILE.is_file() else None
+
+
+def set_key(target: Path | None = None) -> int:
+    """Store the key once, from the user's own terminal. Never an argument: a command line ends
+    up in the shell history and in an agent's transcript."""
+    target = target or CONFIG_KEY_FILE
+    if not (sys.stdin.isatty() and sys.__stdout__.isatty()):
+        print(f"--set-key asks for the key without echoing it, so run it in your own terminal:\n"
+              f"  uv run --quiet --script {Path(__file__).resolve()} --set-key", file=sys.stderr)
+        return 2
+    key = getpass.getpass(f"TypeSafe API key (not shown, stored in {target}): ").strip()
+    if not key:
+        print("nothing entered - no file written", file=sys.stderr)
+        return 2
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        f.write(f"TYPESAFE_API_KEY={key}\n")
+    print(f"Stored in {target} - only you can read it, and it survives plugin updates.\n"
+          f"Restart your agent; the jevmcp server picks it up at its next start.", file=sys.stderr)
+    return 0
+
+
+def show_key_source(key_file: str | None = None) -> int:
+    """Say which source the key would come from, and whether it is there. Never print the key."""
+    folder = _plugin_data_dir()
+    places = [("--key-file", key_file, bool(key_file) and Path(key_file).expanduser().is_file()),
+              ("TYPESAFE_API_KEY in the environment (Claude Code sets it from the plugin's settings)",
+               "set" if os.environ.get("TYPESAFE_API_KEY") else "not set", bool(os.environ.get("TYPESAFE_API_KEY"))),
+              ("the plugin's data folder", str(folder / KEY_FILE_NAME) if folder else "no PLUGIN_DATA here",
+               bool(folder) and (folder / KEY_FILE_NAME).is_file()),
+              ("--set-key storage", str(CONFIG_KEY_FILE), CONFIG_KEY_FILE.is_file())]
+    used = next((name for name, _, ok in places if ok), None)
+    for name, where, ok in places:
+        print(f"  {'USED ' if name == used else '     '}{name}: {where}{' - found' if ok else ''}", file=sys.stderr)
+    print(("\nThe key comes from: " + used) if used else
+          f"\nNo key anywhere. Store one:  uv run --quiet --script {Path(__file__).resolve()} --set-key",
+          file=sys.stderr)
+    return 0 if used else 1
 
 
 class ToolError(Exception):
@@ -310,7 +362,7 @@ class Server:
         self.map_used = map_path or ""
         self.caches: dict[Path, dict] = {}    # one parsed index per project
         self.cache: dict = {}
-        self.lock = threading.Lock()          # docdrift's index lives in module globals: one user at a time
+        self.lock = threading.Lock()          # the checker's index lives in module globals: one user at a time
         self.last_index = ""
         self.legacy_version: str | None = None    # set by initialize: this process then also speaks legacy MCP
         self.max_checks = max_checks_per_minute   # each check spends TypeSafe credits; 0 = no limit
@@ -344,7 +396,7 @@ class Server:
             if request_id == self.current_id:
                 self.current_cancel.set()
                 self.progress_token = None        # no further messages for a cancelled request
-        print(f"docdrift-mcp: request {request_id!r} cancelled" + (f": {reason}" if reason else ""), file=sys.stderr)
+        print(f"jevmcp: request {request_id!r} cancelled" + (f": {reason}" if reason else ""), file=sys.stderr)
 
     def shutdown(self) -> None:
         """The client closed our input: stop the running request and never start a queued one."""
@@ -465,7 +517,7 @@ class Server:
             maps = self.find_maps()
             if not maps:
                 raise ToolError(f"this project ({self.root}) has no spec map yet (no *spec_map.json). Set one up: "
-                                f"draft_map with the spec file(s), then review every entry.")
+                                f"draft_spec_map with the spec file(s), then review every entry.")
             if len(maps) > 1:
                 raise ToolError("this project has several spec maps - say which one with 'map': " + ", ".join(maps))
             chosen = maps[0]
@@ -487,7 +539,7 @@ class Server:
         return picked, where
 
     # ── tools ───────────────────────────────────────────────────────────────
-    def check_drift(self, files: list[str] | None = None, all: bool = False,
+    def check_spec_drift(self, files: list[str] | None = None, all: bool = False,
                     map: str | None = None) -> tuple[str, bool]:
         problems: list[str] = []
         self.resolve_map(map)                     # a project without a map: say so before reading the code
@@ -500,7 +552,7 @@ class Server:
             scope = f"{len(claims)} of {total} claims, about {where}"
         head = [f"docdrift check ({self.map_used}): {scope} | {self.last_index}"]
         if problems:
-            head += ["", "MAP PROBLEMS - these entries were NOT checked (fix the map, then validate_map):"]
+            head += ["", "MAP PROBLEMS - these entries were NOT checked (fix the map, then validate_spec_map):"]
             head += [f"  - {p}" for p in problems]
         structured = {"summary": head[0], "project": str(self.root), "map": self.map_used, "claims_in_map": total,
                       "claims_selected": len(claims), "checked": 0,
@@ -511,17 +563,21 @@ class Server:
             head.append("nothing to check" + ("" if all else " - no claim in the map is about those files. "
                                               "Use all=true for a full check."))
             return "\n".join(head), False, structured
-        key_file = self.key_file or _plugin_data_key_file()
+        key_file = self.key_file or _stored_key_file()
         try:
             key = dd._load_key(key_file, dotenv=False)          # never a key the project supplies
         except dd.Stop:
-            where = _plugin_data_dir()
-            raise ToolError("No TypeSafe API key is configured for this MCP server, so nothing was sent. Do not ask "
-                            "for the key in chat. Tell the user to set it in the plugin's settings (Claude Code asks "
-                            "when the plugin is enabled), or to export TYPESAFE_API_KEY in the environment that starts "
-                            "the agent" + (f", or to put the line TYPESAFE_API_KEY=... into {where / KEY_FILE_NAME}"
-                                           if where else "") + ". validate_map and show_payload work without a key."
-                            ) from None
+            raise ToolError(
+                "No TypeSafe API key is set for this server, so nothing was sent. NEVER ask the user for the key in "
+                "chat and never put it in a command you run. Tell the user to store it once, whichever fits their "
+                "client:\n"
+                "  - Claude Code: run /plugin manage, open jevmcp and set 'TypeSafe API key' (kept in Claude Code's "
+                "credential store).\n"
+                f"  - Codex or any other client: in their OWN terminal (not through you), run\n"
+                f"      uv run --quiet --script {Path(__file__).resolve()} --set-key\n"
+                f"    It asks for the key without echoing it and stores {CONFIG_KEY_FILE} (mode 600).\n"
+                "A key comes from https://console.typesafe.ai. validate_spec_map and preview_spec_check need no key."
+            ) from None
         self.rate_limit()
         t = time.perf_counter()
         results, tokens, stopped, failed = dd.check_claims(claims, key, self.jobs, show=lambda _: None,
@@ -563,7 +619,7 @@ class Server:
                             f"credits). Try again in {wait:.0f} s, or check more files in one call.")
         self.check_times.append(now)
 
-    def validate_map(self, strict: bool = True, map: str | None = None) -> tuple[str, bool]:
+    def validate_spec_map(self, strict: bool = True, map: str | None = None) -> tuple[str, bool]:
         problems: list[str] = []
         self.resolve_map(map)
         syms = self.index()
@@ -590,7 +646,7 @@ class Server:
                       "notes": [] if strict else notes}
         return "\n".join(lines), False, structured
 
-    def show_payload(self, files: list[str] | None = None, line: int | None = None,
+    def preview_spec_check(self, files: list[str] | None = None, line: int | None = None,
                      map: str | None = None) -> tuple[str, bool]:
         problems: list[str] = []
         self.resolve_map(map)
@@ -612,7 +668,7 @@ class Server:
                       json.dumps(dd.canonical(dd.build_state(c)), indent=1, ensure_ascii=False)]
         return "\n".join(parts), False
 
-    def draft_map(self, docs: list[str], out: str) -> tuple[str, bool]:
+    def draft_spec_map(self, docs: list[str], out: str) -> tuple[str, bool]:
         target = (self.root / out).resolve()
         if not target.is_relative_to(self.root):
             raise ToolError(f"{out} is outside the project - refused")
@@ -635,14 +691,14 @@ class Server:
         with contextlib.redirect_stdout(buf):
             dd.draft_map([Path(os.path.relpath(f, self.root)) for f in specs], syms, Path(os.path.relpath(target, self.root)))
         return (f"{self.last_index}\n{buf.getvalue().strip()}\n\nNothing is checked until the entries are reviewed. "
-                f"Then validate_map (map: {out}) must report OK before check_drift."), False
+                f"Then validate_spec_map (map: {out}) must report OK before check_spec_drift."), False
 
     def call(self, name: str, args: dict) -> tuple:
         """(text, is_error) or (text, is_error, structured). An unknown tool is a protocol error;
         wrong arguments are tool errors, so the model can correct them."""
         tool = {  # spec drift; a new family adds its tools here and to SPEC_DRIFT_TOOLS' sibling list
-            "check_drift": self.check_drift, "validate_map": self.validate_map,
-            "show_payload": self.show_payload, "draft_map": self.draft_map,
+            "check_spec_drift": self.check_spec_drift, "validate_spec_map": self.validate_spec_map,
+            "preview_spec_check": self.preview_spec_check, "draft_spec_map": self.draft_spec_map,
         }.get(name)
         if tool is None:
             raise ProtocolError(INVALID_PARAMS, f"Unknown tool: {name} (the tools are: "
@@ -916,7 +972,7 @@ def handle(server: Server, msg) -> dict | None:
     except ProtocolError as e:
         return _error(mid, e.code, e.message, e.data)
     except Exception as e:  # noqa: BLE001 - report, keep serving
-        print(f"docdrift-mcp: internal error on {method}: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"jevmcp: internal error on {method}: {type(e).__name__}: {e}", file=sys.stderr)
         return _error(mid, INTERNAL_ERROR, f"docdrift failed: {type(e).__name__}: {e}")
 
 
@@ -996,8 +1052,14 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--key-file", metavar="FILE",
                     help="Read TYPESAFE_API_KEY=... from this file (and only from it); an absolute path "
                          "(~ allowed). Put it outside the project so the agent has no reason to open it. Default: the TYPESAFE_API_KEY "
-                         "environment variable, then typesafe.env in the plugin's data folder ($PLUGIN_DATA "
-                         "or $CLAUDE_PLUGIN_DATA). A project's own .env is never read for the key.")
+                         f"environment variable, then typesafe.env in the plugin's data folder ($PLUGIN_DATA or "
+                         f"$CLAUDE_PLUGIN_DATA), then {CONFIG_KEY_FILE}. A project's own .env is never read.")
+    ap.add_argument("--set-key", action="store_true",
+                    help="Store your TypeSafe API key once, in your own terminal: it asks for the key without "
+                         f"echoing it and writes {CONFIG_KEY_FILE} (mode 600), which every client can read. "
+                         "Use --key-file to store it somewhere else.")
+    ap.add_argument("--show-key-source", action="store_true",
+                    help="Say where the key would come from, and whether it is there. Never prints the key.")
     ap.add_argument("--jobs", type=int, default=8, metavar="N", help="Claims asked about at once (default 8).")
     ap.add_argument("--ignore", nargs="*", default=[], metavar="NAME",
                     help="More folders to skip, on top of docdrift's defaults (node_modules, build, ...).")
@@ -1006,9 +1068,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--max-calls-per-minute", type=int, default=120, metavar="N",
                     help="At most N tool calls of any kind a minute (default 120; 0 = no limit).")
     ap.add_argument("--max-checks-per-minute", type=int, default=20, metavar="N",
-                    help="Stop a runaway agent loop from spending TypeSafe credits: at most N check_drift "
+                    help="Stop a runaway agent loop from spending TypeSafe credits: at most N check_spec_drift "
                          "calls a minute (default 20; 0 = no limit).")
     a = ap.parse_args(argv)
+    if a.set_key:
+        raise SystemExit(set_key(Path(a.key_file).expanduser().resolve() if a.key_file else None))
+    if a.show_key_source:
+        raise SystemExit(show_key_source(a.key_file))
     if a.key_file:
         kf = Path(a.key_file).expanduser()
         if not kf.is_absolute():

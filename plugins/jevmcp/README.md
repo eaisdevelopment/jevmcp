@@ -18,8 +18,8 @@ full check took 11 seconds and cost $0.006.
 
 - **A skill** (`spec-drift`) that teaches the agent the whole workflow: setting up a project,
   checking after every change, reading the results, the fast model's blind spots, and reporting.
-- **One MCP server** (`jevmcp`) that today offers four tools — `check_drift`, `validate_map`,
-  `show_payload`, `draft_map`. It keeps the parsed code in memory, so after an edit only the
+- **One MCP server** (`jevmcp`) that today offers four tools — `check_spec_drift`, `validate_spec_map`,
+  `preview_spec_check`, `draft_spec_map`. It keeps the parsed code in memory, so after an edit only the
   changed files are read again (a 16,000-file repository: ~2 s instead of ~20 s), and it holds
   your API key so the agent never sees it.
 
@@ -45,8 +45,8 @@ and they reach you as an update.
 
 Claude Code asks for your TypeSafe API key when the plugin is enabled and keeps it out of every
 settings file (in the macOS Keychain, or `~/.claude/.credentials.json` on other systems). To change
-it later: `/plugin configure jevmcp`. Enter it at those prompts rather than with
-`claude plugin install --config`, which would leave it in your shell history.
+it later: `/plugin manage`. Enter it at that prompt rather than with `claude plugin install
+--config`, which would leave it in your shell history.
 
 **OpenAI Codex**
 
@@ -55,13 +55,21 @@ codex plugin marketplace add eaisdevelopment/jevmcp
 codex plugin add jevmcp@jevmcp
 ```
 
-Codex has no install-time prompt for keys: put `export TYPESAFE_API_KEY=...` in the shell profile
-that starts Codex; the plugin forwards that variable to its server. Note that Codex's own shell
-tool also inherits your environment, so on Codex the model *could* read an exported key if it
-ran `env`; the skill tells it never to.
+Codex has no prompt for keys, so store it once — in your own terminal, not in a Codex session:
 
-`check_drift` is marked as a write action, because it sends code out of your machine: Codex asks
-you before each check — that is your consent. The free tools (`validate_map`, `show_payload`) can
+```bash
+uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jevmcp/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
+```
+
+It asks for the key without showing it and writes `~/.config/jevmcp/typesafe.env` (only you can
+read it). The server picks it up at its next start, it survives plugin updates, and the model
+never sees it. `--show-key-source` says where the key would come from, without printing it.
+
+`export TYPESAFE_API_KEY=...` in the shell that starts Codex works too, but then Codex's own shell
+tool inherits it, so the model *could* read it with `env`; the skill tells it never to.
+
+`check_spec_drift` is marked as a write action, because it sends code out of your machine: Codex asks
+you before each check — that is your consent. The free tools (`validate_spec_map`, `preview_spec_check`) can
 run without asking if you add to `~/.codex/config.toml`:
 
 ```toml
@@ -69,8 +77,22 @@ run without asking if you add to `~/.codex/config.toml`:
 default_tools_approval_mode = "auto"
 ```
 
-Unattended runs (`codex exec`) need `--approve-for-me`, which routes the approval to Codex's
-automatic review. If the server's very first start times out while uv downloads the parsers, run
+**Unattended runs in Codex** (tested, 2026-09-22): `codex exec` runs with approval policy
+"never", which blocks every MCP tool, and `--approve-for-me` does not help — Codex's automatic
+reviewer refuses a tool that sends code to a third party. Two honest options:
+
+- `codex exec --dangerously-bypass-approvals-and-sandbox '...'` — the check then runs (verified).
+  The flag switches off Codex's sandbox and all approvals, so use it only where the whole job is
+  already isolated, such as a CI container.
+- Better for CI: skip the agent and run the checker directly, where the network works:
+  `uv run --script <plugin>/scripts/spec_drift.py --map spec_map.json` (exit 1 on drift, 2 on a
+  map problem, 3 if TypeSafe is unavailable).
+
+Do not let an agent inside Codex fall back to that command line: Codex's sandbox has no network,
+so the check cannot reach TypeSafe and silently finds nothing. The MCP server runs outside the
+sandbox, which is why the tools work there.
+
+If the server's very first start times out while uv downloads the parsers, run
 `uv run --script ~/.codex/plugins/cache/jevmcp/jevmcp/<version>/scripts/jevmcp_server.py --help`
 once (uv caches them), then start Codex again; Codex's `config.toml` cannot change a plugin
 server's startup timeout.
@@ -90,11 +112,11 @@ You never write or edit a file yourself. Ask your agent, in the project:
 > Set up spec-drift checking for this project.
 
 1. It finds your spec (a design, requirements or architecture document in Markdown).
-2. `draft_map` **writes `spec_map.json` for you** — one entry per sentence of the spec, each with
+2. `draft_spec_map` **writes `spec_map.json` for you** — one entry per sentence of the spec, each with
    a suggested place in the code. Free: nothing is sent anywhere.
 3. The agent reviews the entries with you: it fixes wrong guesses and marks sentences that are not
    requirements as excluded, with a reason. Your knowledge is needed here, and only here.
-4. `validate_map` confirms nothing is missing. Commit the file with your code.
+4. `validate_spec_map` confirms nothing is missing. Commit the file with your code.
 
 **`spec_map.json` is the pairing between your spec and your code** — for each sentence, the code
 that implements it. One entry, written by the agent and reviewed by you:
@@ -117,8 +139,9 @@ order, from:
 1. `--key-file FILE`, if the server was registered with one (an absolute path; then only from
    that file);
 2. the `TYPESAFE_API_KEY` environment variable (Claude Code fills it from the plugin's settings,
-   Codex forwards yours);
-3. `typesafe.env` in the plugin's data folder (`$PLUGIN_DATA`, or `$CLAUDE_PLUGIN_DATA`).
+   Codex forwards yours if you exported it);
+3. `typesafe.env` in the plugin's data folder (`$PLUGIN_DATA`, or `$CLAUDE_PLUGIN_DATA`);
+4. `~/.config/jevmcp/typesafe.env` — what `--set-key` writes.
 
 It never reads a project's own `.env`: a repository you check cannot supply a key. The key is
 never placed in the model's context, in tool arguments or in tool results.
@@ -155,7 +178,7 @@ it, with **comments removed** (Python, Java, JavaScript/TypeScript and other C-f
 other files are sent as written), **secret-looking values redacted** and **paths relative to your
 project**; and three fixed questions. A `.env` file, key files, and anything outside the project
 are refused, never sent. The agent asks for your consent before the first check in a project, and
-`show_payload` (or `--dry-run --show-payload`) shows exactly what would be sent, without sending
+`preview_spec_check` (or `--dry-run --show-payload`) shows exactly what would be sent, without sending
 it. [PRIVACY.md](PRIVACY.md) has the details, including exactly which values are redacted.
 
 ## Command line
@@ -163,10 +186,10 @@ it. [PRIVACY.md](PRIVACY.md) has the details, including exactly which values are
 The same checks run without an agent, from the folder of the project you are checking:
 
 ```bash
-uv run --script <path to this plugin>/scripts/docdrift.py --help
+uv run --script <path to this plugin>/scripts/spec_drift.py --help
 ```
 
-(In a clone of this repository the script is `plugins/jevmcp/scripts/docdrift.py`.) It works in
+(In a clone of this repository the script is `plugins/jevmcp/scripts/spec_drift.py`.) It works in
 CI too: `--dry-run --strict` validates the map for free (exit 2 if a spec sentence is neither
 mapped nor excluded); a real check exits 1 on drift and 3 when TypeSafe is unavailable. The command
 line reads the key from `--key-file`, else `TYPESAFE_API_KEY`, else a `TYPESAFE_API_KEY=` line in
