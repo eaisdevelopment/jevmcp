@@ -1,0 +1,21 @@
+{
+  "name": "docdrift",
+  "version": "1.0.0",
+  "mcpServers": {
+    "docdrift": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--quiet",
+        "--script",
+        "./scripts/docdrift_mcp.py"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "TYPESAFE_API_KEY"
+      ],
+      "startup_timeout_sec": 120,
+      "tool_timeout_sec": 600
+    }
+  }
+}

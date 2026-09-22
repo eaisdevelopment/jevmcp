@@ -1,0 +1,21 @@
+# Secrets: never commit an API key. The plugins read it from the client's settings, the
+# environment, or the plugin's data folder - never from a file in this repository.
+.env
+.env.*
+!.env.example
+typesafe.env
+*.key
+*.pem
+
+# Results of checks (they contain the code that was sent)
+drift.json
+last-check*.json
+
+# Python and editors
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.DS_Store
+.idea/
+.vscode/

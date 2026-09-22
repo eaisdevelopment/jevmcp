@@ -1,0 +1,18 @@
+{
+  "name": "jevmcp",
+  "description": "Coding-agent plugins that use TypeSafe's fast model Jev for routine software-lifecycle checks: the fast model screens, the agent investigates only what it flags.",
+  "owner": {
+    "name": "eaisdevelopment",
+    "url": "https://github.com/eaisdevelopment"
+  },
+  "plugins": [
+    {
+      "name": "docdrift",
+      "source": "./plugins/docdrift",
+      "description": "Check code against its design spec with TypeSafe's fast model; the agent investigates only what it flags.",
+      "category": "development",
+      "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/docdrift",
+      "license": "Apache-2.0"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "docdrift": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--script", "${CLAUDE_PLUGIN_ROOT}/scripts/docdrift_mcp.py"],
+      "env": {
+        "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}"
+      }
+    }
+  }
+}
