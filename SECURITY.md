@@ -2,9 +2,10 @@
 
 ## Reporting a problem
 
-Please do not describe a security problem in a public issue. Instead, open an issue titled
-**"Security contact request"** with no details, and a maintainer will reply with a private way
-to send them.
+Please do not describe a security problem in a public issue. Report it privately instead:
+**Security → Report a vulnerability** on this repository
+(<https://github.com/eaisdevelopment/jevmcp/security/advisories/new>). Only the maintainers see
+the report.
 
 Never include an API key — yours or anyone's — in an issue, pull request, log or screenshot. If a
 key has been exposed, revoke it at <https://console.typesafe.ai> first.
