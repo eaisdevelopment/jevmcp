@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "jevmcp",
   "displayName": "jevmcp",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Jev tools for coding agents, in one plugin. Today: spec-drift checking - a fast model (TypeSafe's Jev) screens every requirement in your spec against the code, the agent investigates only what it flags. More tools are added to this same plugin, so you install once.",
   "author": {
     "name": "Essential AI Solutions Ltd.",

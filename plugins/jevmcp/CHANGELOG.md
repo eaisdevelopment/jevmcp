@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.1 — 2026-09-22
+
+Found by running a first-time setup in a fresh Codex session: an entry the drafter could not pair
+was labelled "NO MATCH - fill in the code or delete this entry", which contradicts every other
+instruction — a sentence that is not a requirement should be marked `excluded` with a reason, not
+deleted, or `--strict` reports it as unmapped for ever. It now says: "point 'code' at what
+enforces this, or set 'excluded' with a why".
+
 ## 1.4.0 — 2026-09-22
 
 **Documentation an agent can act on, shipped with the plugin.** Everything needed to install,

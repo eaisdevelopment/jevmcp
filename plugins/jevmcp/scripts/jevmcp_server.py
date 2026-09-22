@@ -77,7 +77,7 @@ sys.dont_write_bytecode = True                     # never leave a .pyc inside a
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import spec_drift as dd  # noqa: E402   # the spec-drift checker: questions, thresholds, redaction
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions

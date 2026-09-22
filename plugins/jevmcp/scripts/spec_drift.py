@@ -2262,7 +2262,7 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path) -> None:
                 "spec": str(d), "line": lineno, "text": sent[:400],
                 "code": _ref_of(best[0]) if best else "",
                 "status": ("named in the sentence" if named else "suggested") if best
-                          else "NO MATCH - fill in the code or delete this entry",
+                          else "NO MATCH - point 'code' at what enforces this, or set 'excluded' with a why",
                 "alternatives": [_ref_of(s) for s in best[1:4]],
                 "spec_text": _norm_text(paragraphs.get(lineno, sent)),
             })
