@@ -101,6 +101,22 @@ key into an issue or pull request.
 plugins/jevmcp/                    the plugin: skills/<tool>/SKILL.md, scripts/, one MCP server per tool
 ```
 
+## Documentation
+
+Written for an agent that has to install or drive this from the repository alone, and useful to a
+human reading over its shoulder:
+
+- [Install and set up](plugins/jevmcp/docs/install.md) — every client, every way to provide the
+  key, how to check it worked, troubleshooting.
+- [Tools, skill, spec map, command line](plugins/jevmcp/docs/tools.md) — every argument, output,
+  label and exit code.
+- [How each client behaves](plugins/jevmcp/docs/clients.md) — approvals, unattended runs, sandbox
+  and network, the verified limits.
+- [Recipes](plugins/jevmcp/docs/how-to.md) — set a project up, routine checks, CI, what to do
+  with each result.
+- [AGENTS.md](AGENTS.md) — the short version, and the rules an agent must not break.
+- [What is sent, and what never is](plugins/jevmcp/PRIVACY.md).
+
 ## Support
 
 - Questions and bugs: [GitHub Issues](https://github.com/eaisdevelopment/jevmcp/issues)

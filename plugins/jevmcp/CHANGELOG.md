@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.0 — 2026-09-22
+
+**Documentation an agent can act on, shipped with the plugin.** Everything needed to install,
+understand and drive jevmcp now lives in the repository — and inside the installed plugin, so an
+agent that can only see its own plugin folder can still read it.
+
+- `docs/install.md` — every client, the four places the key can come from and the exact
+  `--set-key` command per client, how to check the install, updating, uninstalling, and a
+  troubleshooting table.
+- `docs/tools.md` — each tool with every argument, its output fields, cost, and the errors it can
+  return; the skill; the spec map format in full; the labels and thresholds; the command line.
+- `docs/clients.md` — what Claude Code and Codex each do, and their verified limits: approvals,
+  unattended runs (`--approve-for-me` is refused for a tool that sends code out), the sandbox with
+  no network, tool naming, known quirks.
+- `docs/how-to.md` — nine recipes, from setting a project up to CI, each a numbered procedure.
+- `AGENTS.md` at the repository root: the short version and the rules an agent must not break
+  (never ask for the key, consent before the first check, `??` is not a pass, never report "no
+  drift" from a check that could not run).
+- Corrections found while writing them: the marketplace card still advertised the pre-1.3.0 tool
+  names; `project` must be the folder the server was started for, or one inside it, not "harmless"
+  anywhere; a test now fails if a doc names a tool that does not exist.
+
 ## 1.3.1 — 2026-09-22
 
 The last traces of the old name: a check's own report said "docdrift check", and so did several

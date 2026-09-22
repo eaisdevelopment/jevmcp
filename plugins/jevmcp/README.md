@@ -206,6 +206,13 @@ the `.env` of the folder you run it from.
   client closes the connection; clients of earlier MCP revisions (which open with `initialize`)
   are served too.
 
+## Documentation
+
+- [Install and set up](docs/install.md) · [Tools and spec map](docs/tools.md) ·
+  [Client behaviour and limits](docs/clients.md) · [Recipes](docs/how-to.md) ·
+  [Privacy](PRIVACY.md)
+- These pages ship with the plugin, so an agent can read them after installing it.
+
 ## Support
 
 Questions and bugs: <https://github.com/eaisdevelopment/jevmcp/issues>. Security problems: see

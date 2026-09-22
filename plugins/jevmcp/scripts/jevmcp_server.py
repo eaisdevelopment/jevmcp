@@ -77,7 +77,7 @@ sys.dont_write_bytecode = True                     # never leave a .pyc inside a
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import spec_drift as dd  # noqa: E402   # the spec-drift checker: questions, thresholds, redaction
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -143,7 +143,8 @@ SPEC_DRIFT_TOOLS = [
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
                                            "Needed when the client does not tell the server which project "
-                                           "it is in (Codex); harmless otherwise."},
+                                           "it is in (Codex). Where the client does tell it, this must be that same "
+                                           "folder or one inside it - another project is refused."},
             },
             "additionalProperties": False,
         },
@@ -195,7 +196,8 @@ SPEC_DRIFT_TOOLS = [
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
                                            "Needed when the client does not tell the server which project "
-                                           "it is in (Codex); harmless otherwise."},
+                                           "it is in (Codex). Where the client does tell it, this must be that same "
+                                           "folder or one inside it - another project is refused."},
             },
             "additionalProperties": False,
         },
@@ -237,7 +239,8 @@ SPEC_DRIFT_TOOLS = [
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
                                            "Needed when the client does not tell the server which project "
-                                           "it is in (Codex); harmless otherwise."},
+                                           "it is in (Codex). Where the client does tell it, this must be that same "
+                                           "folder or one inside it - another project is refused."},
             },
             "additionalProperties": False,
         },
@@ -263,7 +266,8 @@ SPEC_DRIFT_TOOLS = [
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
                                            "Needed when the client does not tell the server which project "
-                                           "it is in (Codex); harmless otherwise."},
+                                           "it is in (Codex). Where the client does tell it, this must be that same "
+                                           "folder or one inside it - another project is refused."},
             },
             "required": ["docs", "out"],
             "additionalProperties": False,

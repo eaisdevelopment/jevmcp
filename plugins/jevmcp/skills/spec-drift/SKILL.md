@@ -21,8 +21,9 @@ and you review the entries with the user. After that, every check is seconds and
 **Use the MCP tools when they are available** (server `jevmcp`): `check_spec_drift`,
 `validate_spec_map`, `preview_spec_check`, `draft_spec_map`. They keep the parsed code in memory and hold the
 API key themselves. Pass `project` with the absolute path of the project (your working
-directory) in every call: some clients do not tell the server which project it is in, and it
-is harmless where they do.
+directory) in every call: some clients do not tell the server which project it is in. Where the
+client does tell it (Claude Code starts the server in the project), `project` must be that same
+folder or one inside it - another project is refused.
 
 Otherwise use the command line, from the project's root. It needs network access to reach
 TypeSafe (and, the first time, to install its Python dependencies); in a sandbox without network
