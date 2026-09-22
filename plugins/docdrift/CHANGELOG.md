@@ -13,14 +13,15 @@ First public release.
   every result; caching hints on `tools/list` and `server/discover`; `UnsupportedProtocolVersion`
   (-32022) and invalid-request errors as specified; tool titles, annotations, and structured
   results with a declared `outputSchema`; progress notifications; cancellation stops a running
-  check from sending further claims; the server shuts down promptly when the client closes its
-  input. Clients that open with `initialize` (2025-11-25 and earlier) are served with the shapes
+  check from sending further claims, including retries; the server shuts down promptly when the
+  client closes its input, and survives malformed input. Clients that open with `initialize` (2025-11-25 and earlier) are served with the shapes
   of their revision. Roots and Logging (deprecated in 2026-07-28) are not used: the project is a
   tool argument, and the server logs only to stderr.
 - **Safety**: a client-named project is a boundary (never your home folder); rate limits on
   checks (`--max-checks-per-minute`, default 20) and on all calls (`--max-calls-per-minute`,
-  default 120); the key comes only from the client's settings, the environment or the plugin's
-  data folder, never from the project; results are written to a private temporary folder.
+  default 120); the MCP server takes the key only from the client's settings, the environment,
+  the plugin's data folder or an absolute `--key-file`, never from the project; results go to a
+  private temporary folder that is removed when the server stops.
 - **Packaging**: an Agent Plugins 1.0.0 portable core (`plugin.json` with the Codex listing under
   `extensions["com.openai"]`, `mcp.json` using `${PLUGIN_ROOT}`), plus `.claude-plugin/` and
   `.mcp.json` for Claude Code (the key is asked for at install and kept in its credential store)
@@ -28,5 +29,8 @@ First public release.
   and installed by `uv`.
 - **Languages**: Java/Spring, JavaScript/TypeScript (NestJS, Express, Hono, Fastify, Next.js),
   Python (FastAPI, Flask, Django), OpenAPI, config files; any other language by line range.
-- **Spec maps**: entries can be marked `excluded` with a reason; `--strict` fails only on
-  sentences nobody decided about.
+- **Spec maps**: entries can be marked `excluded` with a reason, and `--strict` counts them as
+  decided; it fails on unmapped sentences, unreviewed entries, exclusions without a reason, and
+  entries whose spec text has changed since they were reviewed.
+- **Redaction**: secret-looking values are removed by shape everywhere and by name in code and in
+  configuration files, quoted or not; see PRIVACY.md.

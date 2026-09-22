@@ -42,10 +42,10 @@ package (`plugin.json`, `mcp.json`, `skills/`). See the plugin's README for how 
 
 ## Your API key stays yours
 
-No key is stored in this repository, and none should ever be: the plugins read the key from the
-client's own settings, from your environment, or from the plugin's data folder on your machine —
-never from a file in this repository or in the project being checked. Never paste a key into an
-issue or pull request.
+No key is stored in this repository, and none should ever be: the plugins' MCP servers read the
+key from the client's own settings, from your environment, or from the plugin's data folder on
+your machine — never from a file in this repository or in the project being checked. Never paste a
+key into an issue or pull request.
 
 ## Repository layout
 

@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import ast
 import bisect
+import contextlib
 import functools
 import heapq
 import importlib
@@ -186,10 +187,14 @@ TREE_SITTER = {".java": ("Java", "tree-sitter-java", "tree_sitter_java", "langua
 UNINDEXED = (C_FAMILY | {".rb", ".php"}) - set(TREE_SITTER)
 
 
-def mask_c_family(text: str, strings: bool) -> str:
+_RUST_CHAR = re.compile(r"'(?:[^'\\\n]|\\(?:[nrt0\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}))'")
+
+
+def mask_c_family(text: str, strings: bool, rust: bool = False) -> str:
     """Blank out comments (and, if `strings`, string contents), keeping every
     newline and offset so braces and line numbers still line up. Used where no
     parser is available; tree-sitter languages use their real comment nodes.
+    In Rust a lone ' starts a lifetime or label (&'static, 'outer:), not a char.
     """
     out = list(text)
     i, n = 0, len(text)
@@ -223,6 +228,8 @@ def mask_c_family(text: str, strings: bool) -> str:
             if strings:
                 blank(i + 1, max(i + 1, j - 1))
             i = j
+        elif rust and text[i] == "'" and not _RUST_CHAR.match(text, i):
+            i += 1                               # a lifetime or loop label
         elif text[i] in "\"'":
             q, j = text[i], i + 1
             while j < n and text[j] != q and text[j] != "\n":
@@ -247,10 +254,10 @@ def tidy(src: str) -> str:
     return textwrap.dedent("\n".join(lines)).strip("\n")
 
 
-_SECRET_NAME = re.compile(r"pass(?:word|wd|phrase)?|secret|token|api[-_.]?key|private[-_.]?key|"
+_SECRET_NAME = re.compile(r"pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"
                           r"credential|access[-_.]?key|signing[-_.]?key|client[-_.]?secret|(?:^|[-_.])key$|dsn$", re.I)
 _SECRET_LITERAL = re.compile(
-    r"""((?:[\w.\-]*(?:pass(?:word|wd|phrase)?|secret|token|api[-_.]?key|private[-_.]?key|"""
+    r"""((?:[\w.\-]*(?:pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"""
     r"""credential|access[-_.]?key)[\w.\-]*)["']?\s*(?::|=>|=)\s*)(["'`])(?!\$\{)([^"'`\n]{4,})\2""", re.I)
 _SECRET_SHAPES = [re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{8,}"),     # Stripe
                   re.compile(r"\b(?:ghp|gho|ghu|ghs|github_pat)_[0-9A-Za-z_]{20,}"),     # GitHub
@@ -275,11 +282,48 @@ def redact(text: str) -> str:
     return text
 
 
+def _secret_key(key: str) -> bool:
+    """A setting whose value is a secret: by its name, including camelCase (`encryptionKey`)."""
+    return bool(_SECRET_NAME.search(key) or re.search(r"[a-z0-9]Key$", key))
+
+
 def _secret_value(key: str, value: str) -> str:
     v = value.strip()
-    if v and _SECRET_NAME.search(key) and not v.startswith("${"):
+    if v and _secret_key(key) and not v.startswith("${"):
         return "<redacted>"
     return redact(value)
+
+
+_CONFIG_LINE = re.compile(r"^(\s*(?:export\s+)?-?\s*)([\w.\-\[\]]+)(\s*[:=]\s*)(\S.*?)\s*$")
+
+
+def redact_config_text(text: str) -> str:
+    """Config files paired whole or by line range: redact secret settings line by line, quoted
+    or not (`spring.datasource.password=hunter2`, `  password: hunter2`), keeping placeholders."""
+    out = []
+    for line in text.split("\n"):
+        m = _CONFIG_LINE.match(line)
+        if m and _secret_key(m.group(2)) and not m.group(4).startswith(("${", "|", ">")):
+            line = f"{m.group(1)}{m.group(2)}{m.group(3)}<redacted>"
+        out.append(line)
+    return "\n".join(out)
+
+
+def _is_config_file(path: Path) -> bool:
+    return path.suffix in {".properties", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".env"} \
+        or bool(_ENV_TEMPLATES.match(path.name))
+
+
+def _blank_py_docstrings(src: str, lines: list[str]) -> None:
+    """Blank every module, class and function docstring in `lines` (line count kept)."""
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)
+                    and (isinstance(node, ast.Module) or first.lineno > node.lineno)):
+                for k in range(first.lineno - 1, first.end_lineno):
+                    lines[k] = ""
 
 
 def _py_clean(src: str) -> str:
@@ -292,17 +336,9 @@ def _py_clean(src: str) -> str:
     src = textwrap.dedent(src)
     lines = src.split("\n")
     try:
-        tree = ast.parse(src)
+        _blank_py_docstrings(src, lines)
     except SyntaxError:
         return tidy(src)
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
-            first = node.body[0]
-            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
-                    and isinstance(first.value.value, str)
-                    and (isinstance(node, ast.Module) or first.lineno > node.lineno)):
-                for k in range(first.lineno - 1, first.end_lineno):
-                    lines[k] = ""
     try:
         for tok in tokenize.generate_tokens(io.StringIO(src).readline):
             if tok.type == tokenize.COMMENT:
@@ -317,6 +353,8 @@ def strip_comments(path: Path, text: str) -> str:
     """A whole file (for line-range refs) with comments blanked, line numbers kept."""
     if path.suffix == ".py":
         lines = text.split("\n")
+        with contextlib.suppress(SyntaxError, ValueError):
+            _blank_py_docstrings(text, lines)
         try:
             for tok in tokenize.generate_tokens(io.StringIO(text).readline):
                 if tok.type == tokenize.COMMENT:
@@ -329,7 +367,7 @@ def strip_comments(path: Path, text: str) -> str:
         src, tree = loaded
         return _ts_blank(src, 0, len(src), tree.root_node).decode("utf-8", "replace")
     if path.suffix in C_FAMILY:
-        return mask_c_family(text, strings=False)
+        return mask_c_family(text, strings=False, rust=path.suffix == ".rs")
     return text
 
 
@@ -2236,8 +2274,9 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path) -> None:
     print(f"  {len(guessed)} have a GUESS by word overlap - often wrong: lines "
           + ", ".join(str(e["line"]) for e in guessed[:25]) + (" ..." if len(guessed) > 25 else ""))
     print(f"  {sum(1 for e in entries if not e['code'])} have no suggestion")
-    print(f"\nNext: open {out}; its \"_readme\" explains every field. Fix each \"code\", delete entries that are\n"
-          f"not requirements, set \"status\" to \"reviewed\", then check it loads:  --map {out} --dry-run")
+    print(f"\nNext: open {out}; its \"_readme\" explains every field. Fix each \"code\" and set \"status\" to\n"
+          f"\"reviewed\"; for sentences that are not requirements set \"status\" to \"excluded\" with a \"why\".\n"
+          f"Then check it loads:  --map {out} --dry-run --strict")
 
 
 def _norm_text(t: str) -> str:
@@ -2330,7 +2369,10 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
         return None
     if target and (s := _BY_FILE.get((str(rp), target))):
         return s
-    lines = strip_comments(path, path.read_text(encoding="utf-8", errors="replace")).split("\n")
+    text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
+    if _is_config_file(path):
+        text = redact_config_text(text)
+    lines = text.split("\n")
     if m := re.fullmatch(r"(\d+)-(\d+)", target or ""):
         a, b = int(m.group(1)), int(m.group(2))
         if a < 1 or b < a or a > len(lines):
@@ -2520,7 +2562,8 @@ def build_questions(claim: Claim) -> dict:
     return q
 
 
-def ask(state: dict, questions: dict, key: str, timeout: int = 60, retries: int = 3) -> dict:
+def ask(state: dict, questions: dict, key: str, timeout: int = 60, retries: int = 3,
+        cancelled: Callable[[], bool] | None = None) -> dict:
     body = json.dumps({"state": canonical(state), "model": MODEL, "questions": questions}).encode()
     req = urllib.request.Request(
         API, data=body,
@@ -2528,7 +2571,16 @@ def ask(state: dict, questions: dict, key: str, timeout: int = 60, retries: int 
         method="POST",
     )
     delay = 1.0
+
+    def pause(seconds: float) -> None:
+        """Wait before a retry: at most 30 s, and not at all once the check is cancelled."""
+        end = time.monotonic() + min(seconds, 30.0)
+        while time.monotonic() < end and not (cancelled and cancelled()):
+            time.sleep(0.05)
+
     for attempt in range(retries + 1):
+        if attempt and cancelled and cancelled():
+            return {"_error": "cancelled before it was sent again"}
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 out = json.loads(r.read())
@@ -2543,15 +2595,19 @@ def ask(state: dict, questions: dict, key: str, timeout: int = 60, retries: int 
             if e.code in (401, 403):
                 raise Stop(f"TypeSafe rejected the API key (HTTP {e.code}). Check TYPESAFE_API_KEY. {raw[:160]}")
             if e.code in (429, 529) and attempt < retries:
-                time.sleep(float(e.headers.get("retry-after") or delay)); delay *= 2; continue
+                try:
+                    wait = float(e.headers.get("retry-after") or delay)
+                except ValueError:                   # an HTTP date is allowed too
+                    wait = delay
+                pause(wait); delay *= 2; continue
             if 400 <= e.code < 500:
                 return {"_error": f"HTTP {e.code}: {raw}"}   # never retry a 4xx
             if attempt < retries:
-                time.sleep(delay); delay *= 2; continue
+                pause(delay); delay *= 2; continue
             return {"_error": f"HTTP {e.code}: {raw}"}
         except Exception as e:  # noqa: BLE001
             if attempt < retries:
-                time.sleep(delay); delay *= 2; continue
+                pause(delay); delay *= 2; continue
             return {"_error": f"{type(e).__name__}: {e}"}
     return {"_error": "exhausted"}
 
@@ -2578,7 +2634,7 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
         if cancelled and cancelled():
             return {"_error": "cancelled before it was sent"}
         try:
-            return ask(states[k], build_questions(claims[k]), key)
+            return ask(states[k], build_questions(claims[k]), key, cancelled=cancelled)
         except Stop as e:                      # re-raised in order below
             return {"_stop": e}
         finally:
@@ -2757,7 +2813,7 @@ THE USUAL 3 STEPS
        {cmd} --map spec_map.json --dry-run
 
   3. Run the check. Sends each sentence and its paired code to TypeSafe
-     (about $0.0003 per 10 sentences; the dry run estimates it for your
+     (about $0.0005 per 10 sentences; the dry run estimates it for your
      spec) and writes the results to drift.json - overwriting an old one;
      --out FILE writes somewhere else.
 

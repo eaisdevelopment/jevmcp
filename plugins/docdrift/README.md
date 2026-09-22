@@ -38,7 +38,7 @@ $0.0013; a full check took 11 seconds and cost $0.006.
 
 Claude Code asks for your TypeSafe API key when the plugin is enabled and keeps it out of every
 settings file (in the macOS Keychain, or `~/.claude/.credentials.json` on other systems). To change
-it later: `/plugin` → manage → docdrift. Enter it at that prompt rather than with
+it later: `/plugin configure docdrift`. Enter it at those prompts rather than with
 `claude plugin install --config`, which would leave it in your shell history.
 
 **OpenAI Codex**
@@ -63,8 +63,10 @@ default_tools_approval_mode = "auto"
 ```
 
 Unattended runs (`codex exec`) need `--approve-for-me`, which routes the approval to Codex's
-automatic review. If the server's very first start times out while uv downloads the parsers, add
-`startup_timeout_sec = 120` under the same table, or run any docdrift command once beforehand.
+automatic review. If the server's very first start times out while uv downloads the parsers, run
+`uv run --script ~/.codex/plugins/cache/jevmcp/docdrift/<version>/scripts/docdrift_mcp.py --help`
+once (uv caches them), then start Codex again; Codex's `config.toml` cannot change a plugin
+server's startup timeout.
 
 **Other Agent Plugins clients** (VS Code, GitHub Copilot, Kiro, ...) load the portable core of
 this folder — `plugin.json`, `mcp.json`, `skills/` — through their own plugin setup. The portable
@@ -79,7 +81,8 @@ does not expand the standard's `${PLUGIN_ROOT}`.
 Never commit it, and never paste it into an issue or a chat. The MCP server reads it, in this
 order, from:
 
-1. `--key-file FILE`, if the server was registered with one (then only from that file);
+1. `--key-file FILE`, if the server was registered with one (an absolute path; then only from
+   that file);
 2. the `TYPESAFE_API_KEY` environment variable (Claude Code fills it from the plugin's settings,
    Codex forwards yours);
 3. `typesafe.env` in the plugin's data folder (`$PLUGIN_DATA`, or `$CLAUDE_PLUGIN_DATA`).

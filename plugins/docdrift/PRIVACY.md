@@ -19,14 +19,17 @@ The code paired with a requirement is cleaned before it is sent:
 
 - **Comments and docstrings removed** in Python, Java, JavaScript/TypeScript and the other
   C-family languages (Kotlin, Scala, Groovy, Go, C#, C/C++, Rust, Swift). Other files — for
-  example PHP, Ruby, YAML or shell, which can only be paired by line range — are sent as written.
+  example PHP, Ruby or shell, which can only be paired by line range — are sent as written.
 - **Secret-looking values redacted**:
   - everywhere, by shape: Stripe, GitHub, Slack, Google and OpenAI/Anthropic keys, AWS access key
     IDs, JWTs, PEM private keys, and credentials inside URLs;
-  - in code, quoted values whose name contains `password`, `passwd`, `passphrase`, `secret`,
-    `token`, `api key`, `private key`, `credential` or `access key`;
-  - in configuration files, also values whose key ends in `key` or `dsn`, and signing keys and
-    client secrets.
+  - in code, quoted values whose name contains `password`, `passwd`, `passphrase`, `pass` (as a
+    word: `DB_PASS`, `userPass`), `secret`, `token`, `api key`, `private key`, `credential` or
+    `access key`;
+  - in configuration files (`.properties`, YAML, TOML, INI, `.env` templates) — however they are
+    paired, quoted or not — values whose key has one of those names, or whose last part is `key`
+    (`jwt.key`, `encryption-key`, `encryptionKey`) or `dsn`, and signing keys and client secrets.
+    Placeholders such as `${DB_PASSWORD}` are kept: they reveal nothing.
 
   A value that matches none of these (for example `DATABASE_DSN = "..."` written in code) is sent
   as written. `show_payload` shows you exactly what would go.
@@ -56,7 +59,8 @@ project.
 ## What is stored locally
 
 - MCP server: the results of the last check per project, including the code that was sent, in a
-  private temporary folder of the server process (readable only by you).
+  private temporary folder of the server process (readable only by you), removed when the server
+  stops.
 - Command line: the results, including the exact code sent, in `drift.json` in the folder you run
   it from (or `--out FILE`); `--dry-run --out FILE` writes the plan of what would be sent.
 - The spec map you create, in your project — you decide whether to commit it.

@@ -36,6 +36,9 @@ settings. To register it by hand instead, e.g. in Claude Code:
 where that file holds the line TYPESAFE_API_KEY=... and only you can read it (chmod 600).
 Never put the key itself on a command line or in a settings file.
 
+Closing its input ends the session (the stdio transport's shutdown signal): a request not yet
+answered is dropped, so a client keeps stdin open until it has read the replies.
+
 Run it by hand to see the options:  uv run --script docdrift_mcp.py --help
 """
 from __future__ import annotations
@@ -47,10 +50,13 @@ import io
 import json
 import os
 import queue
+import shutil
+import signal
 import sys
 import tempfile
 import threading
 import time
+import traceback
 from collections import deque
 from pathlib import Path
 
@@ -380,6 +386,12 @@ class Server:
         tag = hashlib.sha256(str(self.root).encode()).hexdigest()[:8]
         return self._results_dir / f"last-check-{self.root.name}-{tag}.json"
 
+    def cleanup(self) -> None:
+        """Remove this process's results folder (it holds the code that was sent)."""
+        if self._results_dir is not None:
+            shutil.rmtree(self._results_dir, ignore_errors=True)
+            self._results_dir = None
+
     def use_project(self, project: str | None) -> None:
         """Point the server at the project for this call: the one named, else the client's."""
         if project:
@@ -635,6 +647,8 @@ class Server:
             self.call_times.append(now)
         project = args.pop("project", None)
         with self.lock:
+            if self.closed:
+                raise ToolError("the server is shutting down")
             self.use_project(project)
             with _in(self.root), contextlib.redirect_stdout(io.StringIO()):
                 try:
@@ -733,8 +747,15 @@ _SEND_LOCK = threading.Lock()
 def _send(msg: dict) -> None:
     """One JSON-RPC message per line on stdout (json.dumps never emits a raw newline)."""
     with _SEND_LOCK:
-        _PROTOCOL_OUT.write(json.dumps(msg, ensure_ascii=False) + "\n")
-        _PROTOCOL_OUT.flush()
+        try:
+            _PROTOCOL_OUT.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            _PROTOCOL_OUT.flush()
+        except (OSError, ValueError):
+            # The client stopped reading. Point fd 1 at devnull so the bytes still buffered are
+            # not written (and fail) again when the process exits.
+            with contextlib.suppress(OSError):
+                os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
+            raise
 
 
 OPEN = object()                                    # a request that stays open (subscriptions/listen)
@@ -804,7 +825,11 @@ def _modern(server: Server, method: str, params: dict, meta: dict) -> dict:
     if method == "subscriptions/listen":
         # Subscribe and Notify: acknowledge with the subset honoured - none, the tool list never
         # changes - and keep the request open until the client cancels it or the input ends.
-        server.subscriptions.add(msg_id := params.get("_request_id"))
+        msg_id = params.get("_request_id")
+        with server.state:
+            if msg_id in server.cancelled:
+                return OPEN                       # cancelled before it started: send nothing for it
+            server.subscriptions.add(msg_id)
         _send({"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
                "params": {"_meta": {M + "subscriptionId": msg_id}, "notifications": {}}})
         return OPEN
@@ -890,14 +915,23 @@ def serve(server: Server, stdin=None) -> None:
     inbox: queue.Queue = queue.Queue()
 
     def read() -> None:
+        try:
+            read_lines()
+        finally:
+            # End of input is the stdio transport's shutdown signal: exit promptly. The running
+            # request stops (a check sends no further claims) and nothing queued is started.
+            server.shutdown()
+            inbox.put(None)
+
+    def read_lines() -> None:
         for raw in (stdin or sys.stdin.buffer):
             line = raw.decode("utf-8", errors="replace").strip() if isinstance(raw, bytes) else raw.strip()
             if not line:
                 continue
             try:
                 msg = json.loads(line)
-            except json.JSONDecodeError as e:
-                inbox.put({"_parse_error": e.msg})
+            except (ValueError, RecursionError) as e:  # bad JSON, a 5000-digit number, deep nesting
+                inbox.put({"_parse_error": getattr(e, "msg", str(e))[:200]})
                 continue
             if isinstance(msg, dict) and msg.get("method") == "notifications/cancelled" and "id" not in msg:
                 p = msg.get("params") if isinstance(msg.get("params"), dict) else {}
@@ -909,10 +943,6 @@ def serve(server: Server, stdin=None) -> None:
             if isinstance(msg, dict) and isinstance(msg.get("method"), str) and _valid_id(msg.get("id")):
                 server.received(msg["id"])
             inbox.put(msg)
-        # End of input is the stdio transport's shutdown signal: exit promptly. The running
-        # request stops (a check sends no further claims) and nothing queued is started.
-        server.shutdown()
-        inbox.put(None)
 
     threading.Thread(target=read, daemon=True).start()
     while (msg := inbox.get()) is not None:
@@ -931,6 +961,8 @@ def serve(server: Server, stdin=None) -> None:
                 continue
         reply = handle(server, msg)
         dropped = server.finish(mid) if is_request else False
+        if dropped:
+            server.subscriptions.discard(mid)      # a cancelled listen gets no closing result
         if reply is not None and not dropped:
             _send(reply)
     for sid in sorted(server.subscriptions, key=str):  # graceful end of the open subscriptions
@@ -951,8 +983,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--map", metavar="FILE", help="The spec map, relative to --root. Default: the project's "
                                                   "only *spec_map.json, found automatically.")
     ap.add_argument("--key-file", metavar="FILE",
-                    help="Read TYPESAFE_API_KEY=... from this file (and only from it). Put it outside the "
-                         "project so the agent has no reason to open it. Default: the TYPESAFE_API_KEY "
+                    help="Read TYPESAFE_API_KEY=... from this file (and only from it); an absolute path "
+                         "(~ allowed). Put it outside the project so the agent has no reason to open it. Default: the TYPESAFE_API_KEY "
                          "environment variable, then typesafe.env in the plugin's data folder ($PLUGIN_DATA "
                          "or $CLAUDE_PLUGIN_DATA). A project's own .env is never read for the key.")
     ap.add_argument("--jobs", type=int, default=8, metavar="N", help="Claims asked about at once (default 8).")
@@ -966,6 +998,12 @@ def main(argv: list[str] | None = None) -> None:
                     help="Stop a runaway agent loop from spending TypeSafe credits: at most N check_drift "
                          "calls a minute (default 20; 0 = no limit).")
     a = ap.parse_args(argv)
+    if a.key_file:
+        kf = Path(a.key_file).expanduser()
+        if not kf.is_absolute():
+            ap.error(f"--key-file {a.key_file}: give an absolute path (e.g. ~/.config/typesafe.env); a relative "
+                     "one would be read from inside the project being checked")
+        a.key_file = str(kf)
     given = a.root or os.environ.get("CLAUDE_PROJECT_DIR")
     root: Path | None = Path(given or ".").resolve()
     if given and not root.is_dir():
@@ -978,8 +1016,35 @@ def main(argv: list[str] | None = None) -> None:
                     max(0, a.max_calls_per_minute))
     if not a.no_warm:
         threading.Thread(target=server.warm, daemon=True).start()
-    serve(server)
+    with contextlib.suppress(ValueError, AttributeError):   # SIGTERM (the client's next step): clean up, go
+        signal.signal(signal.SIGTERM, lambda *_: (server.cleanup(), os._exit(0)))
+    try:
+        serve(server)
+    finally:
+        server.cleanup()
+
+
+def _exit_code(e: SystemExit) -> int:
+    if e.code is None or isinstance(e.code, int):
+        return e.code or 0
+    print(e.code, file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    code = 0
+    try:
+        main()
+    except SystemExit as e:
+        code = _exit_code(e)
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        code = 1
+    finally:
+        # Leave without interpreter finalization: the reader thread may still hold stdin's
+        # buffer lock, and finalizing then aborts ("could not acquire lock for <stdin>").
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
+        os._exit(code)
