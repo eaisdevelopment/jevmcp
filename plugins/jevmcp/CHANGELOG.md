@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.1 — 2026-09-22
+
+The last traces of the old name: a check's own report said "docdrift check", and so did several
+error and help messages. Everything a user or a model reads now says jevmcp or spec drift.
+
 ## 1.3.0 — 2026-09-22
 
 **Names say what they mean, and the key is set in one command.**

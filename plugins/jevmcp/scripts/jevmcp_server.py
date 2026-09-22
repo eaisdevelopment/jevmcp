@@ -77,7 +77,7 @@ sys.dont_write_bytecode = True                     # never leave a .pyc inside a
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import spec_drift as dd  # noqa: E402   # the spec-drift checker: questions, thresholds, redaction
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -507,7 +507,7 @@ class Server:
                     return                        # not a project with a spec map: stay idle
                 self.index()
             except Exception as e:  # noqa: BLE001 - the first tool call will report it properly
-                print(f"docdrift-mcp: warm-up failed: {e}", file=sys.stderr)
+                print(f"jevmcp: warm-up failed: {e}", file=sys.stderr)
 
     # ── shared steps ────────────────────────────────────────────────────────
     def resolve_map(self, map: str | None) -> str:
@@ -550,7 +550,7 @@ class Server:
         if not all:
             claims, where = self.select(claims, files)
             scope = f"{len(claims)} of {total} claims, about {where}"
-        head = [f"docdrift check ({self.map_used}): {scope} | {self.last_index}"]
+        head = [f"spec-drift check ({self.map_used}): {scope} | {self.last_index}"]
         if problems:
             head += ["", "MAP PROBLEMS - these entries were NOT checked (fix the map, then validate_spec_map):"]
             head += [f"  - {p}" for p in problems]
@@ -798,7 +798,7 @@ def _report(results: list[dict], path: str) -> list[str]:
 
 @contextlib.contextmanager
 def _in(folder: Path):
-    """docdrift resolves paths against the working directory; the server's is the project root."""
+    """The checker resolves paths against the working directory; the server's is the project root."""
     before = Path.cwd()
     os.chdir(folder)
     try:
@@ -973,7 +973,7 @@ def handle(server: Server, msg) -> dict | None:
         return _error(mid, e.code, e.message, e.data)
     except Exception as e:  # noqa: BLE001 - report, keep serving
         print(f"jevmcp: internal error on {method}: {type(e).__name__}: {e}", file=sys.stderr)
-        return _error(mid, INTERNAL_ERROR, f"docdrift failed: {type(e).__name__}: {e}")
+        return _error(mid, INTERNAL_ERROR, f"jevmcp failed: {type(e).__name__}: {e}")
 
 
 def serve(server: Server, stdin=None) -> None:
@@ -1062,7 +1062,7 @@ def main(argv: list[str] | None = None) -> None:
                     help="Say where the key would come from, and whether it is there. Never prints the key.")
     ap.add_argument("--jobs", type=int, default=8, metavar="N", help="Claims asked about at once (default 8).")
     ap.add_argument("--ignore", nargs="*", default=[], metavar="NAME",
-                    help="More folders to skip, on top of docdrift's defaults (node_modules, build, ...).")
+                    help="More folders to skip, on top of the defaults (node_modules, build, ...).")
     ap.add_argument("--no-warm", action="store_true",
                     help="Do not read the code at start-up (the first tool call does it instead).")
     ap.add_argument("--max-calls-per-minute", type=int, default=120, metavar="N",

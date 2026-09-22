@@ -37,9 +37,9 @@ What it can read
                     tree-sitter-typescript pyyaml
 
 Usage (from the folder of the project you are checking):
-    uv run --script <path>/docdrift.py --docs docs/spec.md --src . --dry-run    # pairs only
-    uv run --script <path>/docdrift.py --docs docs/spec.md --src . --draft-map map.json
-    uv run --script <path>/docdrift.py --map map.json --src . --out drift.json
+    uv run --script <path>/spec_drift.py --docs docs/spec.md --src . --dry-run    # pairs only
+    uv run --script <path>/spec_drift.py --docs docs/spec.md --src . --draft-map map.json
+    uv run --script <path>/spec_drift.py --map map.json --src . --out drift.json
 """
 from __future__ import annotations
 
@@ -2194,7 +2194,7 @@ def _ref_of(s: Symbol) -> str:
 
 MAP_README = [
     "A map says which code each spec requirement is about. One entry per spec sentence.",
-    "Review EVERY entry, then run:  python docdrift.py --map <this file> --dry-run   and then without --dry-run.",
+    "Review EVERY entry, then run:  spec_drift.py --map <this file> --dry-run --strict   and then without --dry-run.",
     "text        - the requirement that will be checked. Edit it only to make it clearer.",
     "code        - where the code for it is. One of these, or a list of several:",
     "                route:GET /api/orders/{id}           an endpoint (its handler, wherever it lives)",
@@ -2775,7 +2775,7 @@ def _cmd() -> str:
 def quick_start() -> str:
     tool, cmd = _tool_path(), _cmd()
     return f"""\
-docdrift - check that a specification still matches the code.
+spec drift - check that a specification still matches the code.
 
 It reads your spec one sentence at a time, finds the code each sentence is
 about, and asks a model whether the sentence is still true of that code.
@@ -2914,13 +2914,13 @@ class _Parser(argparse.ArgumentParser):
 
 def _die(message: str) -> None:
     sys.stdout.flush()
-    sys.stderr.write(f"docdrift: {message}\n\n"
+    sys.stderr.write(f"spec_drift: {message}\n\n"
                      "Run with no options for the quick start, or with --help for every option.\n")
     sys.exit(2)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = _Parser(prog="docdrift.py", formatter_class=argparse.RawDescriptionHelpFormatter,
+    ap = _Parser(prog="spec_drift.py", formatter_class=argparse.RawDescriptionHelpFormatter,
                  description="Check that a specification still matches the code.\n"
                              "Run it from the folder of the project you are checking. "
                              "With no options it prints a quick start.",
