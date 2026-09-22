@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "description": "Checks code against its design spec. A fast model (TypeSafe's Jev) screens every requirement in seconds; the agent investigates only what it flags. Java/Spring, JS/TS, Python, and any language by line range.",
   "author": {
-    "name": "eaisdevelopment",
-    "url": "https://github.com/eaisdevelopment"
+    "name": "Essential AI Solutions Ltd.",
+    "url": "https://essentialai.uk"
   },
   "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/docdrift",
   "repository": "https://github.com/eaisdevelopment/jevmcp",
@@ -26,7 +26,7 @@
         "displayName": "docdrift",
         "shortDescription": "Check code against its spec",
         "longDescription": "Does your code still match its design spec? After a change, a fast model (TypeSafe's Jev) screens every requirement in the spec against the code that implements it, in seconds and for fractions of a cent; the agent then investigates only what was flagged and tells you which side to fix, the code or the spec. Set up once per project with a spec map that pairs each requirement with its code. Java/Spring, JavaScript/TypeScript, Python, and any other language by line range. Needs uv and a TypeSafe API key (TYPESAFE_API_KEY in the environment that starts Codex).",
-        "developerName": "eaisdevelopment",
+        "developerName": "Essential AI Solutions Ltd.",
         "category": "Developer Tools",
         "defaultPrompt": [
           "Set up spec-drift checking for this project",

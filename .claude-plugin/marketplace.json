@@ -2,8 +2,8 @@
   "name": "jevmcp",
   "description": "Coding-agent plugins that use TypeSafe's fast model Jev for routine software-lifecycle checks: the fast model screens, the agent investigates only what it flags.",
   "owner": {
-    "name": "eaisdevelopment",
-    "url": "https://github.com/eaisdevelopment"
+    "name": "Essential AI Solutions Ltd.",
+    "url": "https://essentialai.uk"
   },
   "plugins": [
     {
