@@ -19,6 +19,36 @@ no second install and no second API key.
 Each tool is its own skill, and all of them share the single `jevmcp` MCP server: one install,
 one server process, one API key. Your client can still approve or disable each tool separately.
 
+## What happens the first time (about 5 minutes, once per project)
+
+You do not create or edit any file yourself. In your project, ask your agent:
+
+> Set up spec-drift checking for this project.
+
+1. It finds your spec — a design, requirements or architecture document (Markdown).
+2. It runs `draft_map`, which **writes `spec_map.json` for you**: one entry per sentence of the
+   spec, each with a suggested place in the code. Nothing is sent anywhere; this is free.
+3. It reviews the entries with you, fixes the wrong guesses, and marks sentences that are not
+   requirements as excluded with a reason. This is the part that needs your knowledge, and it is
+   the only part that takes time.
+4. `validate_map` confirms the file is complete, and you commit it with your code.
+
+From then on, a check is one sentence — *"Check my changes against the spec"* — and takes seconds
+and fractions of a cent, because each requirement is sent with only the code it is about.
+
+**What is `spec_map.json`?** It is the pairing between your spec and your code: for each sentence,
+which code implements it. One entry looks like this (the agent writes it, you review it):
+
+```json
+{"spec": "docs/spec.md", "line": 6,
+ "text": "An order may contain at most 50 items (SHOP_MAX_ITEMS).",
+ "status": "reviewed",
+ "code": ["app/settings.py:SHOP_MAX_ITEMS", "app/services.py:place_order"]}
+```
+
+Without it, checking a spec would mean sending your whole repository to a model for every
+sentence. With it, the fast model gets one requirement and the few lines that enforce it.
+
 ## Install
 
 You need [`uv`](https://docs.astral.sh/uv/) and a TypeSafe API key
@@ -40,7 +70,9 @@ codex plugin marketplace add eaisdevelopment/jevmcp
 codex plugin add jevmcp@jevmcp
 ```
 
-Codex forwards `TYPESAFE_API_KEY` from the environment that starts it.
+Codex has no prompt for keys: put `export TYPESAFE_API_KEY=...` in the shell profile that starts
+Codex, and it is forwarded to the plugin's server. (The plugin's README describes a second way
+that keeps the key out of the environment.)
 
 **Other Agent Plugins clients**: `plugins/jevmcp` is a portable Agent Plugins 1.0.0 package
 (`plugin.json`, `mcp.json`, `skills/`). See the [plugin's README](plugins/jevmcp) for how it gets

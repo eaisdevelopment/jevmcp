@@ -1,6 +1,6 @@
 ---
 name: spec-drift
-description: Check whether a project's code still matches its design spec or requirements document. A fast model (TypeSafe's Jev, via docdrift) screens every requirement in seconds; you investigate only what it flags. Use when the user asks whether code matches the spec, design or requirements; after changing code in a project that has a *spec_map.json (before you finish the task); when a spec is edited; before a release; or to set up spec-drift checking for a project. Works with Java/Spring, JavaScript/TypeScript (Node, NestJS, Express, Hono, Fastify, Next.js) and Python (FastAPI, Flask, Django), and with any other language through line ranges.
+description: Check whether a project's code still matches its design spec or requirements document. A fast model (TypeSafe's Jev) screens every requirement in seconds; you investigate only what it flags. A project is set up once with a spec map (spec_map.json), which pairs each requirement sentence with the code that implements it; the draft_map tool writes it, the user never writes it by hand. Use when the user asks whether code matches the spec, design or requirements; after changing code in a project that has a *spec_map.json (before you finish the task); when a spec is edited; before a release; or to set up spec-drift checking for a project. Works with Java/Spring, JavaScript/TypeScript (Node, NestJS, Express, Hono, Fastify, Next.js) and Python (FastAPI, Flask, Django), and with any other language through line ranges.
 ---
 
 # Spec drift check

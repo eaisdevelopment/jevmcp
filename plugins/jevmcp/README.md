@@ -83,6 +83,32 @@ through `TYPESAFE_API_KEY` in the environment the client passes on, or by puttin
 is missing, the server's error message names that exact path. Cursor is not supported yet: it
 does not expand the standard's `${PLUGIN_ROOT}`.
 
+## First run in a project: the spec map
+
+You never write or edit a file yourself. Ask your agent, in the project:
+
+> Set up spec-drift checking for this project.
+
+1. It finds your spec (a design, requirements or architecture document in Markdown).
+2. `draft_map` **writes `spec_map.json` for you** — one entry per sentence of the spec, each with
+   a suggested place in the code. Free: nothing is sent anywhere.
+3. The agent reviews the entries with you: it fixes wrong guesses and marks sentences that are not
+   requirements as excluded, with a reason. Your knowledge is needed here, and only here.
+4. `validate_map` confirms nothing is missing. Commit the file with your code.
+
+**`spec_map.json` is the pairing between your spec and your code** — for each sentence, the code
+that implements it. One entry, written by the agent and reviewed by you:
+
+```json
+{"spec": "docs/spec.md", "line": 6,
+ "text": "An order may contain at most 50 items (SHOP_MAX_ITEMS).",
+ "status": "reviewed",
+ "code": ["app/settings.py:SHOP_MAX_ITEMS", "app/services.py:place_order"]}
+```
+
+That pairing is why a check costs fractions of a cent: each requirement is sent with the few lines
+that enforce it, never the whole repository. After this, a check is one sentence and takes seconds.
+
 ## Your API key
 
 Never commit it, and never paste it into an issue or a chat. The MCP server reads it, in this

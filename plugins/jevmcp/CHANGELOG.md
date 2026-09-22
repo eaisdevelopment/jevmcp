@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 — 2026-09-22
+
+Documentation: the README now explains what happens the first time you use it, and what
+`spec_map.json` is. **You never create or edit that file yourself** — `draft_map` writes it and
+the agent reviews it with you. The skill's own description says so too, so an agent explains it
+the same way.
+
 ## 1.2.0 — 2026-09-22
 
 **One server for every Jev tool.** The MCP server is now called `jevmcp` (it was `docdrift`), and
