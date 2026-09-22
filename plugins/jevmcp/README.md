@@ -7,7 +7,7 @@ on the portable [Agent Plugins](https://agent-plugins.org) format, so other clie
 can load it too.
 
 New tools are added to this same plugin — you do not install or configure anything again, you
-update it (`claude plugin update jevmcp@jevmcp`).
+update it (`claude plugin update jevmcp@jev`).
 
 ## What is in it today
 
@@ -40,7 +40,7 @@ and they reach you as an update.
 
 ```
 /plugin marketplace add eaisdevelopment/jevmcp
-/plugin install jevmcp@jevmcp
+/plugin install jevmcp@jev
 ```
 
 Claude Code asks for your TypeSafe API key when the plugin is enabled and keeps it out of every
@@ -52,13 +52,13 @@ it later: `/plugin manage`. Enter it at that prompt rather than with `claude plu
 
 ```
 codex plugin marketplace add eaisdevelopment/jevmcp
-codex plugin add jevmcp@jevmcp
+codex plugin add jevmcp@jev
 ```
 
 Codex has no prompt for keys, so store it once — in your own terminal, not in a Codex session:
 
 ```bash
-uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jevmcp/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
+uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
 ```
 
 It asks for the key without showing it and writes `~/.config/jevmcp/typesafe.env` (only you can
@@ -73,7 +73,7 @@ you before each check — that is your consent. The free tools (`validate_spec_m
 run without asking if you add to `~/.codex/config.toml`:
 
 ```toml
-[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]
+[plugins."jevmcp@jev".mcp_servers.jevmcp]
 default_tools_approval_mode = "auto"
 ```
 
@@ -93,7 +93,7 @@ so the check cannot reach TypeSafe and silently finds nothing. The MCP server ru
 sandbox, which is why the tools work there.
 
 If the server's very first start times out while uv downloads the parsers, run
-`uv run --script ~/.codex/plugins/cache/jevmcp/jevmcp/<version>/scripts/jevmcp_server.py --help`
+`uv run --script ~/.codex/plugins/cache/jev/jevmcp/<version>/scripts/jevmcp_server.py --help`
 once (uv caches them), then start Codex again; Codex's `config.toml` cannot change a plugin
 server's startup timeout.
 

@@ -13,8 +13,8 @@ file is the map and the rules.
 
 ## What this is
 
-One plugin, `jevmcp`, installed once: `/plugin install jevmcp@jevmcp` in Claude Code,
-`codex plugin add jevmcp@jevmcp` in Codex, after adding the marketplace
+One plugin, `jevmcp`, installed once: `/plugin install jevmcp@jev` in Claude Code,
+`codex plugin add jevmcp@jev` in Codex, after adding the marketplace
 `eaisdevelopment/jevmcp`. It gives you one MCP server (`jevmcp`) and one skill (`spec-drift`).
 
 Today the server offers four tools. Only the first sends anything anywhere:

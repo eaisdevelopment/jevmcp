@@ -30,7 +30,7 @@ These are not style preferences. Break them and the user's API key ends up in a 
 | **A supported client** | Claude Code and OpenAI Codex are both tested. Any other client of the [Agent Plugins](https://agent-plugins.org) 1.0.0 format can load `plugins/jevmcp`. | Section 2–4 |
 | **Python** | `>=3.10`, supplied by `uv` if the system Python is older. | — |
 
-There is **one** plugin, `jevmcp`, version 1.3.1, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is also called `jevmcp`, so the install id is **`jevmcp@jevmcp`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`), **one** skill (`skills/spec-drift/SKILL.md`), and the command-line checker (`scripts/spec_drift.py`). Future tool families (CI failure triage, code audit) add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
+There is **one** plugin, `jevmcp`, version 1.3.1, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is also called `jevmcp`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`), **one** skill (`skills/spec-drift/SKILL.md`), and the command-line checker (`scripts/spec_drift.py`). Future tool families (CI failure triage, code audit) add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
 
 ---
 
@@ -40,7 +40,7 @@ Two commands, typed in a Claude Code session:
 
 ```
 /plugin marketplace add eaisdevelopment/jevmcp
-/plugin install jevmcp@jevmcp
+/plugin install jevmcp@jev
 ```
 
 When the plugin is enabled, Claude Code **asks for the TypeSafe API key itself**. That prompt comes from a `userConfig` field declared in the plugin manifest (`typesafe_api_key`, `sensitive: true`, `required: true`), so:
@@ -53,11 +53,11 @@ To change the key later: `/plugin manage`, open **jevmcp**, set *TypeSafe API ke
 
 **Do not** use `claude plugin install --config typesafe_api_key=...`. That leaves the key in the shell history. Use the prompt.
 
-The same two steps from a terminal are `claude plugin marketplace add eaisdevelopment/jevmcp` and `claude plugin install jevmcp@jevmcp`, but the key prompt is part of enabling the plugin in a session.
+The same two steps from a terminal are `claude plugin marketplace add eaisdevelopment/jevmcp` and `claude plugin install jevmcp@jev`, but the key prompt is part of enabling the plugin in a session.
 
 After the install, restart Claude Code if it says *Restart to apply changes* — the MCP server is only started when the session starts.
 
-**Where it lands:** `~/.claude/plugins/cache/jevmcp/jevmcp/<version>/`.
+**Where it lands:** `~/.claude/plugins/cache/jev/jevmcp/<version>/`.
 
 ---
 
@@ -65,16 +65,16 @@ After the install, restart Claude Code if it says *Restart to apply changes* —
 
 ```
 codex plugin marketplace add eaisdevelopment/jevmcp
-codex plugin add jevmcp@jevmcp
+codex plugin add jevmcp@jev
 ```
 
-`codex plugin marketplace add` takes `owner/repo[@ref]`, an HTTPS or SSH Git URL, or a local path. `codex plugin add` takes `PLUGIN@MARKETPLACE`. Installing writes `[plugins."jevmcp@jevmcp"] enabled = true` into `~/.codex/config.toml`.
+`codex plugin marketplace add` takes `owner/repo[@ref]`, an HTTPS or SSH Git URL, or a local path. `codex plugin add` takes `PLUGIN@MARKETPLACE`. Installing writes `[plugins."jevmcp@jev"] enabled = true` into `~/.codex/config.toml`.
 
 **Codex has no prompt for secrets.** It will not ask for the key and cannot store one. The user must store it themselves — see section 5, which is the same command for every client that cannot hold a key.
 
 Codex's overlay (`.codex-plugin/plugin.json`) starts the server with `uv run --quiet --script ./scripts/jevmcp_server.py`, forwards `TYPESAFE_API_KEY` if the user exported it (`env_vars: ["TYPESAFE_API_KEY"]`), and allows 120 s for start-up and 600 s per tool call.
 
-**Where it lands:** `~/.codex/plugins/cache/jevmcp/jevmcp/<version>/`.
+**Where it lands:** `~/.codex/plugins/cache/jev/jevmcp/<version>/`.
 
 Approval behaviour, `codex exec`, and why the command line must not be used as a fallback inside a Codex session are covered in [clients.md](clients.md).
 
@@ -119,10 +119,10 @@ The user runs this **in their own terminal**, not through an agent:
 
 ```bash
 # Codex
-uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jevmcp/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
+uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
 
 # Claude Code (only needed if they would rather not use the plugin's own key prompt)
-uv run --quiet --script "$(ls -d ~/.claude/plugins/cache/jevmcp/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
+uv run --quiet --script "$(ls -d ~/.claude/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
 
 # A clone of this repository
 uv run --quiet --script plugins/jevmcp/scripts/jevmcp_server.py --set-key
@@ -144,7 +144,7 @@ There is no flag that takes the key as an argument. That is deliberate.
 ### Checking the key without spending anything: `--show-key-source`
 
 ```bash
-uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jevmcp/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --show-key-source 2>&1
+uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --show-key-source 2>&1
 ```
 
 It prints every source, in order, marks the one that would be used, and **never prints the key**. Real output from a machine where the key is in the `--set-key` file:
@@ -228,8 +228,8 @@ uv run --quiet --script <plugin>/scripts/spec_drift.py --help
 
 | Client | Command |
 |---|---|
-| Claude Code | `claude plugin update jevmcp@jevmcp` (or `/plugin` in a session). Restart is required to apply — Claude Code says *Restart to apply changes*. |
-| Codex | `codex plugin marketplace upgrade` to refresh the marketplace snapshot, then `codex plugin remove jevmcp@jevmcp && codex plugin add jevmcp@jevmcp`. |
+| Claude Code | `claude plugin update jevmcp@jev` (or `/plugin` in a session). Restart is required to apply — Claude Code says *Restart to apply changes*. |
+| Codex | `codex plugin marketplace upgrade` to refresh the marketplace snapshot, then `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`. |
 
 New tool families arrive this way: same plugin, same server, same key, no second install and no reconfiguration. Read [../CHANGELOG.md](../CHANGELOG.md) after an update — tools have been renamed before (1.3.0 renamed `check_drift` → `check_spec_drift`, `validate_map` → `validate_spec_map`, `draft_map` → `draft_spec_map`, `show_payload` → `preview_spec_check`), and a per-tool approval pinned by name in `~/.codex/config.toml` has to be re-approved under the new name.
 
@@ -241,8 +241,8 @@ The stored key is **not** touched by an update: `~/.config/jevmcp/typesafe.env` 
 
 | Client | Command |
 |---|---|
-| Claude Code | `claude plugin uninstall jevmcp@jevmcp`, then `claude plugin marketplace remove jevmcp` if you also want the marketplace gone. |
-| Codex | `codex plugin remove jevmcp@jevmcp`, then `codex plugin marketplace remove jevmcp`. |
+| Claude Code | `claude plugin uninstall jevmcp@jev`, then `claude plugin marketplace remove jevmcp` if you also want the marketplace gone. |
+| Codex | `codex plugin remove jevmcp@jev`, then `codex plugin marketplace remove jevmcp`. |
 
 Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp/typesafe.env` themselves. Claude Code's copy lives in its credential store; remove it with `/plugin manage` before uninstalling, or leave it.
 
@@ -256,12 +256,12 @@ Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp
 |---|---|---|
 | A check fails with *No TypeSafe API key is set for this server, so nothing was sent.* | The server found no key in any of the four sources. | The error already names the fix. Claude Code: `/plugin manage` → jevmcp → *TypeSafe API key*. Any other client: the user runs `--set-key` in their own terminal (section 5). **Do not ask for the key in chat and do not run `--set-key` yourself.** `validate_spec_map` and `preview_spec_check` still work meanwhile. |
 | Server fails to start; the log mentions `uv` | `uv` is not on the `PATH` the client gives the server. Clients pass a minimal environment (Codex: `HOME`, `LANG`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, plus declared `env_vars`). | Install `uv` (<https://docs.astral.sh/uv/>) and make sure it is on the `PATH` of the shell that launches the client — not only inside an interactive shell profile that a GUI launch never reads. |
-| The very first start times out | `uv` is downloading and building the tree-sitter wheels. This happens once; afterwards uv's cold start is short. Codex allows 120 s and its `config.toml` cannot change a plugin server's start-up timeout. | Run once, outside the agent: `uv run --script ~/.codex/plugins/cache/jevmcp/jevmcp/<version>/scripts/jevmcp_server.py --help`. That fills uv's cache. Then start the client again. |
+| The very first start times out | `uv` is downloading and building the tree-sitter wheels. This happens once; afterwards uv's cold start is short. Codex allows 120 s and its `config.toml` cannot change a plugin server's start-up timeout. | Run once, outside the agent: `uv run --script ~/.codex/plugins/cache/jev/jevmcp/<version>/scripts/jevmcp_server.py --help`. That fills uv's cache. Then start the client again. |
 | *Restart to apply changes* | Claude Code re-reads plugins and starts MCP servers at session start. Installing, updating, enabling or changing the key mid-session does not reach a running server. | Restart Claude Code. If the key was the thing that changed, this is required — the server reads it once, at start-up. |
 | `claude mcp list` shows anything but `✔ Connected`, or `/mcp` shows the server as failed | The server exited at start-up. Everything it prints that is not protocol goes to stderr, and Claude Code keeps it. | Read `~/.cache/claude-cli-nodejs/<encoded-project-path>/mcp-logs-plugin-jevmcp-jevmcp/`. Then reproduce by hand: `uv run --quiet --script <installed path>/scripts/jevmcp_server.py --help`. A traceback there is the real error. |
 | The tools work but a tool call says *this client did not tell the server which project it is working in* | Codex starts the server in the plugin's own folder, so the server has no default project. | Pass `project` with the **absolute** path of the project folder in every tool call. Relative paths, the home folder and the filesystem root are all refused. |
-| The first read of `SKILL.md` in Codex fails with a duplicated path segment, then succeeds on retry | Cosmetic. Codex's skill catalogue shortens `…/plugins/cache/jevmcp/jevmcp` to a root because the marketplace name and the plugin name are both `jevmcp`. | Nothing to fix. Do not reinstall. The retry finds the file. |
-| Codex refuses `check_spec_drift` | Intended. It is declared a **write** action (`readOnlyHint: false`, `openWorldHint: true`) because code leaves the machine, so Codex asks every time — that approval *is* the user's consent. Under `codex exec` the approval policy is `never`, which blocks every MCP tool (*MCP tool call requires approval, but approval policy is never*), and `--approve-for-me` does not help: Codex's automatic reviewer refuses a tool that *may transmit project spec and code to the untrusted TypeSafe destination*. | Interactively: approve it. Unattended: see [clients.md](clients.md). The free tools can be allowed to run unattended with this in `~/.codex/config.toml`:<br>`[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]`<br>`default_tools_approval_mode = "auto"` |
+| The first read of `SKILL.md` in Codex fails with a duplicated path segment, then succeeds on retry | The plugin was installed from the pre-1.5.0 marketplace, when the marketplace and the plugin were both called `jevmcp`. | Reinstall from the current marketplace: `codex plugin remove jevmcp@jev` (or `jevmcp@jevmcp`), `codex plugin marketplace remove jevmcp`, then add `eaisdevelopment/jevmcp` again and `codex plugin add jevmcp@jev`. |
+| Codex refuses `check_spec_drift` | Intended. It is declared a **write** action (`readOnlyHint: false`, `openWorldHint: true`) because code leaves the machine, so Codex asks every time — that approval *is* the user's consent. Under `codex exec` the approval policy is `never`, which blocks every MCP tool (*MCP tool call requires approval, but approval policy is never*), and `--approve-for-me` does not help: Codex's automatic reviewer refuses a tool that *may transmit project spec and code to the untrusted TypeSafe destination*. | Interactively: approve it. Unattended: see [clients.md](clients.md). The free tools can be allowed to run unattended with this in `~/.codex/config.toml`:<br>`[plugins."jevmcp@jev".mcp_servers.jevmcp]`<br>`default_tools_approval_mode = "auto"` |
 | A check inside a Codex session reports no drift suspiciously fast, or you are tempted to fall back to `spec_drift.py` there | **Codex's sandbox has no network.** A command-line run inside it silently reaches nothing. The MCP server runs *outside* the sandbox, which is why the tools work. | Never fall back to the command line inside a Codex session, and never report "no drift" from a run that could not reach TypeSafe (exit code **3**) — say the check did not run. |
 | `--set-key` exits 2 with *asks for the key without echoing it, so run it in your own terminal* | You (an agent, or a pipe) tried to run it where stdin or stdout is not a terminal. | Correct behaviour. Hand the command to the user. |
 | `--key-file …: give an absolute path` | The server was registered with a relative `--key-file`. A relative path would be read from inside the project being checked. | Use an absolute path, outside the project. |

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.5.0 — 2026-09-22
+
+**The marketplace is now called `jev`, so installing is `jevmcp@jev`.** The plugin, the server
+and the tools are unchanged.
+
+```
+/plugin marketplace add eaisdevelopment/jevmcp     # Claude Code
+/plugin install jevmcp@jev
+codex plugin marketplace add eaisdevelopment/jevmcp # Codex
+codex plugin add jevmcp@jev
+```
+
+Why: a marketplace and a plugin with the same name put it twice in the installed path
+(`…/plugins/cache/jevmcp/jevmcp/<version>/…`), and Codex's skill catalogue shortens that
+ambiguously — in every session the first read of the skill file failed on a duplicated segment
+before the retry succeeded. With `jev` the path has nothing repeated and the failure is gone.
+
+If you installed an earlier version: remove it (`codex plugin remove jevmcp@jevmcp`, or
+`/plugin uninstall jevmcp@jevmcp`), remove the old marketplace, then add it again and install
+`jevmcp@jev`. A per-tool approval pinned to `jevmcp@jevmcp` in `~/.codex/config.toml` has to be
+set again under the new id.
+
 ## 1.4.1 — 2026-09-22
 
 Found by running a first-time setup in a fresh Codex session: an entry the drafter could not pair
@@ -74,7 +96,7 @@ server rather than by a server each. One install, one server process, one API ke
 - The server script is `scripts/jevmcp_server.py`; its four tools are unchanged
   (`check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map`), as is everything they do.
 - In Claude Code the tools are now `mcp__plugin_jevmcp_jevmcp__<tool>`; in `~/.codex/config.toml`
-  the table is `[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]`.
+  the table is `[plugins."jevmcp@jev".mcp_servers.jevmcp]`.
 
 ## 1.1.0 — 2026-09-22
 
@@ -84,10 +106,10 @@ changed before anyone depended on it: spec-drift checking is now the first tool 
 and the next ones (CI failure triage, code audit) arrive in the same plugin as updates, each with
 its own skill and its own MCP server.
 
-- Install: `/plugin install jevmcp@jevmcp` (Claude Code), `codex plugin add jevmcp@jevmcp` (Codex).
+- Install: `/plugin install jevmcp@jev` (Claude Code), `codex plugin add jevmcp@jev` (Codex).
 - Nothing else changed: the same skill `spec-drift`, the same MCP server `docdrift` with its four
   tools, the same API key, the same behaviour as 1.0.0 below.
-- If you installed `docdrift@jevmcp` earlier today, remove it and install `jevmcp@jevmcp`.
+- If you installed `docdrift@jevmcp` earlier today, remove it and install `jevmcp@jev`.
 
 ## 1.0.0 — 2026-09-22
 

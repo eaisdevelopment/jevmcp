@@ -29,7 +29,7 @@ CI. The script is `scripts/spec_drift.py` inside the plugin:
 |---|---|
 | Claude Code session | `${CLAUDE_PLUGIN_ROOT}/scripts/spec_drift.py` |
 | The variable is not expanded | `../../scripts/spec_drift.py`, relative to `skills/spec-drift/SKILL.md` |
-| Codex install | `$(ls -d ~/.codex/plugins/cache/jevmcp/jevmcp/*/scripts/spec_drift.py \| sort -V \| tail -1)` |
+| Codex install | `$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/spec_drift.py \| sort -V \| tail -1)` |
 | A clone of this repository | `plugins/jevmcp/scripts/spec_drift.py` |
 
 Every command below assumes this shell variable, and that you run from the root of the project

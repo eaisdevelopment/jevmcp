@@ -11,16 +11,16 @@ clients on 2026-09-22. Where something was not verified, it says so.
 
 | | Claude Code | OpenAI Codex | Other Agent Plugins 1.0.0 clients |
 |---|---|---|---|
-| Install | `/plugin marketplace add eaisdevelopment/jevmcp` then `/plugin install jevmcp@jevmcp` | `codex plugin marketplace add eaisdevelopment/jevmcp` then `codex plugin add jevmcp@jevmcp` | the client's own way of loading `plugins/jevmcp` |
+| Install | `/plugin marketplace add eaisdevelopment/jevmcp` then `/plugin install jevmcp@jev` | `codex plugin marketplace add eaisdevelopment/jevmcp` then `codex plugin add jevmcp@jev` | the client's own way of loading `plugins/jevmcp` |
 | Manifests it reads | `.claude-plugin/marketplace.json`, `plugins/jevmcp/.claude-plugin/plugin.json`, `plugins/jevmcp/.mcp.json` | `.agents/plugins/marketplace.json`, `plugins/jevmcp/plugin.json`, `plugins/jevmcp/mcp.json`, `.codex-plugin/plugin.json` (overlay) | `plugins/jevmcp/plugin.json`, `plugins/jevmcp/mcp.json`, `skills/` |
 | API key | asked for when the plugin is enabled; kept in the client's credential store | no prompt: `--set-key` once, or an exported `TYPESAFE_API_KEY` | `TYPESAFE_API_KEY` in the environment, or a key file (`--set-key`) |
-| Tool names | `mcp__plugin_jevmcp_jevmcp__<tool>` | `<tool>` on server `jevmcp` of plugin `jevmcp@jevmcp` | the client's own scheme, over server `jevmcp` |
+| Tool names | `mcp__plugin_jevmcp_jevmcp__<tool>` | `<tool>` on server `jevmcp` of plugin `jevmcp@jev` | the client's own scheme, over server `jevmcp` |
 | Skill | `jevmcp:spec-drift` | listed in the session's skill catalogue | depends on the client's skill support |
 | Must a call pass `project`? | no (but see the boundary rule below) | **yes, always**, absolute path | yes, unless the client starts the server in the project |
 | Approval for `check_spec_drift` | the client's normal MCP tool permission | **every time, by design** | the client's own rule |
 | Unattended / CI | not established here — use the command line | MCP tools blocked unless the sandbox is switched off — use the command line | unknown |
 | Network in the agent's shell | yes | **no** (sandboxed) | unknown |
-| Update | `claude plugin update jevmcp@jevmcp` | `codex plugin remove jevmcp@jevmcp && codex plugin add jevmcp@jevmcp` | the client's own way |
+| Update | `claude plugin update jevmcp@jev` | `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev` | the client's own way |
 
 Same in every client, because it is in the server, not the client:
 
@@ -46,19 +46,19 @@ Tested with Claude Code 2.1.278.
 
 ```
 /plugin marketplace add eaisdevelopment/jevmcp
-/plugin install jevmcp@jevmcp
+/plugin install jevmcp@jev
 ```
 
 The marketplace is named `jevmcp` and the plugin inside it is named `jevmcp`, so the install id is
-`jevmcp@jevmcp`. Claude Code reads the Claude-specific manifests: `.claude-plugin/marketplace.json`
+`jevmcp@jev`. Claude Code reads the Claude-specific manifests: `.claude-plugin/marketplace.json`
 at the repository root, `plugins/jevmcp/.claude-plugin/plugin.json`, and
 `plugins/jevmcp/.mcp.json`. It does **not** read the portable `plugin.json` / `mcp.json` — that is
 why both sets of files exist.
 
 Installed copies live at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.claude/plugins/cache/jevmcp/jevmcp/1.3.1/`. Older versions stay beside the new one.
+`~/.claude/plugins/cache/jev/jevmcp/1.3.1/`. Older versions stay beside the new one.
 
-Update with `claude plugin update jevmcp@jevmcp`. After an update Claude Code says
+Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 **"Restart to apply changes"** — the MCP server process is only replaced on restart.
 
 ### Where the key comes from
@@ -156,7 +156,7 @@ Tested with `codex-cli 0.155.1`.
 
 ```
 codex plugin marketplace add eaisdevelopment/jevmcp
-codex plugin add jevmcp@jevmcp
+codex plugin add jevmcp@jev
 ```
 
 Codex reads `.agents/plugins/marketplace.json` at the repository root and then the portable
@@ -175,10 +175,10 @@ Codex merges an overlay entry only when it is a complete server definition; the 
 `mcp.json` still decides the command (checked with `codex mcp list --json`).
 
 Installed copies live at `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.codex/plugins/cache/jevmcp/jevmcp/1.3.1/`. `~/.codex/config.toml` gains
-`[plugins."jevmcp@jevmcp"] enabled = true` (and a `[marketplaces.jevmcp]` entry).
+`~/.codex/plugins/cache/jev/jevmcp/1.3.1/`. `~/.codex/config.toml` gains
+`[plugins."jevmcp@jev"] enabled = true` (and a `[marketplaces.jev]` entry).
 
-Update with `codex plugin remove jevmcp@jevmcp && codex plugin add jevmcp@jevmcp`.
+Update with `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`.
 
 ### Where the key comes from
 
@@ -188,7 +188,7 @@ session, and never as a command-line argument:
 1. Store it once (recommended):
 
 ```bash
-uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jevmcp/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
+uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
 ```
 
 `--set-key` asks without echoing (it refuses to run unless stdin and stdout are a terminal, so an
@@ -208,7 +208,7 @@ hash (`~/.codex/plugins/data/agent-plugins/<64 hex characters>/`), which is exac
 
 The tools keep their plain names on server `jevmcp`: `check_spec_drift`, `validate_spec_map`,
 `preview_spec_check`, `draft_spec_map`. In `~/.codex/config.toml` the table for them is
-`[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]`. If a tool was approved by name before 1.3.0, that approval no
+`[plugins."jevmcp@jev".mcp_servers.jevmcp]`. If a tool was approved by name before 1.3.0, that approval no
 longer matches (`check_drift` → `check_spec_drift`, `validate_map` → `validate_spec_map`,
 `show_payload` → `preview_spec_check`, `draft_map` → `draft_spec_map`): approve the new name once.
 
@@ -227,7 +227,7 @@ route around it.
 The free tools can run unattended if the user adds to `~/.codex/config.toml`:
 
 ```toml
-[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]
+[plugins."jevmcp@jev".mcp_servers.jevmcp]
 default_tools_approval_mode = "auto"
 ```
 
@@ -273,12 +273,14 @@ Codex also passes the server a minimal environment — `HOME`, `LANG`, `LOGNAME`
 
 ### Known quirks
 
-- **Duplicated path segment on the first skill read.** Codex's skill catalogue shortens
-  `.../plugins/cache/jevmcp/jevmcp` to a single root, so the model's first attempt to read
-  `SKILL.md` can fail with a doubled path segment; the retry succeeds. Cause: the marketplace and
-  the plugin share the name `jevmcp`. Cosmetic — just retry with the path the error reports.
+- **Skill paths.** Codex's skill catalogue lists a root and a path under it, and a model can
+  shorten that wrongly if the two repeat a name. Up to 1.4.1 the marketplace and the plugin were
+  both called `jevmcp`, and the first read of `SKILL.md` failed on a duplicated segment every
+  time before the retry succeeded. Since 1.5.0 the marketplace is `jev`, so the path is
+  `.../plugins/cache/jev/jevmcp/<version>/skills/...` with nothing repeated. If you still see the
+  old failure, the plugin was installed from the old marketplace: remove it and add it again.
 - **First start can time out** while uv downloads the tree-sitter parsers. Run
-  `uv run --script ~/.codex/plugins/cache/jevmcp/jevmcp/<version>/scripts/jevmcp_server.py --help`
+  `uv run --script ~/.codex/plugins/cache/jev/jevmcp/<version>/scripts/jevmcp_server.py --help`
   once (uv then has them cached) and start Codex again. Codex's `config.toml` cannot change a
   plugin server's startup timeout; the overlay already asks for 120 s.
 

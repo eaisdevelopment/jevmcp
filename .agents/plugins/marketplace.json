@@ -1,7 +1,7 @@
 {
-  "name": "jevmcp",
+  "name": "jev",
   "interface": {
-    "displayName": "jevmcp"
+    "displayName": "jev"
   },
   "plugins": [
     {

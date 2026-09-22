@@ -58,7 +58,7 @@ You need [`uv`](https://docs.astral.sh/uv/) and a TypeSafe API key
 
 ```
 /plugin marketplace add eaisdevelopment/jevmcp
-/plugin install jevmcp@jevmcp
+/plugin install jevmcp@jev
 ```
 
 Claude Code asks for the API key when the plugin is enabled and keeps it in its credential store.
@@ -67,13 +67,13 @@ Claude Code asks for the API key when the plugin is enabled and keeps it in its 
 
 ```
 codex plugin marketplace add eaisdevelopment/jevmcp
-codex plugin add jevmcp@jevmcp
+codex plugin add jevmcp@jev
 ```
 
 Codex has no prompt for keys. Store it once, in your own terminal:
 
 ```bash
-uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jevmcp/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
+uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
 ```
 
 It asks for the key without showing it, writes `~/.config/jevmcp/typesafe.env` (readable only by
@@ -83,8 +83,8 @@ you), and survives plugin updates. No file for you to create by hand.
 (`plugin.json`, `mcp.json`, `skills/`). See the [plugin's README](plugins/jevmcp) for how it gets
 its key.
 
-**Updating**: `claude plugin update jevmcp@jevmcp`, or in Codex
-`codex plugin remove jevmcp@jevmcp && codex plugin add jevmcp@jevmcp`.
+**Updating**: `claude plugin update jevmcp@jev`, or in Codex
+`codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`.
 
 ## Your API key stays yours
 
