@@ -1,14 +1,14 @@
 {
   "name": "jevmcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "mcpServers": {
-    "docdrift": {
+    "jevmcp": {
       "command": "uv",
       "args": [
         "run",
         "--quiet",
         "--script",
-        "./scripts/docdrift_mcp.py"
+        "./scripts/jevmcp_server.py"
       ],
       "cwd": ".",
       "env_vars": [

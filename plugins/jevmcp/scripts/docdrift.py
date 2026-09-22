@@ -1714,7 +1714,7 @@ def _finish_routes() -> None:
 
 
 # Registries a per-file indexer writes. Each file is indexed against empty ones and what it
-# wrote is kept, so a long-running process (docdrift_mcp.py) re-parses only the files that
+# wrote is kept, so a long-running process (jevmcp_server.py) re-parses only the files that
 # changed and replays the rest; the cross-file passes then run on the merged result.
 _PER_FILE = ("_BY_FILE", "_BY_NAME", "_ROUTES", "_CFG", "_BINDINGS", "_LOCAL_PREFIX", "_EDGES", "_PENDING",
              "_JAVA_CONST", "_JAVA_IMPLEMENTS", "_DEFAULT_EXPORT", "_NEST_PREFIX", "_NOTES")
@@ -2618,7 +2618,7 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
     """Ask Jev about every claim, `jobs` at a time, and label each answer. Returns the results
     in claim order, the input tokens used, and what kept claims from being checked: problems
     (exit 2 - fix your setup, e.g. a rejected key) and vendor failures (exit 3 - TypeSafe
-    could not be used). Shared by the CLI and docdrift_mcp.py, so both judge identically.
+    could not be used). Shared by the CLI and jevmcp_server.py, so both judge identically.
 
     `on_answer(done, total)` is called as each answer arrives (from worker threads);
     once `cancelled()` returns true, no further claims are sent."""

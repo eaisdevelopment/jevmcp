@@ -17,7 +17,7 @@ After that, every check is seconds and fractions of a cent.
 
 ## The tools
 
-**Use the MCP tools when they are available** (server `docdrift`): `check_drift`,
+**Use the MCP tools when they are available** (server `jevmcp`): `check_drift`,
 `validate_map`, `show_payload`, `draft_map`. They keep the parsed code in memory and hold the
 API key themselves. Pass `project` with the absolute path of the project (your working
 directory) in every call: some clients do not tell the server which project it is in, and it

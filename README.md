@@ -12,12 +12,12 @@ no second install and no second API key.
 
 | Tool | What it does | Status |
 |---|---|---|
-| **spec-drift** (skill) + **docdrift** (MCP server: `check_drift`, `validate_map`, `show_payload`, `draft_map`) | Checks code against its design spec or requirements. Jev screens every requirement against the code that implements it; the agent investigates only what it flags and says which side to fix. Java/Spring, JavaScript/TypeScript, Python, and any language by line range. | available |
+| **spec-drift** (skill) + tools on the `jevmcp` server (`check_drift`, `validate_map`, `show_payload`, `draft_map`) | Checks code against its design spec or requirements. Jev screens every requirement against the code that implements it; the agent investigates only what it flags and says which side to fix. Java/Spring, JavaScript/TypeScript, Python, and any language by line range. | available |
 | CI failure triage | Reads a failed pipeline and says what actually broke. | planned |
 | Code audit | Screens a codebase against its own rules and conventions. | planned |
 
-Each tool is its own skill and its own MCP server inside the plugin, so one cannot break another,
-and each can be approved separately by your client.
+Each tool is its own skill, and all of them share the single `jevmcp` MCP server: one install,
+one server process, one API key. Your client can still approve or disable each tool separately.
 
 ## Install
 

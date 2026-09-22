@@ -9,8 +9,10 @@
 #   "pyyaml>=6.0",
 # ]
 # ///
-"""docdrift as an MCP server: the same spec-drift checks as docdrift.py, as tools a coding
-agent calls (Claude Code, or any MCP client).
+"""jevmcp: TypeSafe's fast model Jev as tools a coding agent calls (Claude Code, Codex, or any
+MCP client). One server holds every Jev tool; today that is the spec-drift family - the same
+checks as docdrift.py - and further families (CI failure triage, code audit) are added to the
+TOOLS list and the dispatch table below, so people keep one server and one API key.
 
 Why a server when the command line exists:
   * It keeps the parsed code in memory. After an edit only the changed files are parsed
@@ -31,7 +33,7 @@ Speaks MCP over stdio (newline-delimited JSON-RPC 2.0) with no dependencies beyo
 docdrift's. The plugin packages register it for you and keep the key in the client's own
 settings. To register it by hand instead, e.g. in Claude Code:
 
-  claude mcp add --scope user docdrift -- uv run --script /path/to/docdrift_mcp.py --key-file ~/.config/typesafe.env
+  claude mcp add --scope user jevmcp -- uv run --script /path/to/jevmcp_server.py --key-file ~/.config/typesafe.env
 
 where that file holds the line TYPESAFE_API_KEY=... and only you can read it (chmod 600).
 Never put the key itself on a command line or in a settings file.
@@ -39,7 +41,7 @@ Never put the key itself on a command line or in a settings file.
 Closing its input ends the session (the stdio transport's shutdown signal): a request not yet
 answered is dropped, so a client keeps stdin open until it has read the replies.
 
-Run it by hand to see the options:  uv run --script docdrift_mcp.py --help
+Run it by hand to see the options:  uv run --script jevmcp_server.py --help
 """
 from __future__ import annotations
 
@@ -73,7 +75,7 @@ sys.dont_write_bytecode = True                     # never leave a .pyc inside a
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docdrift as dd  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -85,14 +87,17 @@ M = "io.modelcontextprotocol/"                     # reserved _meta prefix
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR = -32700, -32600, -32601, -32602, -32603
 UNSUPPORTED_PROTOCOL_VERSION = -32022
 LIST_TTL_MS = 3_600_000                            # the tool list never changes while the server runs
-SERVER_INFO = {"name": "docdrift", "title": "docdrift", "version": VERSION,
-               "description": "Checks code against its design spec: TypeSafe's fast model screens every "
-                              "requirement, the agent investigates only what it flags."}
+SERVER_INFO = {"name": "jevmcp", "title": "jevmcp", "version": VERSION,
+               "description": "TypeSafe's fast model Jev as tools: it screens, the agent investigates only "
+                              "what it flags. Today: spec-drift checking."}
 CAPABILITIES = {"tools": {"listChanged": False}}
 
 INSTRUCTIONS = """\
-docdrift checks code against its design spec. A fast model (TypeSafe's Jev) screens every
-claim in the spec map and labels it; spend your effort only on what it flags.
+jevmcp puts TypeSafe's fast model Jev to work. It screens; you spend your effort only on what
+it flags. Today it holds one family of tools, spec drift:
+
+Spec drift - does the code still match its design spec? A fast model screens every claim in
+the spec map and labels it.
 - No spec map in the project yet: draft_map, then review every entry before checking.
 - check_drift after changing code (default: claims about the files git reports as changed);
   all=true for a full check. Labels: DRIFT = investigate each one; review = sorted by
@@ -102,7 +107,9 @@ claim in the spec map and labels it; spend your effort only on what it flags.
 - show_payload to see exactly what would be sent for some claims (free).
 Never pass or ask for the API key; the server holds it."""
 
-TOOLS = [
+# One list for every tool the server offers. A new family (CI failure triage, code audit) adds
+# its tools here and its methods to Server.call's table - people keep one server and one key.
+SPEC_DRIFT_TOOLS = [
     {
         "name": "check_drift",
         "title": "Check code against the spec",
@@ -257,6 +264,8 @@ TOOLS = [
 ]
 
 
+TOOLS = [*SPEC_DRIFT_TOOLS]
+
 KEY_FILE_NAME = "typesafe.env"
 
 
@@ -382,7 +391,7 @@ class Server:
         """Where the last check's full results go (they include the code sent): a private
         folder of this process (0700), a file per project (0600)."""
         if self._results_dir is None:
-            self._results_dir = Path(tempfile.mkdtemp(prefix="docdrift-mcp-"))
+            self._results_dir = Path(tempfile.mkdtemp(prefix="jevmcp-"))
         tag = hashlib.sha256(str(self.root).encode()).hexdigest()[:8]
         return self._results_dir / f"last-check-{self.root.name}-{tag}.json"
 
@@ -631,8 +640,10 @@ class Server:
     def call(self, name: str, args: dict) -> tuple:
         """(text, is_error) or (text, is_error, structured). An unknown tool is a protocol error;
         wrong arguments are tool errors, so the model can correct them."""
-        tool = {"check_drift": self.check_drift, "validate_map": self.validate_map,
-                "show_payload": self.show_payload, "draft_map": self.draft_map}.get(name)
+        tool = {  # spec drift; a new family adds its tools here and to SPEC_DRIFT_TOOLS' sibling list
+            "check_drift": self.check_drift, "validate_map": self.validate_map,
+            "show_payload": self.show_payload, "draft_map": self.draft_map,
+        }.get(name)
         if tool is None:
             raise ProtocolError(INVALID_PARAMS, f"Unknown tool: {name} (the tools are: "
                                                 + ", ".join(t["name"] for t in TOOLS) + ")")
@@ -973,8 +984,8 @@ def serve(server: Server, stdin=None) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(
-        prog="docdrift_mcp.py",
-        description="docdrift's spec-drift checks as an MCP server (stdio). Started by an MCP client such "
+        prog="jevmcp_server.py",
+        description="TypeSafe Jev tools as an MCP server (stdio); today the spec-drift checks. Started by an MCP client such "
                     "as Claude Code, not by hand - see the top of this file for how to register it.")
     ap.add_argument("--root", default=None,
                     help="The project folder. Default: $CLAUDE_PROJECT_DIR if set (Claude Code), else the "

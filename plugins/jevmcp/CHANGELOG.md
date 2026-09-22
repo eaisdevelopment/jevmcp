@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0 — 2026-09-22
+
+**One server for every Jev tool.** The MCP server is now called `jevmcp` (it was `docdrift`), and
+the tools of every future family — CI failure triage, code audit — will be offered by that same
+server rather than by a server each. One install, one server process, one API key.
+
+- The server script is `scripts/jevmcp_server.py`; its four tools are unchanged
+  (`check_drift`, `validate_map`, `show_payload`, `draft_map`), as is everything they do.
+- In Claude Code the tools are now `mcp__plugin_jevmcp_jevmcp__<tool>`; in `~/.codex/config.toml`
+  the table is `[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]`.
+
 ## 1.1.0 — 2026-09-22
 
 **The plugin is now `jevmcp`: install once, get every Jev tool.** It was published earlier today as

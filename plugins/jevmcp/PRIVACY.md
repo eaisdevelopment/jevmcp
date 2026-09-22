@@ -1,6 +1,6 @@
 # Privacy and data flow
 
-docdrift runs on your machine. It has no server of its own, sends no telemetry, and keeps no
+jevmcp runs on your machine. It has no server of its own, sends no telemetry, and keeps no
 logs of your conversations.
 
 ## What leaves your machine
@@ -46,7 +46,7 @@ your API key. TypeSafe's own terms and privacy policy govern what it does with r
 - Code that no requirement in the map points at.
 - Your API key to anyone but TypeSafe. It is never placed in the model's context, a tool's
   arguments or a tool's results. In Claude Code it is kept out of settings files (macOS Keychain,
-  or `~/.claude/.credentials.json` elsewhere) and passed only to the docdrift server process. In
+  or `~/.claude/.credentials.json` elsewhere) and passed only to the jevmcp server process. In
   Codex it comes from your environment (`TYPESAFE_API_KEY`), which Codex's own shell tool can also
   see. The MCP server never reads a key from the project it checks.
 

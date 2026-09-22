@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
   "mcpServers": {
-    "docdrift": {
+    "jevmcp": {
       "type": "stdio",
       "command": "uv",
       "args": [
         "run",
         "--quiet",
         "--script",
-        "${PLUGIN_ROOT}/scripts/docdrift_mcp.py"
+        "${PLUGIN_ROOT}/scripts/jevmcp_server.py"
       ]
     }
   }

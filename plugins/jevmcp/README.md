@@ -18,14 +18,14 @@ full check took 11 seconds and cost $0.006.
 
 - **A skill** (`spec-drift`) that teaches the agent the whole workflow: setting up a project,
   checking after every change, reading the results, the fast model's blind spots, and reporting.
-- **An MCP server** (`docdrift`) with four tools — `check_drift`, `validate_map`, `show_payload`,
-  `draft_map`. It keeps the parsed code in memory, so after an edit only the changed files are
-  read again (a 16,000-file repository: ~2 s instead of ~20 s), and it holds your API key so the
-  agent never sees it.
+- **One MCP server** (`jevmcp`) that today offers four tools — `check_drift`, `validate_map`,
+  `show_payload`, `draft_map`. It keeps the parsed code in memory, so after an edit only the
+  changed files are read again (a 16,000-file repository: ~2 s instead of ~20 s), and it holds
+  your API key so the agent never sees it.
 
-Planned for the same plugin: CI failure triage, and code audit. Each arrives as its own skill and
-its own MCP server inside jevmcp, so one tool can never break another — and it reaches you with an
-update, under the same API key.
+Planned for the same plugin and the same server: CI failure triage, and code audit. Each arrives
+as its own skill and its own tools on the `jevmcp` server — one install, one server, one API key,
+and they reach you as an update.
 
 ## Requirements
 
@@ -65,13 +65,13 @@ you before each check — that is your consent. The free tools (`validate_map`, 
 run without asking if you add to `~/.codex/config.toml`:
 
 ```toml
-[plugins."jevmcp@jevmcp".mcp_servers.docdrift]
+[plugins."jevmcp@jevmcp".mcp_servers.jevmcp]
 default_tools_approval_mode = "auto"
 ```
 
 Unattended runs (`codex exec`) need `--approve-for-me`, which routes the approval to Codex's
 automatic review. If the server's very first start times out while uv downloads the parsers, run
-`uv run --script ~/.codex/plugins/cache/jevmcp/jevmcp/<version>/scripts/docdrift_mcp.py --help`
+`uv run --script ~/.codex/plugins/cache/jevmcp/jevmcp/<version>/scripts/jevmcp_server.py --help`
 once (uv caches them), then start Codex again; Codex's `config.toml` cannot change a plugin
 server's startup timeout.
 
