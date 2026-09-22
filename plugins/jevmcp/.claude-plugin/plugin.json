@@ -1,25 +1,25 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "docdrift",
-  "displayName": "docdrift",
-  "version": "1.0.0",
-  "description": "Checks code against its design spec. A fast model (TypeSafe's Jev) screens every requirement in seconds; the agent investigates only what it flags. Java/Spring, JS/TS, Python, and any language by line range.",
+  "name": "jevmcp",
+  "displayName": "jevmcp",
+  "version": "1.1.0",
+  "description": "Jev tools for coding agents, in one plugin. Today: spec-drift checking - a fast model (TypeSafe's Jev) screens every requirement in your spec against the code, the agent investigates only what it flags. More tools are added to this same plugin, so you install once.",
   "author": {
     "name": "Essential AI Solutions Ltd.",
     "url": "https://essentialai.uk"
   },
-  "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/docdrift",
+  "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/jevmcp",
   "repository": "https://github.com/eaisdevelopment/jevmcp",
   "license": "Apache-2.0",
   "keywords": [
+    "jev",
+    "typesafe",
     "spec",
-    "specification",
     "requirements",
     "drift",
-    "documentation",
     "verification",
     "mcp",
-    "typesafe"
+    "sdlc"
   ],
   "userConfig": {
     "typesafe_api_key": {

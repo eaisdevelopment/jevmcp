@@ -1,6 +1,6 @@
 {
-  "name": "docdrift",
-  "version": "1.0.0",
+  "name": "jevmcp",
+  "version": "1.1.0",
   "mcpServers": {
     "docdrift": {
       "command": "uv",

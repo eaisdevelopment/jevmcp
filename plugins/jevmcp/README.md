@@ -1,18 +1,20 @@
-# docdrift — does your code still match its spec?
+# jevmcp — TypeSafe's fast model as routine tooling for your coding agent
 
-A plugin for **Claude Code** and **OpenAI Codex** (both tested), built on the portable
-[Agent Plugins](https://agent-plugins.org) format so other clients of that format can load it too.
-Your coding agent checks the code against the project's design spec or requirements document after
-it changes something, and before a release.
+**One plugin, installed once.** It gives **Claude Code** and **OpenAI Codex** (both tested) the
+tools that put TypeSafe's fast model **Jev** to work: the fast model screens everything in seconds
+and for fractions of a cent, and your agent spends its own effort only on what was flagged. Built
+on the portable [Agent Plugins](https://agent-plugins.org) format, so other clients of that format
+can load it too.
 
-A fast, cheap model (TypeSafe's **Jev**) screens every requirement against the code that
-implements it in seconds; the agent then spends its own effort only on what was flagged — deciding
-whether the code or the spec is wrong — instead of re-reading the whole spec.
+New tools are added to this same plugin — you do not install or configure anything again, you
+update it (`claude plugin update jevmcp@jevmcp`).
 
-On a real Java project (131 requirements): a check after editing two files took 3 seconds and cost
-$0.0013; a full check took 11 seconds and cost $0.006.
+## What is in it today
 
-## What you get
+**Spec-drift checking** — does the code still match the project's design spec or requirements
+document? Your agent checks after it changes something, and before a release. On a real Java
+project (131 requirements): a check after editing two files took 3 seconds and cost $0.0013; a
+full check took 11 seconds and cost $0.006.
 
 - **A skill** (`spec-drift`) that teaches the agent the whole workflow: setting up a project,
   checking after every change, reading the results, the fast model's blind spots, and reporting.
@@ -21,11 +23,16 @@ $0.0013; a full check took 11 seconds and cost $0.006.
   read again (a 16,000-file repository: ~2 s instead of ~20 s), and it holds your API key so the
   agent never sees it.
 
+Planned for the same plugin: CI failure triage, and code audit. Each arrives as its own skill and
+its own MCP server inside jevmcp, so one tool can never break another — and it reaches you with an
+update, under the same API key.
+
 ## Requirements
 
 - [`uv`](https://docs.astral.sh/uv/) on your PATH. The first run installs the Python dependencies
   (tree-sitter, PyYAML) into uv's cache; nothing is installed into your project.
-- A TypeSafe API key — get one at <https://console.typesafe.ai>.
+- A TypeSafe API key — get one at <https://console.typesafe.ai>. One key serves every tool in
+  the plugin.
 
 ## Install
 
@@ -33,19 +40,19 @@ $0.0013; a full check took 11 seconds and cost $0.006.
 
 ```
 /plugin marketplace add eaisdevelopment/jevmcp
-/plugin install docdrift@jevmcp
+/plugin install jevmcp@jevmcp
 ```
 
 Claude Code asks for your TypeSafe API key when the plugin is enabled and keeps it out of every
 settings file (in the macOS Keychain, or `~/.claude/.credentials.json` on other systems). To change
-it later: `/plugin configure docdrift`. Enter it at those prompts rather than with
+it later: `/plugin configure jevmcp`. Enter it at those prompts rather than with
 `claude plugin install --config`, which would leave it in your shell history.
 
 **OpenAI Codex**
 
 ```
 codex plugin marketplace add eaisdevelopment/jevmcp
-codex plugin add docdrift@jevmcp
+codex plugin add jevmcp@jevmcp
 ```
 
 Codex has no install-time prompt for keys: put `export TYPESAFE_API_KEY=...` in the shell profile
@@ -58,13 +65,13 @@ you before each check — that is your consent. The free tools (`validate_map`, 
 run without asking if you add to `~/.codex/config.toml`:
 
 ```toml
-[plugins."docdrift@jevmcp".mcp_servers.docdrift]
+[plugins."jevmcp@jevmcp".mcp_servers.docdrift]
 default_tools_approval_mode = "auto"
 ```
 
 Unattended runs (`codex exec`) need `--approve-for-me`, which routes the approval to Codex's
 automatic review. If the server's very first start times out while uv downloads the parsers, run
-`uv run --script ~/.codex/plugins/cache/jevmcp/docdrift/<version>/scripts/docdrift_mcp.py --help`
+`uv run --script ~/.codex/plugins/cache/jevmcp/jevmcp/<version>/scripts/docdrift_mcp.py --help`
 once (uv caches them), then start Codex again; Codex's `config.toml` cannot change a plugin
 server's startup timeout.
 
@@ -133,7 +140,7 @@ The same checks run without an agent, from the folder of the project you are che
 uv run --script <path to this plugin>/scripts/docdrift.py --help
 ```
 
-(In a clone of this repository the script is `plugins/docdrift/scripts/docdrift.py`.) It works in
+(In a clone of this repository the script is `plugins/jevmcp/scripts/docdrift.py`.) It works in
 CI too: `--dry-run --strict` validates the map for free (exit 2 if a spec sentence is neither
 mapped nor excluded); a real check exits 1 on drift and 3 when TypeSafe is unavailable. The command
 line reads the key from `--key-file`, else `TYPESAFE_API_KEY`, else a `TYPESAFE_API_KEY=` line in

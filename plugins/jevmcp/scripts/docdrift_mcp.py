@@ -73,7 +73,7 @@ sys.dont_write_bytecode = True                     # never leave a .pyc inside a
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docdrift as dd  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions

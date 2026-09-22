@@ -1,17 +1,17 @@
 {
   "name": "jevmcp",
-  "description": "Coding-agent plugins that use TypeSafe's fast model Jev for routine software-lifecycle checks: the fast model screens, the agent investigates only what it flags.",
+  "description": "Jev tools for coding agents: the fast model screens, your agent investigates only what it flags.",
   "owner": {
     "name": "Essential AI Solutions Ltd.",
     "url": "https://essentialai.uk"
   },
   "plugins": [
     {
-      "name": "docdrift",
-      "source": "./plugins/docdrift",
-      "description": "Check code against its design spec with TypeSafe's fast model; the agent investigates only what it flags.",
+      "name": "jevmcp",
+      "source": "./plugins/jevmcp",
+      "description": "Spec-drift checking today (check_drift, validate_map, show_payload, draft_map, skill spec-drift); more Jev tools arrive in the same plugin.",
       "category": "development",
-      "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/docdrift",
+      "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/jevmcp",
       "license": "Apache-2.0"
     }
   ]

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "jevmcp",
+  "version": "1.1.0",
+  "description": "Jev tools for coding agents, in one plugin. Today: spec-drift checking - a fast model (TypeSafe's Jev) screens every requirement in your spec against the code, the agent investigates only what it flags. More tools are added to this same plugin, so you install once.",
+  "author": {
+    "name": "Essential AI Solutions Ltd.",
+    "url": "https://essentialai.uk"
+  },
+  "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/jevmcp",
+  "repository": "https://github.com/eaisdevelopment/jevmcp",
+  "license": "Apache-2.0",
+  "keywords": [
+    "jev",
+    "typesafe",
+    "spec",
+    "requirements",
+    "drift",
+    "verification",
+    "mcp",
+    "sdlc"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "jevmcp",
+        "shortDescription": "Jev tools for coding agents",
+        "longDescription": "One plugin for the tools that put TypeSafe's fast model Jev to work in your coding agent. Today it checks whether your code still matches its design spec: Jev screens every requirement against the code that implements it, in seconds and for fractions of a cent, and the agent investigates only what was flagged and tells you which side to fix, the code or the spec. Set up once per project with a spec map that pairs each requirement with its code. Java/Spring, JavaScript/TypeScript, Python, and any other language by line range. Further tools (CI failure triage, code audit) arrive in this same plugin as updates. Needs uv and a TypeSafe API key (TYPESAFE_API_KEY in the environment that starts Codex).",
+        "developerName": "Essential AI Solutions Ltd.",
+        "category": "Developer Tools",
+        "defaultPrompt": [
+          "Set up spec-drift checking for this project",
+          "Check my changes against the spec",
+          "Run a full spec-drift check before the release"
+        ],
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/icon.svg",
+        "websiteURL": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/jevmcp",
+        "privacyPolicyURL": "https://github.com/eaisdevelopment/jevmcp/blob/main/plugins/jevmcp/PRIVACY.md"
+      }
+    }
+  }
+}

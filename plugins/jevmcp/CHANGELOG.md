@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0 — 2026-09-22
+
+**The plugin is now `jevmcp`: install once, get every Jev tool.** It was published earlier today as
+`docdrift`, a plugin per tool. That would have meant a new install for each tool, so the packaging
+changed before anyone depended on it: spec-drift checking is now the first tool inside `jevmcp`,
+and the next ones (CI failure triage, code audit) arrive in the same plugin as updates, each with
+its own skill and its own MCP server.
+
+- Install: `/plugin install jevmcp@jevmcp` (Claude Code), `codex plugin add jevmcp@jevmcp` (Codex).
+- Nothing else changed: the same skill `spec-drift`, the same MCP server `docdrift` with its four
+  tools, the same API key, the same behaviour as 1.0.0 below.
+- If you installed `docdrift@jevmcp` earlier today, remove it and install `jevmcp@jevmcp`.
+
 ## 1.0.0 — 2026-09-22
 
 First public release.

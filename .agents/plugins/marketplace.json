@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "docdrift",
+      "name": "jevmcp",
       "source": {
         "source": "local",
-        "path": "./plugins/docdrift"
+        "path": "./plugins/jevmcp"
       },
       "policy": {
         "installation": "AVAILABLE",
