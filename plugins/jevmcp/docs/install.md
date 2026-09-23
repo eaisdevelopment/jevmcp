@@ -30,7 +30,7 @@ These are not style preferences. Break them and the user's API key ends up in a 
 | **A supported client** | Claude Code and OpenAI Codex are both tested. Any other client of the [Agent Plugins](https://agent-plugins.org) 1.0.0 format can load `plugins/jevmcp`. | Section 2–4 |
 | **Python** | `>=3.10`, supplied by `uv` if the system Python is older. | — |
 
-There is **one** plugin, `jevmcp`, version 1.5.2, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`), **one** skill (`skills/spec-drift/SKILL.md`), and the command-line checker (`scripts/spec_drift.py`). Future tool families (CI failure triage, code audit) add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
+There is **one** plugin, `jevmcp`, version 1.5.3, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`), **one** skill (`skills/spec-drift/SKILL.md`), and the command-line checker (`scripts/spec_drift.py`). Future tool families (CI failure triage, code audit) add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
 
 ---
 

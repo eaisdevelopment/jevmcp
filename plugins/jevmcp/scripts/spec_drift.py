@@ -1874,6 +1874,12 @@ def unindexed_sources(root: Path, ignore: tuple[str, ...]) -> dict[str, int]:
 # ──────────────────────────────────────────────────── 2. pair claims with code
 
 SENT_SPLIT = re.compile(r"(?<=[.!?:])\s+(?=[A-Z`#\-*\d])|\n(?=[-*|#])")
+_TABLE_SEP = re.compile(r"^\|?[\s:|-]*-[\s:|-]*\|?$")        # the |---|---| row under a table header
+_LIST_ITEM = re.compile(r"(?:[-*+]|\d+\.)\s")                 # "- ", "* ", "1. "
+# A heading that is a statement ("What is never sent") rather than a label ("The tools"):
+# its list items are fragments that only mean something with it in front.
+_STEM_HEADING = re.compile(r"\b(?:is|are|was|were|do|does|can|will|never|always|must|should|"
+                           r"leaves?|goes|happens|stores?|sends?|sent|kept|stored|checked)\b", re.I)
 IDENT = re.compile(r"`([A-Za-z_][\w.\-]{2,})`|\b([A-Z][A-Z0-9_]{3,})\b")
 NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
 ROUTE_RE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+`?(/[^\s`,;)\]]*)")
@@ -1996,16 +2002,53 @@ _CODE_LINE = re.compile(r'[=<>]=|->|\bf"|\{[a-z_]+[.\[]|\breturn\b|\bdef\b|\bimp
 
 def spec_sentences(doc: Path, min_len: int = 5):
     """(line, sentence) for every sentence that could be a requirement: not a
-    heading, not inside a code fence, at least `min_len` words, not code."""
+    heading, not inside a code fence, at least `min_len` words, not code.
+
+    Two shapes need help before they read as requirements at all — found by running this
+    tool on its own PRIVACY.md, where they produced three "??" results out of four claims:
+
+    * A markdown **table row** is a requirement written with cell separators. Joining the
+      cells gives a sentence ("The spec sentence - as written in your spec map"); leaving
+      the `|` in gives a fragment no model can judge. The header row is labels, not a
+      requirement, so only rows after the `|---|` separator are taken.
+    * A **list item** under a heading like "What is never sent" carries its predicate in
+      that heading: "Code that no requirement in the map points at." means nothing alone.
+      When the heading is a statement rather than a label, it is put back on the front of
+      the item's first sentence - the later sentences of the item stand on their own.
+    """
     in_fence = False
+    heading = ""        # the nearest heading, for list items whose predicate lives in it
+    in_table = False    # past a table's |---| separator, so the rows are its body
     for lineno, raw in prose_blocks(doc):
-        if raw.lstrip().startswith("```"):
+        stripped = raw.strip()
+        if stripped.startswith("```"):
             in_fence = not in_fence
             continue
-        if in_fence or not raw.strip() or raw.lstrip().startswith("#"):
+        if in_fence:
             continue
+        if not stripped:
+            in_table = False
+            continue
+        if stripped.startswith("#"):
+            heading, in_table = stripped.lstrip("#").strip(), False
+            continue
+        # Only a TOP-LEVEL item takes the heading: a nested item's predicate comes from the
+        # item above it, so prefixing the heading there is noise.
+        item = bool(_LIST_ITEM.match(stripped)) and not raw[:1].isspace()
+        first = True
         for sent in SENT_SPLIT.split(raw):
+            sent = sent.strip()
+            if _TABLE_SEP.match(sent):
+                in_table = True
+                continue
+            if sent.startswith("|"):
+                if not in_table:            # the header row: column labels, not a requirement
+                    continue
+                cells = [c.strip() for c in sent.strip().strip("|").split("|") if c.strip()]
+                sent = " - ".join(cells)
             sent = " ".join(sent.strip(" -*|#>").split())
+            if first and item and _STEM_HEADING.search(heading):
+                sent, first = f"{heading}: {sent}", False
             if len(sent.split()) >= min_len and (ROUTE_RE.search(sent) or not _CODE_LINE.search(sent)):
                 yield lineno, sent
 
@@ -2459,9 +2502,15 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
                     line = hit
             elif not verbatim:
                 nosnap += 1
-            # An entry covers its own sentence. Only a paraphrase stands for the whole snapshot,
-            # or mapping one sentence would count every other sentence in its paragraph as covered.
-            covered.setdefault(str(spec_file), set()).add(norm if verbatim else snap or norm)
+            # An entry always covers its own sentence - including when that sentence is one the
+            # reader assembles (a table row joined from its cells, a list item carrying the heading
+            # that holds its predicate), which is not word-for-word anywhere in the file. Only a
+            # paraphrase ALSO stands for the whole snapshot; otherwise mapping one sentence would
+            # count every other sentence in its paragraph as covered.
+            here = covered.setdefault(str(spec_file), set())
+            here.add(norm)
+            if not verbatim and snap:
+                here.add(snap)
         if is_excluded:
             excluded.append(line)
             if not str(e.get("why") or "").strip():
@@ -2516,7 +2565,7 @@ def canonical(state: dict) -> dict:
     return {k: state[k] for k in sorted(state)}
 
 
-def build_questions(claim: Claim) -> dict:
+def build_questions() -> dict:
     """One plain question per judgement. Never phrased as steps.
 
     The extra questions cost ~57 tokens and ~5ms each, so we ask them even
@@ -2634,7 +2683,7 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
         if cancelled and cancelled():
             return {"_error": "cancelled before it was sent"}
         try:
-            return ask(states[k], build_questions(claims[k]), key, cancelled=cancelled)
+            return ask(states[k], build_questions(), key, cancelled=cancelled)
         except Stop as e:                      # re-raised in order below
             return {"_stop": e}
         finally:
@@ -2754,7 +2803,7 @@ def estimate_cost(claims: list[Claim]) -> float:
     charge per request, at $0.042 per million input tokens (output is free)."""
     total = 0
     for c in claims:
-        body = json.dumps({"state": canonical(build_state(c)), "model": MODEL, "questions": build_questions(c)})
+        body = json.dumps({"state": canonical(build_state(c)), "model": MODEL, "questions": build_questions()})
         total += 259 + len(body) / 3.4
     return total * 0.042 / 1e6
 
@@ -3168,7 +3217,7 @@ def run(args, inside_tool_folder: bool) -> int:
         print("\nEvery request is: model " + MODEL + ", a \"state\" (shown per claim below: the sentence as \"claim\",\n"
               "the paired \"code\", and \"computed_values\" when the tool did arithmetic for the model), and these\n"
               "3 fixed questions, identical for every claim:")
-        print(textwrap.indent(json.dumps(build_questions(claims[0]), indent=2, ensure_ascii=False), "    "))
+        print(textwrap.indent(json.dumps(build_questions(), indent=2, ensure_ascii=False), "    "))
     if args.dry_run:
         plan = []
         for i, c in enumerate(claims, 1):

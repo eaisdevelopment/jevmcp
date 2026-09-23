@@ -54,3 +54,19 @@ with only the few lines that enforce it.
 a test. Open an issue or a pull request describing the change rather than only editing the copy,
 so it can be applied at the source. Everything user-visible — tool names, exit codes, key
 sources — is asserted by tests, and the docs above are checked against the code.
+
+**This repository checks itself for spec drift.** `spec_map.json` at the root pairs each guarantee
+in `plugins/jevmcp/PRIVACY.md` with the code that enforces it — the redaction rules, the comment
+stripping, the key lookup, the temporary results file. Before you finish a change to
+`plugins/jevmcp/scripts/`, run the check on what you touched:
+
+```
+check_spec_drift   files: ["plugins/jevmcp/scripts/spec_drift.py"]    # seconds, fractions of a cent
+validate_spec_map                                                     # free, sends nothing
+```
+
+Nothing in the map is about your files? Then there is nothing to check — say so. A `DRIFT` here
+means a privacy guarantee and the code that keeps it have come apart, so investigate it before
+anything else. CI runs `validate_spec_map --strict` on every push: it needs no key and sends
+nothing, and it fails when a symbol the map points at is renamed or a new PRIVACY.md sentence has
+not been decided about.

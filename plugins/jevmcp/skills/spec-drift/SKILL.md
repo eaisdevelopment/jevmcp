@@ -93,6 +93,8 @@ never block the user's task on it.
    - Tables, byte layouts and config examples inside code blocks are skipped by the drafter: add
      those entries by hand, with the requirement written out in `text` and the block's lines
      pasted into `spec_text`.
+   - A sentence about what the code **never** does cannot be settled by pairing (blind spot 5):
+     exclude it with a `why` that says how you checked it, or reword the spec.
    - For a long spec, work section by section. If the user wants it done thoroughly, offer a
      second pass that tries to refute each exclusion; it finds real requirements hidden in
      rationale and backlog.
@@ -124,6 +126,12 @@ never block the user's task on it.
 2. **Library and platform behaviour** (what a JDK call or a framework default actually does).
 3. **Arithmetic on variables** (`avg / 2`). The tool works out literal expressions only.
 4. **Anything spanning several files**: module dependencies, who calls what, "only X does Y".
+5. **A claim about what the code does NOT do** - "never", "only", "no telemetry", "to nobody but".
+   No excerpt can settle it: code that does not do X proves nothing, and the one place that does
+   X reads as a refutation. Pairing "sends no telemetry" with the single function that makes a
+   request returned a confident DRIFT against correct code. Exclude such a sentence with a `why`
+   recording how you verified it by hand, or reword the spec into a positive claim about the one
+   place involved ("the only request the tool makes is the check itself").
 
 A low P(drifted) on one of these is not a pass.
 

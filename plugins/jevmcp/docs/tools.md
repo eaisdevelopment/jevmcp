@@ -90,7 +90,7 @@ it as a second text block of JSON for clients that do not read structured output
 
 | Field | Type | Meaning |
 |---|---|---|
-| `summary` | string | The first line of the report plus a reminder of what each label means. |
+| `summary` | string | The first line of the report, plus a reminder of what each label means once a check has actually run (when there was nothing to check, there are no labels to remind you of). |
 | `project`, `map` | string | The project folder used, and the map, relative to it. |
 | `claims_in_map` | integer | Entries in the map that resolved. |
 | `claims_selected` | integer | Of those, how many this call chose to check. |

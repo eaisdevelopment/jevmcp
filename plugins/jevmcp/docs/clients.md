@@ -56,7 +56,7 @@ at the repository root, `plugins/jevmcp/.claude-plugin/plugin.json`, and
 why both sets of files exist.
 
 Installed copies live at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.claude/plugins/cache/jev/jevmcp/1.5.2/`. Older versions stay beside the new one.
+`~/.claude/plugins/cache/jev/jevmcp/1.5.3/`. Older versions stay beside the new one.
 
 Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 **"Restart to apply changes"** — the MCP server process is only replaced on restart.
@@ -175,7 +175,7 @@ Codex merges an overlay entry only when it is a complete server definition; the 
 `mcp.json` still decides the command (checked with `codex mcp list --json`).
 
 Installed copies live at `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.codex/plugins/cache/jev/jevmcp/1.5.2/`. `~/.codex/config.toml` gains
+`~/.codex/plugins/cache/jev/jevmcp/1.5.3/`. `~/.codex/config.toml` gains
 `[plugins."jevmcp@jev"] enabled = true` (and a `[marketplaces.jev]` entry).
 
 Update with `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`.
@@ -329,7 +329,7 @@ The project's own `.env` is never read by the MCP server. The command-line check
 
 | | Version |
 |---|---|
-| jevmcp plugin | 1.5.2 |
+| jevmcp plugin | 1.5.3 |
 | Claude Code | 2.1.278 (the `claude` CLI on the machine used for the final check reports 2.1.280; nothing here is known to have changed) |
 | OpenAI Codex | `codex-cli 0.155.1` |
 | uv | 0.11.16 |

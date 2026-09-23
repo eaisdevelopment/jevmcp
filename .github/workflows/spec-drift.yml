@@ -1,0 +1,45 @@
+# Checks that this repository's own spec map still fits its docs and its code.
+#
+# This job is free and offline: --dry-run sends nothing to TypeSafe and needs no API key.
+# It fails when a symbol the map points at has been renamed or moved, when a sentence in
+# PRIVACY.md or docs/tools.md is neither mapped nor excluded with a reason, or when an
+# entry's spec_text no longer matches the document it was reviewed against.
+#
+# It deliberately does NOT run a real check: that would need a secret and would send code.
+# Run `check_spec_drift` locally before you push - see AGENTS.md.
+name: spec drift
+
+on:
+  push:
+    paths: ["plugins/jevmcp/**", "spec_map.json", ".github/workflows/spec-drift.yml"]
+  pull_request:
+    paths: ["plugins/jevmcp/**", "spec_map.json", ".github/workflows/spec-drift.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-spec-map:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Validate the spec map (free, sends nothing)
+        run: |
+          uv run --quiet --script plugins/jevmcp/scripts/spec_drift.py \
+            --map spec_map.json --src . --dry-run --strict --out plan.json
+
+      - name: Upload the plan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-drift-plan
+          path: plan.json
+          if-no-files-found: ignore

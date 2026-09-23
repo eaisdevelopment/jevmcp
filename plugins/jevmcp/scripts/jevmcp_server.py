@@ -77,7 +77,7 @@ sys.dont_write_bytecode = True                     # never leave a .pyc inside a
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import spec_drift as dd  # noqa: E402   # the spec-drift checker: questions, thresholds, redaction
 
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -666,7 +666,7 @@ class Server:
         if not claims:
             return "no claim matches (a line number is the spec line; files are paths relative to the project).", False
         parts = [f"{len(claims)} claim(s). Every request is model {dd.MODEL} with these 3 fixed questions:",
-                 json.dumps(dd.build_questions(claims[0]), indent=1, ensure_ascii=False)]
+                 json.dumps(dd.build_questions(), indent=1, ensure_ascii=False)]
         for c in claims:
             parts += ["", f"--- {c.doc}:{c.line}  state sent:",
                       json.dumps(dd.canonical(dd.build_state(c)), indent=1, ensure_ascii=False)]

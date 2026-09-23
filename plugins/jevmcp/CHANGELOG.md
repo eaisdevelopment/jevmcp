@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.5.3 — 2026-09-23
+
+**jevmcp now checks itself.** `spec_map.json` at the repository root pairs every guarantee in
+`PRIVACY.md` and every claim in `docs/tools.md` with the code that keeps it — 288 sentences, 180
+checked, 108 excluded each with a written reason. A GitHub Actions job validates it on every push:
+free, offline, no API key, and it fails when a symbol the map points at is renamed or a new
+documentation sentence goes undecided. `AGENTS.md` tells an agent to run the check before
+finishing a change to `scripts/`.
+
+Running it on ourselves found four things, all fixed here:
+
+- **Markdown table rows were drafted as fragments** — "The spec sentence | as written in your spec
+  map", cell separator and all — which no model can judge. The drafter now joins a row's cells into
+  a sentence and skips the header row.
+- **List items lost the heading that carried their predicate.** "Code that no requirement in the
+  map points at." means nothing on its own. When a heading is a statement rather than a label, it
+  is put back on the front of the item's first sentence. Nested items are left alone: their
+  predicate comes from the item above, not the heading.
+- **`build_questions(claim)` never used its argument.** The documentation promises "three fixed
+  questions, identical for every requirement"; a function that takes a claim said otherwise to any
+  reader, and the model abstained on that very sentence. It now takes nothing.
+- **A sentence the reader assembles counted as unmapped forever.** A joined table row and a
+  heading-carrying item appear nowhere word-for-word, so `--strict` reported them missing even when
+  they were in the map. An entry now always covers its own sentence.
+
+One real drift in our own docs, found by the tool: `check_spec_drift` returns early when there is
+nothing to check, with `summary` set before the label reminder is appended — so `docs/tools.md`
+overstated what that field always contains. Corrected.
+
+The skill gains a fifth blind spot: **a claim about what the code does *not* do** ("never", "only",
+"no telemetry") cannot be settled by pairing. Code that does not do X proves nothing, and the one
+place that does X reads as a refutation — which is exactly how "sends no telemetry", paired with
+the single function that makes a request, produced a confident DRIFT against correct code.
+
 ## 1.5.2 — 2026-09-23
 
 Documentation only; the tools, the server and the skill are unchanged.
