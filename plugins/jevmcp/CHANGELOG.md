@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.5.2 — 2026-09-23
+
+Documentation only; the tools, the server and the skill are unchanged.
+
+Four releases after the marketplace was renamed to `jev`, two pages still described the old
+layout: `install.md` said "version 1.3.1" and "the marketplace is also called `jevmcp`",
+`clients.md` contradicted itself in one sentence ("the marketplace is named `jevmcp` ... so the
+install id is `jevmcp@jev`"), both gave installed-copy example paths under an old version, and the
+uninstall table told people to run `marketplace remove jevmcp` instead of `remove jev`. Anyone
+following those lines would have recreated the duplicated-skill-path bug that 1.5.0 fixed.
+
+Seven spots corrected, and two tests added so this cannot recur: one checks that every version a
+page claims as current matches the server's `VERSION`, the other that no page calls the
+marketplace `jevmcp` — except where it is explaining how to migrate away from the old one.
+
+Also new, at the repository root: `claude_how_to_jevmcp.md` and `codex_how_to_jevmcp.md` — for each
+client, the complete instruction it works from (the server's `instructions`, the skill's trigger,
+the skill body in full, and all four tool schemas), followed by what that client does differently:
+tool names, whether `project` is required, when approval is asked, where the key comes from, and
+whether the shell has network. The instruction body is the same file in both, so the pages exist to
+make the envelope explicit rather than the text.
+
 ## 1.5.1 — 2026-09-22
 
 Found by running a full check on a real 131-requirement Java project: with about a hundred
