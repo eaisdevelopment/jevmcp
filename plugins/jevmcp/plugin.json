@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "jevmcp",
-  "version": "1.6.0",
-  "description": "Jev tools for coding agents, in one plugin. Today: spec-drift checking - a fast model (TypeSafe's Jev) screens every requirement in your spec against the code, the agent investigates only what it flags. More tools are added to this same plugin, so you install once.",
+  "version": "1.7.0",
+  "description": "Jev tools for coding agents, in one plugin: spec-drift checking, CI failure triage and code audit. A fast model (TypeSafe's Jev) screens - each requirement against its code, each failure of a CI run against the change under test, each of your project's own rules against the code it covers - and the agent investigates only what it flags. More tools are added to this same plugin, so you install once.",
   "author": {
     "name": "Essential AI Solutions Ltd.",
     "url": "https://essentialai.uk"
@@ -16,6 +16,10 @@
     "spec",
     "requirements",
     "drift",
+    "ci",
+    "triage",
+    "code-audit",
+    "conventions",
     "verification",
     "mcp",
     "sdlc"
@@ -25,13 +29,13 @@
       "interface": {
         "displayName": "jevmcp",
         "shortDescription": "Jev tools for coding agents",
-        "longDescription": "One plugin for the tools that put TypeSafe's fast model Jev to work in your coding agent. Today it checks whether your code still matches its design spec: Jev screens every requirement against the code that implements it, in seconds and for fractions of a cent, and the agent investigates only what was flagged and tells you which side to fix, the code or the spec. Set up once per project with a spec map that pairs each requirement with its code. Java/Spring, JavaScript/TypeScript, Python, and any other language by line range. Further tools (CI failure triage, code audit) arrive in this same plugin as updates. Needs uv and a TypeSafe API key (TYPESAFE_API_KEY in the environment that starts Codex).",
+        "longDescription": "One plugin for the tools that put TypeSafe's fast model Jev to work in your coding agent: Jev screens in seconds and for fractions of a cent, and the agent investigates only what was flagged. Spec drift: does your code still match its design spec? Every requirement is checked against the code that implements it, and the agent tells you which side to fix, the code or the spec; set up once per project with a spec map. CI failure triage: what actually broke in a failed CI run? Each distinct failure is read with the change under test, and the agent says whether your change caused it and what to do next; a GitHub Actions run of your project is read with your own gh login, or a log from any CI. Code audit: does the code break your project's own written rules? Each rule you approve from CLAUDE.md, AGENTS.md, CONTRIBUTING or a style guide is checked against each unit of code it covers; set up once per project with a rule map. Every tool that sends data has a free preview, and the agent asks for your consent before the first send of each kind. Needs uv and a TypeSafe API key (TYPESAFE_API_KEY in the environment that starts Codex).",
         "developerName": "Essential AI Solutions Ltd.",
         "category": "Developer Tools",
         "defaultPrompt": [
-          "Set up spec-drift checking for this project",
           "Check my changes against the spec",
-          "Run a full spec-drift check before the release"
+          "Why did CI fail on this pull request?",
+          "Audit my branch against our rules before the pull request"
         ],
         "composerIcon": "./assets/icon.svg",
         "logo": "./assets/icon.svg",

@@ -15,9 +15,9 @@ These are not style preferences. Break them and the user's API key ends up in a 
 | Ask the user for the API key in chat | Everything in the conversation is stored and re-read. The key would be in your context, in the transcript, and possibly in a summary. | Tell the user which **one command** to run in their own terminal, or which client prompt to use. Then wait. |
 | Run `jevmcp_server.py --set-key` yourself | It asks for the key without echoing it. It refuses to run unless both stdin and stdout are a terminal, so your attempt will fail with exit code 2 anyway. | Give the user the command. They run it. |
 | Put the key in a command, an environment assignment, or a file you write | Shell history, process listings and your own tool log all capture it. There is no flag that accepts the key as an argument, on purpose. | `--set-key` (interactive), or the client's own credential prompt. |
-| Run `check_spec_drift` "just to test the install" | It sends code to TypeSafe and spends credits. | Use the free tools: `validate_spec_map`, `preview_spec_check`, or `--show-key-source`. |
+| Run `check_spec_drift`, `triage_ci_failure` or `check_code_rules` "just to test the install" | Each sends code or CI logs to TypeSafe and spends credits. | Use the free tools: `validate_spec_map`, `preview_spec_check`, or `--show-key-source`. |
 
-`validate_spec_map`, `preview_spec_check`, `draft_spec_map`, `--help`, `--dry-run` and `--show-key-source` are free and send nothing. Only `check_spec_drift` (and a command-line run without `--dry-run`) sends anything anywhere.
+The validate, preview and draft tools, `--help`, `--dry-run` and `--show-key-source` are free and send nothing to TypeSafe. Only `check_spec_drift`, `triage_ci_failure` and `check_code_rules` (and the command-line scripts without `--dry-run`) send anything to TypeSafe. Reading a GitHub Actions run for CI triage (`preview_ci_triage` or `triage_ci_failure` with `run`, or `ci_triage.py --run`) sends GET requests to GitHub with the user's own `gh` login; that costs nothing.
 
 ---
 
@@ -26,11 +26,12 @@ These are not style preferences. Break them and the user's API key ends up in a 
 | Requirement | Detail | Check it |
 |---|---|---|
 | **`uv`** on `PATH` | The MCP server and the command-line checker are single PEP 723 scripts: their dependencies (tree-sitter, tree-sitter-java, tree-sitter-javascript, tree-sitter-typescript, PyYAML) are declared inline and installed by `uv` into **uv's own cache** on first start. Nothing is installed into the user's project or into a virtualenv you have to manage. | `uv --version` |
-| **A TypeSafe API key** | One key serves every tool in the plugin. Get one at <https://console.typesafe.ai>. Needed only by `check_spec_drift`; the other three tools work without it. | Section 5 |
+| **A TypeSafe API key** | One key serves every tool in the plugin. Get one at <https://console.typesafe.ai>. Needed only by the three tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`); the other seven work without it. | Section 5 |
+| **The GitHub CLI, `gh`** (optional) | Only to triage a GitHub Actions run by its URL: the server reads the run with the user's own `gh` login. A CI log saved as a file needs no `gh`. | `gh auth status` |
 | **A supported client** | Claude Code and OpenAI Codex are both tested. Any other client of the [Agent Plugins](https://agent-plugins.org) 1.0.0 format can load `plugins/jevmcp`. | Section 2–4 |
 | **Python** | `>=3.10`, supplied by `uv` if the system Python is older. | — |
 
-There is **one** plugin, `jevmcp`, version 1.6.0, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`), **one** skill (`skills/spec-drift/SKILL.md`), and the command-line checker (`scripts/spec_drift.py`). Future tool families (CI failure triage, code audit) add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
+There is **one** plugin, `jevmcp`, version 1.7.0, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
 
 ---
 
@@ -88,7 +89,7 @@ Approval behaviour, `codex exec`, and why the command line must not be used as a
 |---|---|
 | `plugin.json` | The portable manifest (name, version, author, licence; the Codex store listing sits under `extensions."com.openai"`). |
 | `mcp.json` | The portable server declaration: `stdio`, `command: "uv"`, args ending in `${PLUGIN_ROOT}/scripts/jevmcp_server.py`. No `env`, no `cwd` — the standard forbids secrets in a server's environment declaration, and `cwd` defaults to the plugin root. |
-| `skills/spec-drift/SKILL.md` | The skill, using only portable frontmatter fields. |
+| `skills/*/SKILL.md` | The three skills (`spec-drift`, `ci-triage`, `code-audit`), using only portable frontmatter fields. |
 
 Because `mcp.json` carries no secret, such a client must give the server the key by one of the routes in section 5 — `TYPESAFE_API_KEY` in the environment it passes on, `typesafe.env` in the plugin's data folder (`PLUGIN_DATA`), or `~/.config/jevmcp/typesafe.env`.
 
@@ -111,7 +112,7 @@ The MCP server looks in exactly this order and stops at the first one it finds:
 | 3 | `typesafe.env` in the plugin's data folder | `$PLUGIN_DATA`, or `$CLAUDE_PLUGIN_DATA`. Only clients that provide such a folder. It survives plugin updates. Codex's is an unguessable hash, which is why it is not the route to recommend to a person. |
 | 4 | `~/.config/jevmcp/typesafe.env` | What `--set-key` writes (`$XDG_CONFIG_HOME` is respected). Mode 0600, directory 0700. Readable by every client, survives plugin updates. **This is the one path that works everywhere.** |
 
-The MCP server **never reads the checked project's `.env`** — a cloned repository cannot supply a key. (The command-line checker *does* read a `TYPESAFE_API_KEY=` line from the `.env` of the folder it is run in; that is a deliberate difference, and it is the user's own folder.)
+The MCP server **never reads the checked project's `.env`** — a cloned repository cannot supply a key. (The spec-drift command line, `spec_drift.py`, *does* read a `TYPESAFE_API_KEY=` line from the `.env` of the folder it is run in; that is a deliberate difference, and it is the user's own folder. `ci_triage.py` and `code_audit.py` never read a `.env`.)
 
 ### Storing the key: `--set-key`
 
@@ -188,16 +189,22 @@ plugin:jevmcp:jevmcp: uv run --quiet --script /…/plugins/jevmcp/scripts/jevmcp
 
 **b. The tools are there.**
 
-Four tools, no more and no fewer: `check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map`. In Claude Code they are addressed as:
+Ten tools, no more and no fewer: `check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map` (spec drift); `triage_ci_failure`, `preview_ci_triage` (CI failure triage); `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map` (code audit). In Claude Code they are addressed as:
 
 ```
 mcp__plugin_jevmcp_jevmcp__check_spec_drift
 mcp__plugin_jevmcp_jevmcp__validate_spec_map
 mcp__plugin_jevmcp_jevmcp__preview_spec_check
 mcp__plugin_jevmcp_jevmcp__draft_spec_map
+mcp__plugin_jevmcp_jevmcp__triage_ci_failure
+mcp__plugin_jevmcp_jevmcp__preview_ci_triage
+mcp__plugin_jevmcp_jevmcp__check_code_rules
+mcp__plugin_jevmcp_jevmcp__preview_code_audit
+mcp__plugin_jevmcp_jevmcp__validate_rule_map
+mcp__plugin_jevmcp_jevmcp__draft_rule_map
 ```
 
-**c. The skill loaded.** In Claude Code it is `jevmcp:spec-drift`. You do not need to mention the plugin for it to trigger; its frontmatter description does that.
+**c. The skills loaded.** In Claude Code they are `jevmcp:spec-drift`, `jevmcp:ci-triage` and `jevmcp:code-audit`. You do not need to mention the plugin for them to trigger; their frontmatter descriptions do that.
 
 **d. One free `validate_spec_map` call.** This is the real proof, and it costs nothing:
 
@@ -214,7 +221,7 @@ Two answers both count as a **pass**:
 | An error: `this project (<path>) has no spec map yet (no *spec_map.json). Set one up: draft_spec_map with the spec file(s), then review every entry.` | The server started, `uv` resolved its dependencies, and it is looking at the right project. The project simply has not been set up yet — go to [how-to.md](how-to.md). |
 | A result with `ready`, `entries_to_check`, `excluded`, `problems`, `notes` | The project already has a spec map and the server read it. |
 
-Because `validate_spec_map` is read-only and sends nothing, a pass proves the install, the dependencies and the project wiring — but it says **nothing about the key**. Only `check_spec_drift` needs the key. Prove the key with `--show-key-source` (section 5), not by spending credits.
+Because `validate_spec_map` is read-only and sends nothing, a pass proves the install, the dependencies and the project wiring — but it says **nothing about the key**. Only the three tools that send need the key. Prove the key with `--show-key-source` (section 5), not by spending credits.
 
 **e. The command line, optionally.** From the project root:
 
@@ -246,7 +253,7 @@ The stored key is **not** touched by an update: `~/.config/jevmcp/typesafe.env` 
 
 Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp/typesafe.env` themselves. Claude Code's copy lives in its credential store; remove it with `/plugin manage` before uninstalling, or leave it.
 
-`spec_map.json` belongs to the project and is committed with the code. Uninstalling the plugin does not touch it, and it should not be deleted — it is the reviewed work, not a cache.
+`spec_map.json` and `rule_map.json` belong to the project and are committed with the code. Uninstalling the plugin does not touch them, and they should not be deleted — they are the reviewed work, not a cache.
 
 ---
 
@@ -254,24 +261,26 @@ Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| A check fails with *No TypeSafe API key is set for this server, so nothing was sent.* | The server found no key in any of the four sources. | The error already names the fix. Claude Code: `/plugin manage` → jevmcp → *TypeSafe API key*. Any other client: the user runs `--set-key` in their own terminal (section 5). **Do not ask for the key in chat and do not run `--set-key` yourself.** `validate_spec_map` and `preview_spec_check` still work meanwhile. |
+| A tool that sends fails with *No TypeSafe API key is set for this server, so nothing was sent.* | The server found no key in any of the four sources. | The error already names the fix. Claude Code: `/plugin manage` → jevmcp → *TypeSafe API key*. Any other client: the user runs `--set-key` in their own terminal (section 5). **Do not ask for the key in chat and do not run `--set-key` yourself.** The validate, preview and draft tools still work meanwhile. |
 | Server fails to start; the log mentions `uv` | `uv` is not on the `PATH` the client gives the server. Clients pass a minimal environment (Codex: `HOME`, `LANG`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, plus declared `env_vars`). | Install `uv` (<https://docs.astral.sh/uv/>) and make sure it is on the `PATH` of the shell that launches the client — not only inside an interactive shell profile that a GUI launch never reads. |
 | The very first start times out | `uv` is downloading and building the tree-sitter wheels. This happens once; afterwards uv's cold start is short. Codex allows 120 s and its `config.toml` cannot change a plugin server's start-up timeout. | Run once, outside the agent: `uv run --script ~/.codex/plugins/cache/jev/jevmcp/<version>/scripts/jevmcp_server.py --help`. That fills uv's cache. Then start the client again. |
 | *Restart to apply changes* | Claude Code re-reads plugins and starts MCP servers at session start. Installing, updating, enabling or changing the key mid-session does not reach a running server. | Restart Claude Code. If the key was the thing that changed, this is required — the server reads it once, at start-up. |
 | `claude mcp list` shows anything but `✔ Connected`, or `/mcp` shows the server as failed | The server exited at start-up. Everything it prints that is not protocol goes to stderr, and Claude Code keeps it. | Read `~/.cache/claude-cli-nodejs/<encoded-project-path>/mcp-logs-plugin-jevmcp-jevmcp/`. Then reproduce by hand: `uv run --quiet --script <installed path>/scripts/jevmcp_server.py --help`. A traceback there is the real error. |
 | The tools work but a tool call says *this client did not tell the server which project it is working in* | Codex starts the server in the plugin's own folder, so the server has no default project. | Pass `project` with the **absolute** path of the project folder in every tool call. Relative paths, the home folder and the filesystem root are all refused. |
 | The first read of `SKILL.md` in Codex fails with a duplicated path segment, then succeeds on retry | The plugin was installed from the pre-1.5.0 marketplace, when the marketplace and the plugin were both called `jevmcp`. | Reinstall from the current marketplace: `codex plugin remove jevmcp@jev` (or `jevmcp@jevmcp`), `codex plugin marketplace remove jevmcp`, then add `eaisdevelopment/jevmcp` again and `codex plugin add jevmcp@jev`. |
-| Codex refuses `check_spec_drift` | Intended. It is declared a **write** action (`readOnlyHint: false`, `openWorldHint: true`) because code leaves the machine, so Codex asks every time — that approval *is* the user's consent. Under `codex exec` the approval policy is `never`, which blocks every MCP tool (*MCP tool call requires approval, but approval policy is never*), and `--approve-for-me` does not help: Codex's automatic reviewer refuses a tool that *may transmit project spec and code to the untrusted TypeSafe destination*. | Interactively: approve it. Unattended: see [clients.md](clients.md). The free tools can be allowed to run unattended with this in `~/.codex/config.toml`:<br>`[plugins."jevmcp@jev".mcp_servers.jevmcp]`<br>`default_tools_approval_mode = "auto"` |
+| Codex asks before, or refuses, `check_spec_drift`, `triage_ci_failure` or `check_code_rules` | Intended. Each is declared a **write** action (`readOnlyHint: false`, `openWorldHint: true`) because data leaves the machine, so Codex asks every time — that approval *is* the user's consent for that call. Under `codex exec` the approval policy is `never`, which blocks every MCP tool (*MCP tool call requires approval, but approval policy is never*), and `--approve-for-me` does not help: Codex's automatic reviewer refuses a tool that *may transmit project spec and code to the untrusted TypeSafe destination*. | Interactively: approve it. Unattended: see [clients.md](clients.md). The free tools can be allowed to run unattended with this in `~/.codex/config.toml`:<br>`[plugins."jevmcp@jev".mcp_servers.jevmcp]`<br>`default_tools_approval_mode = "auto"` |
 | A check inside a Codex session reports no drift suspiciously fast, or you are tempted to fall back to `spec_drift.py` there | **Codex's sandbox has no network.** A command-line run inside it silently reaches nothing. The MCP server runs *outside* the sandbox, which is why the tools work. | Never fall back to the command line inside a Codex session, and never report "no drift" from a run that could not reach TypeSafe (exit code **3**) — say the check did not run. |
 | `--set-key` exits 2 with *asks for the key without echoing it, so run it in your own terminal* | You (an agent, or a pipe) tried to run it where stdin or stdout is not a terminal. | Correct behaviour. Hand the command to the user. |
 | `--key-file …: give an absolute path` | The server was registered with a relative `--key-file`. A relative path would be read from inside the project being checked. | Use an absolute path, outside the project. |
+| CI triage says *`gh` is not installed* or *`gh` is not logged in to GitHub* | The server reads a GitHub run with the user's own `gh`, run with the environment the client gives the server. Codex passes a minimal environment, so a login that `gh` finds only through a token variable (`GH_TOKEN`, `GITHUB_TOKEN`) does not reach it. | The user installs `gh` and runs `gh auth login` in their own terminal. Or save the failed job's log as a file in the project and triage it with `logs`, which needs no `gh`. |
+| CI triage says *… is not a GitHub remote of this project* | Intended. The server reads only runs of a repository the project has as a GitHub remote. | Triage runs of this project only. |
 
-Exit codes for the command-line checker, for CI: **0** no drift · **1** at least one DRIFT · **2** setup or map problem · **3** TypeSafe unavailable — do not block on it, and never report "no drift" from such a run.
+Exit codes for the command-line scripts, for CI: **0** nothing found (no drift, no failure put on the change, no BREAKS) · **1** at least one DRIFT, CHANGE or BREAKS · **2** setup or map problem · **3** TypeSafe unavailable — do not block on it, and never report a pass from such a run.
 
 ---
 
 ## What happens next
 
-The plugin is installed; the project is not yet set up. A project is set up once, with a `spec_map.json` that pairs each sentence of the spec with the code that implements it. `draft_spec_map` writes it; the user never writes it by hand; every entry then needs review. That is [how-to.md](how-to.md).
+The plugin is installed; the project is not yet set up. For spec drift, a project is set up once, with a `spec_map.json` that pairs each sentence of the spec with the code that implements it; for code audit, with a `rule_map.json` that lists the project's own rules. The draft tools write them; the user never writes them by hand; every entry then needs review. CI triage needs no set-up. That is [how-to.md](how-to.md).
 
 What each tool sends and what its labels mean: [tools.md](tools.md). Exactly what leaves the machine and what never does: [../PRIVACY.md](../PRIVACY.md).

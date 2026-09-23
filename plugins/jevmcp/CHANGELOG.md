@@ -1,5 +1,158 @@
 # Changelog
 
+## 1.7.0 — 2026-09-23
+
+**Two new tool families, in the same plugin and on the same server: CI failure triage and code
+audit.** One install, one key, one skill per family. The server now holds ten tools.
+
+**CI failure triage** — what actually broke in a failed CI run? `preview_ci_triage` (free) reads a
+GitHub Actions run, job or pull-request URL of the project's own repository with the user's own
+`gh` login, or log files and JUnit reports from any CI, and shows exactly what would be sent.
+`triage_ci_failure` sends it: Jev reads each distinct failure — facts computed in code, the
+candidate error lines, the end of the failed step's output and an excerpt of the change under
+test — and says whether the change caused it. Labels: **CHANGE** (the change broke it; when the
+lean is "update the test", the agent must confirm with the user before editing any assertion),
+**review** (sorted by P(caused by the change), with a lean: environment, dependency, flaky, change)
+and **??** (not a pass). "Not the change" is never decided automatically: a real regression
+blamed on the environment gets retried away and shipped, and no corpus is large enough yet to show
+that mistake is rare enough. Command line: `scripts/ci_triage.py`, exit codes 0/1/2/3.
+
+**Code audit** — does the code break the project's own written rules? `draft_rule_map` collects
+the rule sentences from the project's CLAUDE.md, AGENTS.md, CONTRIBUTING and style guides into
+`rule_map.json`; the agent reviews every entry with the user, rewriting each into one positive
+condition with the files it covers. `check_code_rules` then asks about one reviewed rule and one
+unit of code at a time — never one broad "does this follow our conventions?" question. Labels:
+**BREAKS**, **review** (sorted by P(breaks); read from 0.3 up), **??**, **ok** and **n/a** (the
+rule is not about that unit, and P(breaks) is below 0.3). By default only the units the change
+touches are audited. `validate_rule_map` and `preview_code_audit` are free. Command line: `scripts/code_audit.py`, exit codes 0/1/2/3.
+
+**Measured on real projects before release, not on examples.** Everything below comes from popular
+open-source repositories. We split them by repository: tuning used only the development set, and each
+held-out set was scored once. The exception: the first CI held-out run was invalid, because the parser
+did not know the job-log headers those logs used and read none of them. We fixed the parser only
+and ran it again. Intervals are 95%, from resampling whole repositories.
+
+*CI triage.* We collected 73 real failed GitHub Actions runs from 13 repositories: Flask, Werkzeug,
+Click, cli/cli, Gin, Pydantic, FastAPI, Express, Fastify, Vite, Tokio, Commons Lang and Django. They
+cover Python, Go, JavaScript/TypeScript, Rust and Java. Each run's answer key comes from what happened
+next: the fix commit, or a re-run of the same commit that passed. A second reviewer then derived each
+key again, blind. Of the 73 keys, 71 were confirmed and 2 disputed; the disputed ones are left out.
+
+Results on the 52 held-out runs (8 repositories, 33 caused by the change):
+- **CHANGE was right 6 times out of 6, with 0 false alarms.** CHANGE fires on 6 of the 33
+  change-caused runs; the other 27 go to review, where the agent decides.
+- **The lean pointed the right way on 43 of 47 runs** (86–98%). Always blaming the change would be
+  right on 33 of 52.
+- **P(caused by the change) ranks change-caused failures above the rest with AUC 0.98** (0.94–1.0).
+- **The root error line was right on 26 of 41 runs.** Taking the first error-looking line was right
+  on 21 of 44.
+- **Cost: about $0.0002 per failure.**
+
+A second gate that also fires when the error names a file the change edits was set down in advance.
+It fired 17 times with 1 false alarm. Its precision's lower bound was 0.73, below the 0.80 we set
+beforehand, so it was rejected and the gate above ships.
+
+Robustness, on the development runs:
+- **Asking the same question 20 times with the cache off gave the same verdict every time** on 15 of
+  15 failures.
+- **Fabricated benign text in the log never produced a false CHANGE.** We tested three kinds: a
+  "passed on retry" line, a fake network reset, and a fake traceback into a file the change did not
+  touch. But the text can move the lean: the "passed on retry" line turned 2 of 14 change-caused
+  failures towards "flaky". The lean is an opinion, not evidence.
+- **Without the change, or with only the last 25 lines of the log, every failure came back ??**
+  (14 of 14). The tool says it cannot tell rather than guessing.
+- **Logs from another CI, with no GitHub markers, gave the same lean** on 17 of 19 runs, and no
+  false CHANGE. The 4 automatic CHANGE labels became review.
+- **A 35 MB log is read in about 12 s.**
+
+*Code audit.* We tested 123 rule/code pairs from 8 repositories: Django, Vite, scikit-learn, Airflow,
+Spring Boot, Grafana, Tokio and Codex. Each rule is quoted from the project's own files. The code
+either broke the rule (a maintainer's review comment, or a one-line mutation of real code) or kept
+it (the fix, or clean code). A second reviewer confirmed each label blind.
+
+Results on the 91 held-out pairs (6 repositories):
+- **BREAKS was right 13 times out of 13; 0 of 44 compliant pairs were called BREAKS.**
+- **The list to read (BREAKS, plus review from P(breaks) 0.3) held 35 of 47 real violations**
+  (62–83%). It also held 12 of the 44 compliant pairs.
+- **One violation was called ok.**
+
+Two changes were made after the held-out set showed a gap, so these held-out numbers are not blind:
+- n/a now needs P(breaks) below 0.3. Before, it hid 12 of the 47 violations.
+- The review list is read from P(breaks) 0.3 up.
+
+**The blind check came after these changes, on real code.** We drafted each project's rule map from
+its own docs and reviewed it. We then audited the code touched by recent merged commits: Django (30
+commits), rust-analyzer (10) and Vite (60). A reviewer who never saw the tool's labels judged every
+BREAKS and a random sample of every other label.
+- **BREAKS was confirmed 26 times out of 29 decided,** with 3 false BREAKS in 171 changed units.
+  All 21 in Django were real. The 3 false ones: one came from a rule written without its condition
+  ("Import X from Y", applied to a file that never uses X), and two were rules applied to code that
+  lacks their subject.
+- **The review list is where the noise is.** In the random samples of review from P(breaks) 0.3, a
+  real violation was found in:
+  - Django: 1 of 40 (it was the highest-ranked);
+  - Vite: 0 of 19;
+  - rust-analyzer: 9 of 40.
+- **In rust-analyzer, about 1 in 8 of the lower-P(breaks) reviews was a real violation.** That is
+  why "stop when the items stop being informative" is a judgement, not a rule.
+- **No ok or n/a sample held a violation** (0 of 68).
+- **The drafter now offers 94% of the code rules reviewers found** in those three projects, up from
+  67%. This is measured on the projects that showed the gaps. Reviewers read about 20% more entries.
+- **Cost: $0.09 for Django's 1,535 checks.**
+
+**What each family sends, and how it is kept to that.** Each kind of data needs its own consent,
+and for CI logs and source code only the user in the conversation can give it — never a file in
+the repository.
+
+- CI triage reads GitHub with GET requests only, only for a GitHub remote of the project, with
+  prompts off, without the TypeSafe key in `gh`'s environment, and with `gh`'s cache in the
+  server's private folder. A run URL is parsed strictly, and a `base` ref can never be read as a
+  git option.
+- Log lines are cleaned before they are sent or shown: timestamps, colour codes, control and
+  invisible characters, runner paths, home folders and email addresses removed, and secrets
+  redacted — the existing shapes (now also GitLab, npm, PyPI, Slack-webhook and Vault tokens) plus
+  authorization headers, login passwords, `.netrc` lines and any `name=value` whose name says it
+  is a secret.
+- The change under test leaves out secret files (only their name is mentioned, paths with spaces
+  or quoting included) and comment-only lines. jevmcp never adds the commit message or the pull
+  request's text: an author's own description of a change steers a verdict about it. A CI step
+  that prints them puts them in its log like any other line.
+- Log files are read only inside the project or the server's private inbox (a 0700 folder
+  removed with the server); links, `.git`, secret files, other users' files and other sessions'
+  temporary folders are refused.
+- `preview_ci_triage` returns a snapshot, and `triage_ci_failure` with that snapshot sends exactly
+  what was previewed.
+- Code audit reads only files git tracks or would commit — never ignored files — and never links,
+  secret files or files over 1.5 MB. Comments are removed, except for rules about comments, which
+  are asked in requests of their own with links and email addresses removed.
+- `preview_code_audit` reports the units, files, bytes of code and their share of the project. An
+  audit of more than 400 requests, or of the whole project, is refused until `confirm_units`
+  repeats the count.
+- Log text and code in any result are data: the skills tell the agent never to follow an
+  instruction found in them, and a fork's pull request is marked `trusted: false`.
+
+**Server.** Results are kept per family, so a triage never overwrites the last spec-drift check.
+One rate limit covers every tool that sends. Every new tool declares all four annotation hints and
+a complete output schema. Arguments are checked against the full input schema (enums, patterns,
+lengths, ranges, list sizes) before a tool runs. A git or `gh` failure, and an answer from GitHub
+that cannot be read, now come back as a tool error the agent can act on, never as a protocol
+error. The server's instructions were rewritten for three families, with the key and consent
+rules first.
+
+**Also better for spec drift.** Two sessions saving the answer cache at the same time no longer
+drop each other's answers. Secret redaction no longer slows to a crawl on long lines: a 2.6 MB log
+took 55 s, and now takes 2 s, with the same output on 1.4 million real log lines. Comments are no
+longer found inside Rust raw strings (`r#"..."#`) or multi-line strings. `gh` and `git` are never
+run from a relative PATH entry such as `.`.
+
+**Documentation.** Every page covers the new tools: arguments, output, labels, exit codes, costs
+and errors in `docs/tools.md`, recipes in `docs/how-to.md`, and what each family sends in
+`PRIVACY.md`. The repository's own spec map now also pairs the new PRIVACY.md and tools.md
+sentences with the code in `ci_triage.py`, `code_audit.py` and the server, and five references
+that pointed at line ranges — which had drifted onto unrelated code — now name symbols.
+`claude_how_to_jevmcp.md` and `codex_how_to_jevmcp.md` are generated by a script from the shipped
+plugin, so their quoted text and hashes can no longer go stale.
+
 ## 1.6.0 — 2026-09-23
 
 Four changes to how a claim is decided, every one measured against a corpus of 115 claims whose

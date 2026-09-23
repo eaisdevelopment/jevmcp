@@ -13,8 +13,8 @@ no second install and no second API key.
 | Tool | What it does | Status |
 |---|---|---|
 | **spec-drift** (skill) + tools on the `jevmcp` server (`check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map`) | Checks code against its design spec or requirements. Jev screens every requirement against the code that implements it; the agent investigates only what it flags and says which side to fix. Java/Spring, JavaScript/TypeScript, Python, and any language by line range. | available |
-| CI failure triage | Reads a failed pipeline and says what actually broke. | planned |
-| Code audit | Screens a codebase against its own rules and conventions. | planned |
+| **ci-triage** (skill) + `triage_ci_failure`, `preview_ci_triage` | Reads a failed pipeline and says what actually broke: for each distinct failure, whether the change under test caused it, the error line that says why, and the next step. A GitHub Actions run of your project (read with your own `gh`), or a log from any CI. | available |
+| **code-audit** (skill) + `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map` | Screens a codebase against its own rules and conventions: each rule you approved from CLAUDE.md, AGENTS.md, CONTRIBUTING or a style guide, against each unit of code it covers. | available |
 
 Each tool is its own skill, and all of them share the single `jevmcp` MCP server: one install,
 one server process, one API key. Your client can still approve or disable each tool separately.
@@ -98,7 +98,7 @@ key into an issue or pull request.
 ```
 .claude-plugin/marketplace.json    the marketplace, as Claude Code reads it
 .agents/plugins/marketplace.json   the same marketplace, as Codex reads it
-plugins/jevmcp/                    the plugin: skills/<tool>/SKILL.md, scripts/, one MCP server per tool
+plugins/jevmcp/                    the plugin: skills/<family>/SKILL.md, scripts/, one MCP server for every tool
 ```
 
 ## Documentation
@@ -108,12 +108,12 @@ human reading over its shoulder:
 
 - [Install and set up](plugins/jevmcp/docs/install.md) — every client, every way to provide the
   key, how to check it worked, troubleshooting.
-- [Tools, skill, spec map, command line](plugins/jevmcp/docs/tools.md) — every argument, output,
+- [Tools, skills, maps, command line](plugins/jevmcp/docs/tools.md) — every argument, output,
   label and exit code.
 - [How each client behaves](plugins/jevmcp/docs/clients.md) — approvals, unattended runs, sandbox
   and network, the verified limits.
-- [Recipes](plugins/jevmcp/docs/how-to.md) — set a project up, routine checks, CI, what to do
-  with each result.
+- [Recipes](plugins/jevmcp/docs/how-to.md) — set a project up, routine checks, triage a failed
+  CI run, audit before a pull request, what to do with each result.
 - [AGENTS.md](AGENTS.md) — the short version, and the rules an agent must not break.
 - [What is sent, and what never is](plugins/jevmcp/PRIVACY.md).
 

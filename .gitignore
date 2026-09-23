@@ -7,8 +7,10 @@ typesafe.env
 *.key
 *.pem
 
-# Results of checks (they contain the code that was sent)
+# Results of checks (they contain the code, logs and states that were sent)
 drift.json
+triage.json
+audit.json
 last-check*.json
 
 # Python and editors

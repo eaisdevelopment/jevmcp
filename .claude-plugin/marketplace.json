@@ -9,7 +9,7 @@
     {
       "name": "jevmcp",
       "source": "./plugins/jevmcp",
-      "description": "Spec-drift checking today (check_spec_drift, validate_spec_map, preview_spec_check, draft_spec_map, and the spec-drift skill); more Jev tools arrive in the same plugin.",
+      "description": "Spec-drift checking, CI failure triage and code audit: ten tools on one MCP server, with the spec-drift, ci-triage and code-audit skills. More Jev tools arrive in the same plugin.",
       "category": "development",
       "homepage": "https://github.com/eaisdevelopment/jevmcp/tree/main/plugins/jevmcp",
       "license": "Apache-2.0"

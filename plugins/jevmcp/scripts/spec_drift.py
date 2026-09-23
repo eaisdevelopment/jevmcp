@@ -57,6 +57,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import textwrap
 import time
 import tokenize
@@ -193,6 +194,10 @@ UNINDEXED = (C_FAMILY | {".rb", ".php"}) - set(TREE_SITTER)
 _RUST_CHAR = re.compile(r"'(?:[^'\\\n]|\\(?:[nrt0\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}))'")
 
 
+_RUST_RAW = re.compile(r'b?r(#*)"')
+_WORD_CHAR = re.compile(r"\w")
+
+
 def mask_c_family(text: str, strings: bool, rust: bool = False) -> str:
     """Blank out comments (and, if `strings`, string contents), keeping every
     newline and offset so braces and line numbers still line up. Used where no
@@ -231,11 +236,18 @@ def mask_c_family(text: str, strings: bool, rust: bool = False) -> str:
             if strings:
                 blank(i + 1, max(i + 1, j - 1))
             i = j
+        elif rust and text[i] in "br" and (m := _RUST_RAW.match(text, i)) and not (i and _WORD_CHAR.match(text[i - 1])):
+            end = '"' + m.group(1)               # r"..", r#".."#, br##".."##: no escapes, may span lines
+            j = text.find(end, m.end())
+            j = n if j < 0 else j + len(end)
+            if strings:
+                blank(m.end(), max(m.end(), j - len(end)))
+            i = j
         elif rust and text[i] == "'" and not _RUST_CHAR.match(text, i):
             i += 1                               # a lifetime or loop label
         elif text[i] in "\"'":
             q, j = text[i], i + 1
-            while j < n and text[j] != q and text[j] != "\n":
+            while j < n and text[j] != q and (rust or text[j] != "\n"):     # a Rust string may span lines
                 j += 2 if text[j] == "\\" else 1
             j = min(j + 1, n)
             if strings:
@@ -259,8 +271,8 @@ def tidy(src: str) -> str:
 
 _SECRET_NAME = re.compile(r"pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"
                           r"credential|access[-_.]?key|signing[-_.]?key|client[-_.]?secret|(?:^|[-_.])key$|dsn$", re.I)
-_SECRET_LITERAL = re.compile(
-    r"""((?:[\w.\-]*(?:pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"""
+_SECRET_LITERAL = re.compile(      # (?<!...) starts matches only at a name's start: same matches, linear time
+    r"""((?:(?<![\w.\-])[\w.\-]*(?:pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"""
     r"""credential|access[-_.]?key)[\w.\-]*)["']?\s*(?::|=>|=)\s*)(["'`])(?!\$\{)([^"'`\n]{4,})\2""", re.I)
 _SECRET_SHAPES = [re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{8,}"),     # Stripe
                   re.compile(r"\b(?:ghp|gho|ghu|ghs|github_pat)_[0-9A-Za-z_]{20,}"),     # GitHub
@@ -270,7 +282,12 @@ _SECRET_SHAPES = [re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{8,}"),  
                   re.compile(r"://[^/\s:@]+:[^/\s@]+@"),                                   # user:password@ in URLs
                   re.compile(r"eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}"),
                   re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
-                  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")]
+                  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+                  re.compile(r"\bgl(?:pat|dt|rt|ptt|cbt|imt|soat|ft|oas)-[0-9A-Za-z_\-]{20,}"),   # GitLab
+                  re.compile(r"\bnpm_[0-9A-Za-z]{36}\b"),                                  # npm
+                  re.compile(r"\bpypi-[0-9A-Za-z_\-]{50,}"),                              # PyPI
+                  re.compile(r"https://hooks\.slack\.com/services/[0-9A-Za-z/]{20,}"),    # Slack webhook
+                  re.compile(r"\bhv[sb]\.[0-9A-Za-z_\-]{24,}")]                           # HashiCorp Vault
 
 
 def redact(text: str) -> str:
@@ -2003,7 +2020,7 @@ def _mentions(sent: str, syms: dict[str, Symbol]) -> tuple[list[Symbol], list[st
 _CODE_LINE = re.compile(r'[=<>]=|->|\bf"|\{[a-z_]+[.\[]|\breturn\b|\bdef\b|\bimport\b')
 
 
-def spec_sentences(doc: Path, min_len: int = 5):
+def spec_sentences(doc: Path, min_len: int = 5, code_line: re.Pattern = _CODE_LINE):
     """(line, sentence) for every sentence that could be a requirement: not a
     heading, not inside a code fence, at least `min_len` words, not code.
 
@@ -2052,7 +2069,7 @@ def spec_sentences(doc: Path, min_len: int = 5):
             sent = " ".join(sent.strip(" -*|#>").split())
             if first and item and _STEM_HEADING.search(heading):
                 sent, first = f"{heading}: {sent}", False
-            if len(sent.split()) >= min_len and (ROUTE_RE.search(sent) or not _CODE_LINE.search(sent)):
+            if len(sent.split()) >= min_len and (ROUTE_RE.search(sent) or not code_line.search(sent)):
                 yield lineno, sent
 
 
@@ -2691,16 +2708,27 @@ def load_cache(path: Path | None = None) -> dict[str, list]:
 
 
 def save_cache(answers: dict[str, list], path: Path | None = None) -> None:
+    """Merge into what is on disk now: another run (a second session, a parallel CLI) may have saved
+    since this one loaded, and writing only this run's copy would throw its answers away."""
+    tmp = None
     try:
         path = path or CACHE_FILE          # read at call time: a default argument could not be patched
-        if len(answers) > CACHE_MAX:
-            answers = dict(list(answers.items())[-CACHE_MAX:])
+        merged = load_cache(path)
+        merged.update(answers)
+        if len(merged) > CACHE_MAX:
+            merged = dict(list(merged.items())[-CACHE_MAX:])
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"version": 1, "model": MODEL, "answers": answers}))
-        tmp.replace(path)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".verdicts-", suffix=".tmp")   # one per writer
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"version": 1, "model": MODEL, "answers": merged}, fh)
+        os.replace(tmp, path)
+        tmp = None
     except Exception:                                  # noqa: BLE001 - never fail a run over a cache
         pass
+    finally:
+        if tmp:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
 
 
 def map_health(results: list[dict], claims: list[Claim], syms: dict[str, Symbol] | None = None) -> dict:
@@ -3310,8 +3338,9 @@ def _load_key(key_file: str | None = None, dotenv: bool = True) -> str:
             if m := re.match(r"\s*(?:export\s+)?TYPESAFE_API_KEY\s*=\s*(.+)", line):
                 key = m.group(1).strip().strip('"').strip("'")
     if not key:
-        raise Stop(f"no API key, so nothing was sent. Set TYPESAFE_API_KEY in the environment, or put the line\n"
-                   f"  TYPESAFE_API_KEY=...\ninto {env} (only the .env in the folder you run from is read).\n"
+        where = (f", or put the line\n  TYPESAFE_API_KEY=...\ninto {env} (only the .env in the folder you run from is read)"
+                 if dotenv else ", or pass --key-file FILE (this command never reads a .env file)")
+        raise Stop(f"no API key, so nothing was sent. Set TYPESAFE_API_KEY in the environment{where}.\n"
                    f"Get a key at https://console.typesafe.ai. To look without a key, add --dry-run.")
     return key
 
@@ -3349,7 +3378,14 @@ def _print_claim(i: int, c: Claim, sent: int, total: int) -> None:
     print(f"    sends: {sent:,} characters")
 
 
+def safe_path() -> None:
+    """Drop empty and relative PATH entries: with '.' on PATH a `git` or `gh` planted in the project
+    folder would run instead of the real one."""
+    os.environ["PATH"] = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep) if p and os.path.isabs(p))
+
+
 def main() -> None:
+    safe_path()
     here = Path(__file__).resolve().parent
     inside_tool_folder = Path.cwd().resolve() == here
     if len(sys.argv) == 1:
