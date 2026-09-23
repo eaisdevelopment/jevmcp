@@ -77,7 +77,7 @@ sys.dont_write_bytecode = True                     # never leave a .pyc inside a
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import spec_drift as dd  # noqa: E402   # the spec-drift checker: questions, thresholds, redaction
 
-VERSION = "1.5.3"
+VERSION = "1.6.0"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -161,17 +161,27 @@ SPEC_DRIFT_TOOLS = [
                 "results_file": {"type": ["string", "null"], "description": "full results, with the exact code sent"},
                 "map_problems": {"type": "array", "items": {"type": "string"}},
                 "not_checked": {"type": "array", "items": {"type": "string"}},
+                "map_health": {"type": "object", "description":
+                    "what the run says about the MAP: how many claims came back ?? (their pairing "
+                    "cannot settle them), and for each, why and what to pair it with instead",
+                    "properties": {"checked": {"type": "integer"}, "unverifiable": {"type": "integer"},
+                                   "unverifiable_pct": {"type": "number"},
+                                   "most_often_paired_with": {"type": "array"},
+                                   "entries_to_fix": {"type": "array", "items": {"type": "object"}}},
+                    "required": ["checked", "unverifiable", "unverifiable_pct", "entries_to_fix"]},
                 "flagged": {"type": "array", "description": "DRIFT, then review by P(drifted), then ??",
                             "items": {"type": "object", "properties": {
                     "label": {"type": "string", "enum": ["DRIFT", "review", "??"]},
                     "doc": {"type": "string"}, "line": {"type": "integer"}, "claim": {"type": "string"},
                     "p_drifted": {"type": "number"}, "severity": {"type": "number"},
                     "value_mismatch": {"type": ["number", "null"]},
-                    "code_refs": {"type": "array", "items": {"type": "string"}}, "why": {"type": "string"}},
+                    "code_refs": {"type": "array", "items": {"type": "string"}}, "why": {"type": "string"},
+                    "samples": {"type": "integer", "description": "how many times this claim was asked about"},
+                    "next_step": {"type": "string", "description": "on a DRIFT: the decision to make"}},
                     "required": ["label", "doc", "line", "claim", "p_drifted", "code_refs", "why"]}},
             },
             "required": ["project", "map", "claims_in_map", "claims_selected", "checked", "counts", "cost_usd",
-                         "complete", "results_file", "map_problems", "not_checked", "flagged"],
+                         "complete", "results_file", "map_problems", "not_checked", "map_health", "flagged"],
         },
     },
     {
@@ -358,10 +368,12 @@ class ProtocolError(Exception):
 
 class Server:
     def __init__(self, root: Path | None, map_path: str | None, key_file: str | None, jobs: int,
-                 ignore: tuple[str, ...], max_checks_per_minute: int = 20, max_calls_per_minute: int = 120):
+                 ignore: tuple[str, ...], max_checks_per_minute: int = 20, max_calls_per_minute: int = 120,
+                 samples: int = dd.SAMPLES):
         """`root` is the project the client started us in, or None when it did not say (Codex
         starts plugin servers in the plugin's own folder): then each call must pass `project`."""
         self.default_root, self.map_path, self.key_file, self.jobs, self.ignore = root, map_path, key_file, jobs, ignore
+        self.samples = max(1, samples)
         self.root = root
         self.map_used = map_path or ""
         self.caches: dict[Path, dict] = {}    # one parsed index per project
@@ -562,7 +574,10 @@ class Server:
                       "claims_selected": len(claims), "checked": 0,
                       "counts": {"DRIFT": 0, "review": 0, "??": 0, "ok": 0}, "cost_usd": 0.0,
                       "complete": not problems, "results_file": None, "map_problems": problems,
-                      "not_checked": [], "flagged": []}
+                      "not_checked": [],
+                      "map_health": {"checked": 0, "unverifiable": 0, "unverifiable_pct": 0.0,
+                                     "most_often_paired_with": [], "entries_to_fix": []},
+                      "flagged": []}
         if not claims:
             head.append("nothing to check" + ("" if all else " - no claim in the map is about those files. "
                                               "Use all=true for a full check."))
@@ -586,7 +601,8 @@ class Server:
         t = time.perf_counter()
         results, tokens, stopped, failed = dd.check_claims(claims, key, self.jobs, show=lambda _: None,
                                                            on_answer=self.progress,
-                                                           cancelled=self.current_cancel.is_set)
+                                                           cancelled=self.current_cancel.is_set,
+                                                           samples=self.samples)
         out = self.results_file()
         out.touch(mode=0o600)
         out.write_text(json.dumps(results, indent=1, ensure_ascii=False))
@@ -600,10 +616,19 @@ class Server:
             checked=len(results), cost_usd=round(tokens * 0.042 / 1e6, 6), results_file=str(out),
             counts={k: sum(1 for r in results if r["label"] == k) for k in ("DRIFT", "review", "??", "ok")},
             complete=not (problems or stopped or failed), not_checked=stopped + failed,
+            map_health=dd.map_health(results, claims, syms),
             flagged=[{"label": r["label"], "doc": r["doc"], "line": r["line"], "claim": r["claim"],
                       "p_drifted": r["probabilities"].get("drifted", 0.0), "severity": r["severity"],
-                      "value_mismatch": r.get("value_mismatch"), "code_refs": r["code_refs"], "why": r["why"]}
+                      "value_mismatch": r.get("value_mismatch"), "code_refs": r["code_refs"],
+                      "why": r["why"], "samples": r.get("samples", 1),
+                      **({"next_step": dd.next_step_for_drift(r)} if r["label"] == "DRIFT" else {})}
                      for r in _in_triage_order(results) if r["label"] != "ok"])
+        mh = structured["map_health"]
+        if mh["unverifiable"]:
+            text += (f"\n\n  MAP HEALTH: {mh['unverifiable']} of {mh['checked']} claims "
+                     f"({mh['unverifiable_pct']}%) came back ?? - those entries point at code that cannot "
+                     f"settle their sentence. See map_health.entries_to_fix; it names a better pairing where "
+                     f"the sentence's own words suggest one. This is a map problem, not a code problem.")
         structured["summary"] = text.split("\n", 1)[0] + (" - DRIFT: investigate each; review: from p_drifted 0.3 up; "
                                                             "??: NOT a pass, fix the map entry; full results in "
                                                             "results_file")
@@ -633,10 +658,18 @@ class Server:
         if strict:
             problems += [f"{n} (strict)" for n in dd.MAP_NOTES]
         excluded = dd.MAP_COUNTS.get("excluded", 0)
+        # Worked out locally, for free: claims whose pairing cannot settle them. Each would cost
+        # a request and come back "??", so it is cheaper to say so before anything is sent.
+        weak_list = [(c, w) for c in claims if (w := dd.preflight(c))]
         lines = [f"{self.map_used}: {len(claims)} entries ready to check"
                  + (f"; {excluded} marked excluded (not requirements, never sent)" if excluded else "")
-                 + f" | {self.last_index}",
-                 f"a full check would cost about ${dd.estimate_cost(claims):.4f}"]
+                 + f" | {self.last_index}"]
+        if weak_list:
+            lines.append(f"{len(weak_list)} of {len(claims)} claims will probably come back '??' - each costs "
+                         f"a request and answers nothing; see likely_unverifiable")
+        lines.append(f"a full check would cost about ${dd.estimate_cost(claims):.4f}"
+                     + (f" (up to ${dd.estimate_cost(claims, self.samples):.4f} if every claim has to be "
+                        f"asked again)" if self.samples > 1 else ""))
         notes = [ln.strip()[len("note: "):] for ln in buf.getvalue().splitlines() if ln.strip().startswith("note:")]
         if not strict:
             lines += [f"note: {n}" for n in notes]
@@ -646,7 +679,10 @@ class Server:
             lines.append("OK - the map is complete and every entry resolves.")
         structured = {"project": str(self.root), "map": self.map_used, "ready": not problems,
                       "entries_to_check": len(claims), "excluded": excluded,
-                      "full_check_cost_usd": round(dd.estimate_cost(claims), 6), "problems": problems,
+                      "likely_unverifiable": [f"{c.doc}:{c.line} - {w[0]}" for c, w in weak_list],
+                      "full_check_cost_usd": round(dd.estimate_cost(claims), 6),
+                      "full_check_cost_usd_max": round(dd.estimate_cost(claims, self.samples), 6),
+                      "samples": self.samples, "problems": problems,
                       "notes": [] if strict else notes}
         return "\n".join(lines), False, structured
 
@@ -1065,6 +1101,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--show-key-source", action="store_true",
                     help="Say where the key would come from, and whether it is there. Never prints the key.")
     ap.add_argument("--jobs", type=int, default=8, metavar="N", help="Claims asked about at once (default 8).")
+    ap.add_argument("--samples", type=int, default=dd.SAMPLES, metavar="N",
+                    help=f"How many times to ask about a claim the first answer did not settle "
+                         f"(default {dd.SAMPLES}; 1 never re-asks).")
     ap.add_argument("--ignore", nargs="*", default=[], metavar="NAME",
                     help="More folders to skip, on top of the defaults (node_modules, build, ...).")
     ap.add_argument("--no-warm", action="store_true",
@@ -1094,7 +1133,7 @@ def main(argv: list[str] | None = None) -> None:
         root = None                               # started inside the plugin itself: wait for a project
     ignore = tuple(dict.fromkeys(dd.DEFAULT_IGNORE + [n.strip("/").removeprefix("./") for n in a.ignore]))
     server = Server(root, a.map, a.key_file, max(1, a.jobs), ignore, max(0, a.max_checks_per_minute),
-                    max(0, a.max_calls_per_minute))
+                    max(0, a.max_calls_per_minute), samples=max(1, a.samples))
     if not a.no_warm:
         threading.Thread(target=server.warm, daemon=True).start()
     with contextlib.suppress(ValueError, AttributeError):   # SIGTERM (the client's next step): clean up, go

@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.6.0 — 2026-09-23
+
+Four changes to how a claim is decided, every one measured against a corpus of 115 claims whose
+right answer was written down before the model ever saw them. The harness that does the measuring
+ships in the repository (`tools/score_eval.py` in the maintainers' tree), so a scoring change is
+now an experiment rather than an argument.
+
+**A claim one answer cannot settle is asked again.** The verdict itself moves between identical
+calls on 32% of claims — measured, not assumed — so one confidence crossing a line was the noisiest
+possible thing to gate on. A claim is now decided by agreement: every answer must match and none
+may be below 0.85. On the graded corpus that takes the share of claims decided without a human from
+**4.3% to 18.3%, with no real drift passed as `ok` and no accurate claim called drifted**. On this
+repository's own documentation `ok` went from 3 of 180 to 15. Claims the first answer already
+settled are never asked again, so the extra cost falls only on the uncertain middle. `--samples 1`
+restores the old behaviour exactly.
+
+**Answers are cached, so unchanged code is never paid for twice.** A verdict is a pure function of
+what was asked, so it is keyed by a SHA-256 digest of the request — never your code, never your
+spec, never your key — in `~/.cache/jevmcp/verdicts.json`. A repeat of this repository's own full
+check went from 32 s and $0.0207 to **0.3 s and $0.0000**, with identical labels. The cache keeps
+several independent answers per claim, because replaying one answer three times would make
+unanimity meaningless.
+
+**Claims that cannot be judged are named before anything is sent.** A `??` costs a request and
+answers nothing, and 42% of this project's own claims came back that way. `--dry-run` and
+`validate_spec_map` now say which entries will probably do so and why: a sentence about what the
+code does *not* do, a lead-in ending in a colon, or code far larger than the 2,600 characters that
+are sent. On our own map that is 30 of 180, found locally and for free.
+
+**Code that does not fit is cut where the claim is looking.** Sending the first 2,600 characters of
+a large function handed the model the top of it and called it the whole thing — the single biggest
+cause of `??` in our own audit. The lines the claim names are kept instead, with context, and every
+cut is marked so the model knows it is judging an excerpt.
+
+Also: a run now reports **map health** — how many claims came back `??`, which symbol they were
+paired with most often, and for each one what the sentence's own words suggest pairing it with
+instead — and every `DRIFT` carries the decision to make, since Jev answers questions and cannot
+write the corrected sentence itself.
+
+*Measured and not shipped:* packing several claims into one request would save 39% of tokens (26%
+of a run is the fixed per-request charge), but it agreed with one-claim-at-a-time on only 63% of
+verdicts — against a 68% floor set by the model's own run-to-run variation. The experiment cannot
+tell "batching hurts" from "the model wobbles", and the cache already removes repeat cost, so it
+stays out until there is evidence.
+
 ## 1.5.3 — 2026-09-23
 
 **jevmcp now checks itself.** `spec_map.json` at the repository root pairs every guarantee in

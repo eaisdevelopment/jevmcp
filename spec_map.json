@@ -337,6 +337,39 @@
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
    "line": 67,
+   "text": "What is stored locally: Answers from earlier checks, in `~/.cache/jevmcp/verdicts.json` (`$XDG_CACHE_HOME` is respected), so a claim whose sentence and code have not changed is not paid for twice.",
+   "code": [
+    "plugins/jevmcp/scripts/spec_drift.py:CACHE_FILE",
+    "plugins/jevmcp/scripts/spec_drift.py:save_cache"
+   ],
+   "status": "reviewed",
+   "spec_text": "answers from earlier checks, in ~/.cache/jevmcp/verdicts.json ($xdgcachehome is respected), so a claim whose sentence and code have not changed is not paid for twice. it holds a sha-256 digest of each request and the model's answers - never your code, never your spec text, never your api key. delete the file to clear it, or pass --no-cache to ignore it."
+  },
+  {
+   "spec": "plugins/jevmcp/PRIVACY.md",
+   "line": 67,
+   "text": "It holds a SHA-256 digest of each request and the model's answers - never your code, never your spec text, never your API key.",
+   "code": [
+    "plugins/jevmcp/scripts/spec_drift.py:_cache_key",
+    "plugins/jevmcp/scripts/spec_drift.py:save_cache"
+   ],
+   "status": "reviewed",
+   "spec_text": "answers from earlier checks, in ~/.cache/jevmcp/verdicts.json ($xdgcachehome is respected), so a claim whose sentence and code have not changed is not paid for twice. it holds a sha-256 digest of each request and the model's answers - never your code, never your spec text, never your api key. delete the file to clear it, or pass --no-cache to ignore it."
+  },
+  {
+   "spec": "plugins/jevmcp/PRIVACY.md",
+   "line": 67,
+   "text": "Delete the file to clear it, or pass `--no-cache` to ignore it.",
+   "code": [
+    "plugins/jevmcp/scripts/spec_drift.py:build_parser",
+    "plugins/jevmcp/scripts/spec_drift.py:load_cache"
+   ],
+   "status": "reviewed",
+   "spec_text": "answers from earlier checks, in ~/.cache/jevmcp/verdicts.json ($xdgcachehome is respected), so a claim whose sentence and code have not changed is not paid for twice. it holds a sha-256 digest of each request and the model's answers - never your code, never your spec text, never your api key. delete the file to clear it, or pass --no-cache to ignore it."
+  },
+  {
+   "spec": "plugins/jevmcp/PRIVACY.md",
+   "line": 71,
    "text": "What is stored locally: The Python dependencies, in uv's cache.",
    "code": null,
    "status": "excluded",
@@ -615,7 +648,7 @@
    "text": "`summary` - string - The first line of the report, plus a reminder of what each label means once a check has actually run (when there was nothing to check, there are no labels to remind you of).",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.check_spec_drift",
    "status": "reviewed",
-   "spec_text": "| `summary` | string | The first line of the report, plus a reminder of what each label means once a check has actually run (when there was nothing to check, there are no labels to remind you of). |",
+   "spec_text": "| summary | string | the first line of the report, plus a reminder of what each label means once a check has actually run (when there was nothing to check, there are no labels to remind you of). |",
    "why": "Found by this tool checking its own docs: check_spec_drift returns early at jevmcp_server.py:566 with summary = head[0], before the label reminder is appended at :607."
   },
   {
@@ -701,6 +734,23 @@
   {
    "spec": "plugins/jevmcp/docs/tools.md",
    "line": 104,
+   "text": "`map_health` - object - What the run says about the **map**: how many claims came back `??`, which symbol they were paired with most often, and for each one why it could not be settled and what the sentence's own words suggest pairing it with instead.",
+   "code": "plugins/jevmcp/scripts/spec_drift.py:map_health",
+   "status": "reviewed",
+   "spec_text": "| maphealth | object | what the run says about the map: how many claims came back ??, which symbol they were paired with most often, and for each one why it could not be settled and what the sentence's own words suggest pairing it with instead. a ?? is a map problem, not a code problem. |"
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 104,
+   "text": "A `??` is a map problem, not a code problem.",
+   "code": null,
+   "status": "excluded",
+   "spec_text": "| maphealth | object | what the run says about the map: how many claims came back ??, which symbol they were paired with most often, and for each one why it could not be settled and what the sentence's own words suggest pairing it with instead. a ?? is a map problem, not a code problem. |",
+   "why": "Restates the label's meaning, which is checked where the labels are defined."
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 105,
    "text": "`flagged` - array of objects - Everything that is not `ok`, in the order to work through it:",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.check_spec_drift",
    "status": "reviewed",
@@ -708,7 +758,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 104,
+   "line": 105,
    "text": "DRIFT by severity, then review by P(drifted), then `??`.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:_in_triage_order",
    "status": "reviewed",
@@ -716,7 +766,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 106,
+   "line": 107,
    "text": "Each `flagged` item has `label` (`DRIFT` / `review` / `??`), `doc`, `line`, `claim`, `p_drifted`, `severity` (0–3), `value_mismatch` (may be null), `code_refs` and `why`.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.check_spec_drift",
    "status": "reviewed",
@@ -724,7 +774,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 109,
+   "line": 110,
    "text": "The results file lives in a private folder of the server process (mode 0700) with the file at mode 0600, and the folder is deleted when the server stops.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.results_file",
    "status": "reviewed",
@@ -732,7 +782,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 109,
+   "line": 110,
    "text": "Read it when you need to see the exact code a verdict was based on; do not copy it into the repository.",
    "code": null,
    "status": "excluded",
@@ -741,7 +791,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 113,
+   "line": 114,
    "text": "Cost and duration.** Charged on input tokens only, at $0.042 per million; output is free.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:estimate_cost",
    "status": "reviewed",
@@ -749,7 +799,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 118,
+   "line": 119,
    "text": "Real Java project, full check - 131 requirements - 11.5 s - $0.006",
    "code": null,
    "status": "excluded",
@@ -758,7 +808,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 119,
+   "line": 120,
    "text": "The same project after editing 2 files - a handful - 3.2 s - $0.0013",
    "code": null,
    "status": "excluded",
@@ -767,7 +817,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 120,
+   "line": 121,
    "text": "The FastAPI demo in this repository - 8 claims - seconds - $0.0002",
    "code": null,
    "status": "excluded",
@@ -776,7 +826,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 122,
+   "line": 123,
    "text": "`validate_spec_map` tells you a full check's cost before you spend anything.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.validate_spec_map",
    "status": "reviewed",
@@ -784,7 +834,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 128,
+   "line": 129,
    "text": "`No TypeSafe API key is set for this server, so nothing was sent.` - Nothing was sent.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:_load_key",
    "status": "reviewed",
@@ -792,7 +842,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 128,
+   "line": 129,
    "text": "Pass the stored-key command on to the user to run **in their own terminal**.",
    "code": null,
    "status": "excluded",
@@ -801,7 +851,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 128,
+   "line": 129,
    "text": "Never ask for the key in chat, never put it in a command you run.",
    "code": null,
    "status": "excluded",
@@ -810,7 +860,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 129,
+   "line": 130,
    "text": "`TypeSafe rejected the API key (HTTP 401/403)` - The key is wrong or revoked.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:ask",
    "status": "reviewed",
@@ -818,7 +868,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 129,
+   "line": 130,
    "text": "Tell the user to check it at <https://console.typesafe.ai> and store it again.",
    "code": null,
    "status": "excluded",
@@ -827,7 +877,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 130,
+   "line": 131,
    "text": "`TypeSafe's credits are used up (HTTP 402)` - Not a fault in the code.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:ask",
    "status": "reviewed",
@@ -835,7 +885,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 130,
+   "line": 131,
    "text": "Report it, carry on without the check, and never report \"no drift\".",
    "code": null,
    "status": "excluded",
@@ -844,7 +894,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 131,
+   "line": 132,
    "text": "`rate limit: at most 20 checks a minute` - Wait the stated seconds, or check more files in one call instead of looping.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.rate_limit",
    "status": "reviewed",
@@ -852,7 +902,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 132,
+   "line": 133,
    "text": "`rate limit: at most 120 tool calls a minute` - You are calling too fast.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.rate_limit",
    "status": "reviewed",
@@ -860,7 +910,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 133,
+   "line": 134,
    "text": "`this project (...) has no spec map yet (no *spec_map.json)` - Run `draft_spec_map`, then review every entry.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.resolve_map",
    "status": "reviewed",
@@ -868,7 +918,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 133,
+   "line": 134,
    "text": "Do not invent a map by hand.",
    "code": null,
    "status": "excluded",
@@ -877,7 +927,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 134,
+   "line": 135,
    "text": "`this project has several spec maps - say which one with 'map'` - Pass `map` with one of the paths it lists.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.resolve_map",
    "status": "reviewed",
@@ -885,7 +935,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 135,
+   "line": 136,
    "text": "X (relative to ...)` | The path is relative to the project folder, not to your shell.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -893,7 +943,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 136,
+   "line": 137,
    "text": "`X is outside the project - refused` - Point at a file inside the project.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -901,7 +951,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 137,
+   "line": 138,
    "text": "`this client did not tell the server which project it is working in` - Pass `project` with the absolute path of your working directory.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.use_project",
    "status": "reviewed",
@@ -909,7 +959,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 138,
+   "line": 139,
    "text": "`project must be an absolute path` / `project folder not found` / `is a home or root folder, not a project` - Pass the project's own folder, absolute.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.use_project",
    "status": "reviewed",
@@ -917,7 +967,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 139,
+   "line": 140,
    "text": "`check_spec_drift does not take X; it takes: ...` / `needs X` / `X must be a list of strings` - Fix the arguments and call again.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:_check_arguments",
    "status": "reviewed",
@@ -925,7 +975,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 140,
+   "line": 141,
    "text": "`INCOMPLETE - not everything was checked:` (inside a successful result) - Part of the run did not happen.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.check_spec_drift",
    "status": "reviewed",
@@ -933,7 +983,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 140,
+   "line": 141,
    "text": "Say so; never present the run as a clean result.",
    "code": null,
    "status": "excluded",
@@ -942,7 +992,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 141,
+   "line": 142,
    "text": "`<map> is not valid JSON: ...",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -950,7 +1000,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 141,
+   "line": 142,
    "text": "A trailing comma or a missing quote is the usual cause.` | Fix the JSON.",
    "code": null,
    "status": "excluded",
@@ -959,7 +1009,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 142,
+   "line": 143,
    "text": "`the server is shutting down` - The session is ending.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.shutdown",
    "status": "reviewed",
@@ -967,7 +1017,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 146,
+   "line": 147,
    "text": "Checks that the map still fits the spec and the code: every reference resolves, nothing is stale, and — with `strict`, the default — every spec sentence is either mapped or marked excluded with a reason.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.validate_spec_map",
    "status": "reviewed",
@@ -975,7 +1025,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 152,
+   "line": 153,
    "text": "`strict` - boolean - `true` - Also report unmapped sentences, unreviewed entries, exclusions without a `why`, and entries whose spec text may have changed.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:SPEC_DRIFT_TOOLS",
    "status": "reviewed",
@@ -983,7 +1033,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 153,
+   "line": 154,
    "text": "`map` - string - the project's only `*spec_map.json` - The map to validate, relative to the project.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.resolve_map",
    "status": "reviewed",
@@ -991,7 +1041,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 154,
+   "line": 155,
    "text": "`project` - string - see above - Absolute path of the project.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.use_project",
    "status": "reviewed",
@@ -999,7 +1049,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 164,
+   "line": 165,
    "text": "If anything is wrong, the last line is replaced by a `PROBLEMS (n) - fix these; the map is not ready:` block listing each one.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.validate_spec_map",
    "status": "reviewed",
@@ -1007,7 +1057,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 164,
+   "line": 165,
    "text": "With `strict: false` the same findings appear as `note:` lines instead and do not make the map unready.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.validate_spec_map",
    "status": "reviewed",
@@ -1015,7 +1065,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 168,
+   "line": 169,
    "text": "Structured fields:** `project`, `map`, `ready` (boolean — no problems), `entries_to_check`, `excluded`, `full_check_cost_usd`, `problems` (array), `notes` (array; empty when `strict` is true, because the notes have become problems).",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.validate_spec_map",
    "status": "reviewed",
@@ -1023,7 +1073,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 172,
+   "line": 173,
    "text": "The time is the indexing time, which the tool prints — under a second on a small project, about 2 s to re-read a 16,000-file repository once the server is warm (about 20 s the first time).",
    "code": null,
    "status": "excluded",
@@ -1032,7 +1082,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 176,
+   "line": 177,
    "text": "Errors:** the map-resolution and `project` errors from the table above.",
    "code": null,
    "status": "excluded",
@@ -1041,7 +1091,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 176,
+   "line": 177,
    "text": "Note that a problem in one entry is reported, not raised: the tool still returns, with the entry listed and not counted as ready.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1049,7 +1099,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 182,
+   "line": 183,
    "text": "Shows exactly what `check_spec_drift` would send to TypeSafe for some claims: the sentence, the code with comments removed and secrets redacted, any values the tool worked out, and the three fixed questions.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_spec_check",
    "status": "reviewed",
@@ -1057,7 +1107,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 182,
+   "line": 183,
    "text": "Use it to show a user what consent covers.",
    "code": null,
    "status": "excluded",
@@ -1066,7 +1116,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 188,
+   "line": 189,
    "text": "`files` - array of strings - the files git reports as changed - Claims about these files.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:SPEC_DRIFT_TOOLS",
    "status": "reviewed",
@@ -1074,7 +1124,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 189,
+   "line": 190,
    "text": "`line` - integer - — - Only the claim(s) from this line of the spec.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:SPEC_DRIFT_TOOLS",
    "status": "reviewed",
@@ -1082,7 +1132,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 190,
+   "line": 191,
    "text": "`map` - string - the project's only `*spec_map.json` - The map, relative to the project.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.resolve_map",
    "status": "reviewed",
@@ -1090,7 +1140,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 191,
+   "line": 192,
    "text": "`project` - string - see above - Absolute path of the project.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.use_project",
    "status": "reviewed",
@@ -1098,7 +1148,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 193,
+   "line": 194,
    "text": "Give `line` alone, `files` alone, both (line first, then narrowed by file), or neither (the changed files).",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_spec_check",
    "status": "reviewed",
@@ -1106,7 +1156,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 196,
+   "line": 197,
    "text": "Text:** the model name and the three questions as JSON, then one block per claim:",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_spec_check",
    "status": "reviewed",
@@ -1114,7 +1164,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 206,
+   "line": 207,
    "text": "No structured output — this tool returns text only.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_spec_check",
    "status": "reviewed",
@@ -1122,7 +1172,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 208,
+   "line": 209,
    "text": "If nothing matches, it returns `no claim matches (a line number is the spec line; files are paths relative to the project).` — check the line number is the one in the spec, not in the map.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_spec_check",
    "status": "reviewed",
@@ -1130,7 +1180,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 213,
+   "line": 214,
    "text": "Sets up a project that has no map: suggests a code location for every sentence of the spec and writes them to a new map file for review.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.draft_spec_map",
    "status": "reviewed",
@@ -1138,7 +1188,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 218,
+   "line": 219,
    "text": "`docs` - array of strings - **yes** - The spec file(s) or folder(s), relative to the project.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:SPEC_DRIFT_TOOLS",
    "status": "reviewed",
@@ -1146,7 +1196,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 218,
+   "line": 219,
    "text": "A folder is searched for `.md` and `.rst`.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:draft_map",
    "status": "reviewed",
@@ -1154,7 +1204,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 219,
+   "line": 220,
    "text": "`out` - string - **yes** - The new map file, relative to the project — usually next to the spec, named `spec_map.json`.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:SPEC_DRIFT_TOOLS",
    "status": "reviewed",
@@ -1162,7 +1212,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 220,
+   "line": 221,
    "text": "`project` - string - no - Absolute path of the project.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.use_project",
    "status": "reviewed",
@@ -1170,7 +1220,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 222,
+   "line": 223,
    "text": "Text:** the index line, then the drafter's own report — how many sentences were written, how many named a route, config key or code in backticks (usually right), how many are word-overlap guesses (often wrong, with their line numbers), how many got no suggestion — and then:",
    "code": "plugins/jevmcp/scripts/spec_drift.py:draft_map",
    "status": "reviewed",
@@ -1178,7 +1228,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 231,
+   "line": 232,
    "text": "No structured output — text only.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.draft_spec_map",
    "status": "reviewed",
@@ -1186,7 +1236,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 233,
+   "line": 234,
    "text": "Errors:** `X already exists and may hold a reviewed map - nothing was written.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.draft_spec_map",
    "status": "reviewed",
@@ -1194,7 +1244,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 233,
+   "line": 234,
    "text": "Draft into a new file and compare.` · `spec not found in the project:",
    "code": null,
    "status": "excluded",
@@ -1203,7 +1253,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 233,
+   "line": 234,
    "text": "X` · `no .md or .rst files in X` · `X is outside the project - refused`.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.draft_spec_map",
    "status": "reviewed",
@@ -1211,7 +1261,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 237,
+   "line": 238,
    "text": "Reviewing the entries it writes is your job and the user's, not the drafter's.",
    "code": null,
    "status": "excluded",
@@ -1220,7 +1270,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 246,
+   "line": 247,
    "text": "Name - `spec-drift` (in Claude Code:",
    "code": null,
    "status": "excluded",
@@ -1229,7 +1279,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 248,
+   "line": 249,
    "text": "Cost in context - about 230 tokens always loaded; the body (~3k tokens) only when it fires",
    "code": null,
    "status": "excluded",
@@ -1238,7 +1288,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 250,
+   "line": 251,
    "text": "When it fires.** On its own, from the frontmatter description — no one has to mention the plugin.",
    "code": null,
    "status": "excluded",
@@ -1247,7 +1297,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 250,
+   "line": 251,
    "text": "It is written to trigger when the user asks whether code matches the spec, design or requirements; after you change code in a project that has a `*spec_map.json`, before you say the task is done; when a spec is edited; before a release; or when asked to set spec-drift checking up.",
    "code": null,
    "status": "excluded",
@@ -1256,7 +1306,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 250,
+   "line": 251,
    "text": "In testing, three neutral Codex prompts and a headless Claude Code run all loaded it unprompted, while a control prompt (\"What does this project do?\") did not.",
    "code": null,
    "status": "excluded",
@@ -1265,7 +1315,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 257,
+   "line": 258,
    "text": "What it makes you do**, in short:",
    "code": null,
    "status": "excluded",
@@ -1274,7 +1324,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 259,
+   "line": 260,
    "text": "Let the fast model screen everything; spend your own effort only on what it flags.",
    "code": null,
    "status": "excluded",
@@ -1283,7 +1333,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 259,
+   "line": 260,
    "text": "Do not re-read the whole spec and codebase to do its job, and never call the TypeSafe API by hand.",
    "code": null,
    "status": "excluded",
@@ -1292,7 +1342,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 261,
+   "line": 262,
    "text": "Get the user's consent once per project before the first real check, because code leaves the machine.",
    "code": null,
    "status": "excluded",
@@ -1301,7 +1351,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 261,
+   "line": 262,
    "text": "The free tools need no consent.",
    "code": null,
    "status": "excluded",
@@ -1310,7 +1360,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 263,
+   "line": 264,
    "text": "Never print, ask for, or pass the API key.",
    "code": null,
    "status": "excluded",
@@ -1319,7 +1369,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 264,
+   "line": 265,
    "text": "Set a new project up in the order: find the spec → `--dry-run` to see what the tool can read → `draft_spec_map` → **review every entry** → `validate_spec_map` → with consent, the first full check.",
    "code": null,
    "status": "excluded",
@@ -1328,7 +1378,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 267,
+   "line": 268,
    "text": "Treat `??` as \"not a pass\", never as a pass.",
    "code": null,
    "status": "excluded",
@@ -1337,7 +1387,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 268,
+   "line": 269,
    "text": "Judge four things yourself whatever the label: settings hard-coded in code, library and platform behaviour, arithmetic on variables, and anything spanning several files.",
    "code": null,
    "status": "excluded",
@@ -1346,7 +1396,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 270,
+   "line": 271,
    "text": "Report back as a short table — claim (file:line) · label · P(drifted) · what you found · which side to fix — then a recommendation.",
    "code": null,
    "status": "excluded",
@@ -1355,7 +1405,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 272,
+   "line": 273,
    "text": "Never block the user's task because TypeSafe was unavailable, and never report \"no drift\" from a run that could not reach it.",
    "code": null,
    "status": "excluded",
@@ -1364,7 +1414,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 275,
+   "line": 276,
    "text": "Read the skill itself before a real job; this is a summary of it, not a replacement.",
    "code": null,
    "status": "excluded",
@@ -1373,7 +1423,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 281,
+   "line": 282,
    "text": "`spec_map.json` lives in the project, next to the spec, and is committed with the code.",
    "code": null,
    "status": "excluded",
@@ -1382,7 +1432,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 281,
+   "line": 282,
    "text": "It pairs each sentence of the spec with the code that implements it.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1390,7 +1440,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 284,
+   "line": 285,
    "text": "Why it exists.** Without it, checking a spec would mean sending the whole repository to a model for every sentence.",
    "code": null,
    "status": "excluded",
@@ -1399,7 +1449,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 284,
+   "line": 285,
    "text": "With it, the fast model gets one requirement and the few lines that enforce it — which is what makes a check take seconds and cost fractions of a cent.",
    "code": null,
    "status": "excluded",
@@ -1408,7 +1458,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 288,
+   "line": 289,
    "text": "Who writes it.** `draft_spec_map` (or `--draft-map`) writes it.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.draft_spec_map",
    "status": "reviewed",
@@ -1416,7 +1466,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 288,
+   "line": 289,
    "text": "The user never writes it by hand.",
    "code": null,
    "status": "excluded",
@@ -1425,7 +1475,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 288,
+   "line": 289,
    "text": "Every entry must then be reviewed by you and the user before a check is worth running.",
    "code": null,
    "status": "excluded",
@@ -1434,7 +1484,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 311,
+   "line": 312,
    "text": "A bare JSON list of entries also loads, but `draft_spec_map` writes the object form, and `_readme` explains every field inside the file itself.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1442,7 +1492,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 318,
+   "line": 319,
    "text": "`spec` - The spec file the sentence came from, relative to the project.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1450,7 +1500,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 319,
+   "line": 320,
    "text": "`line` - Its line in that file.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1458,7 +1508,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 319,
+   "line": 320,
    "text": "If the sentence moves, the tool finds it again and reports the new line.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1466,7 +1516,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 320,
+   "line": 321,
    "text": "`text` - The requirement that will be checked, and the only thing sent from the spec.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_state",
    "status": "reviewed",
@@ -1474,7 +1524,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 320,
+   "line": 321,
    "text": "Edit it only to make it clearer.",
    "code": null,
    "status": "excluded",
@@ -1483,7 +1533,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 321,
+   "line": 322,
    "text": "`code` - Where the code for it is: one reference, or a list of several (see below).",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1491,7 +1541,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 322,
+   "line": 323,
    "text": "`status` - `reviewed` or `excluded` once a human has decided.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1499,7 +1549,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 322,
+   "line": 323,
    "text": "Before that the drafter writes `named in the sentence`, `suggested`, or `NO MATCH - fill in the code or delete this entry`.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:draft_map",
    "status": "reviewed",
@@ -1507,7 +1557,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 323,
+   "line": 324,
    "text": "`why` - Your note: why this code, or why the sentence is excluded.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1515,7 +1565,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 324,
+   "line": 325,
    "text": "`spec_text` - A snapshot of the spec text as reviewed, used only to notice when the spec changes afterwards.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1523,7 +1573,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 324,
+   "line": 325,
    "text": "Optional but strongly worth having.",
    "code": null,
    "status": "excluded",
@@ -1532,7 +1582,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 324,
+   "line": 325,
    "text": "Markdown and line breaks are fine.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1540,7 +1590,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 325,
+   "line": 326,
    "text": "`alternatives` - Other candidates the drafter found, for information.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:draft_map",
    "status": "reviewed",
@@ -1548,7 +1598,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 329,
+   "line": 330,
    "text": "`reviewed`** — someone has checked that `code` points at what actually enforces the sentence.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1556,7 +1606,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 329,
+   "line": 330,
    "text": "Point at the implementation, not only the interface; at the constant, so the value is visible; at the wiring, when the claim is about which piece is used.",
    "code": null,
    "status": "excluded",
@@ -1565,7 +1615,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 332,
+   "line": 333,
    "text": "`excluded`** — the sentence is not a requirement (rationale, history, plans, comparisons, glossary, examples, lead-ins).",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1573,7 +1623,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 332,
+   "line": 333,
    "text": "It needs no `code`, is never sent, and records that someone decided, so the strict check does not report the sentence as unchecked.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1581,7 +1631,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 332,
+   "line": 333,
    "text": "A backlog or rationale sentence that constrains today's code *is* a requirement.",
    "code": null,
    "status": "excluded",
@@ -1590,7 +1640,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 341,
+   "line": 342,
    "text": "Route - `route:GET /api/orders/{id}` - The endpoint's handler, wherever it lives.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1598,7 +1648,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 342,
+   "line": 343,
    "text": "Config key - `config:app.orders.max-items` - The setting's definitions, defaults, and every place that names the key (`@Value`, `process.env.X`, `os.environ[...]`).",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1606,7 +1656,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 342,
+   "line": 343,
    "text": "Uses through a settings object are **not** found, so point at the code that enforces the setting as well.",
    "code": null,
    "status": "excluded",
@@ -1615,7 +1665,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 343,
+   "line": 344,
    "text": "Symbol in a file - `src/Orders.java:OrderService.place` - A method, class, function or constant.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1623,7 +1673,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 344,
+   "line": 345,
    "text": "Line range - `src/app.ts:120-160` - Those lines — works for any language, including ones with no parser.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1631,7 +1681,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 345,
+   "line": 346,
    "text": "Whole file - `src/config.py` - The whole file.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1639,7 +1689,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 346,
+   "line": 347,
    "text": "A list - `[\"app/settings.py:MAX\", \"app/services.py:place\"]` - All of the above, together.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1647,7 +1697,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 348,
+   "line": 349,
    "text": "File paths are looked up from the folder the checker runs in, then `--src`, then the map's own folder.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1655,7 +1705,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 348,
+   "line": 349,
    "text": "A `.env` file, a key or certificate file (`.pem`, `.key`, `.p12`, `.jks`, `.pfx`, `id_rsa`, `id_ed25519`, `id_ecdsa`), or anything outside those folders is **refused** — a map can never be used to send a secret.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:_SECRET_FILE",
    "status": "reviewed",
@@ -1663,7 +1713,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 348,
+   "line": 349,
    "text": "`.env.example`-style templates are read as configuration.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:_ENV_TEMPLATES",
    "status": "reviewed",
@@ -1671,7 +1721,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 348,
+   "line": 349,
    "text": "Whatever is sent per claim is capped at 2,600 characters.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:MAX_CODE_CHARS",
    "status": "reviewed",
@@ -1679,7 +1729,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 354,
+   "line": 355,
    "text": "Named symbols are found by name in Python, Java, JavaScript and TypeScript; every other language is paired by line range.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:TREE_SITTER",
    "status": "reviewed",
@@ -1687,7 +1737,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 359,
+   "line": 360,
    "text": "Both run the same checks.",
    "code": null,
    "status": "excluded",
@@ -1696,7 +1746,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 359,
+   "line": 360,
    "text": "These make the map \"not ready\":",
    "code": null,
    "status": "excluded",
@@ -1705,7 +1755,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 363,
+   "line": 364,
    "text": "`N sentences in <spec> are not in the map, so NOT checked: lines ...` - A spec sentence is neither mapped nor excluded.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1713,7 +1763,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 364,
+   "line": 365,
    "text": "`N map entries are not marked \"status\": \"reviewed\"` - A real run would check the drafter's guesses as they are.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1721,7 +1771,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 365,
+   "line": 366,
    "text": "`N excluded entries do not say why (lines ...)` - An exclusion without a reason is not a decision.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1729,7 +1779,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 366,
+   "line": 367,
    "text": "`the spec changed since this entry was reviewed - NOT checked` - `spec_text` no longer matches the spec.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1737,7 +1787,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 366,
+   "line": 367,
    "text": "Re-read the entry, update `text` if the requirement changed, and paste the current paragraph into `spec_text`.",
    "code": null,
    "status": "excluded",
@@ -1746,7 +1796,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 367,
+   "line": 368,
    "text": "`N excluded sentences have changed in the spec (were at lines ...)` - Rewording can turn rationale into a rule.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1754,7 +1804,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 368,
+   "line": 369,
    "text": "`N entries have no spec_text and their text is not word-for-word in the spec` - A spec change cannot be ruled out.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1762,7 +1812,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 368,
+   "line": 369,
    "text": "Paste the paragraph into `spec_text`.",
    "code": null,
    "status": "excluded",
@@ -1771,7 +1821,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 369,
+   "line": 370,
    "text": "`map entry N has no \"code\" - NOT checked` - Fill it in, or exclude the sentence with a `why`.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1779,7 +1829,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 370,
+   "line": 371,
    "text": "`map entry N - NOT checked: k of m code reference(s) could not be resolved` - A rename or a move.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1787,7 +1837,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 370,
+   "line": 371,
    "text": "The output names the closest match it found.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1795,7 +1845,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 371,
+   "line": 372,
    "text": "`map entry N: spec file 'X' not found - NOT checked` - The `spec` path is relative to where the checker runs.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:load_map",
    "status": "reviewed",
@@ -1803,7 +1853,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 373,
+   "line": 374,
    "text": "Never delete an entry or blank a `spec_text` to make the strict check pass, and never change an exclusion without saying so in your report.",
    "code": null,
    "status": "excluded",
@@ -1812,7 +1862,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 380,
+   "line": 381,
    "text": "Every claim gets exactly one label.",
    "code": null,
    "status": "excluded",
@@ -1821,7 +1871,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 380,
+   "line": 381,
    "text": "The thresholds are fixed in the source and are not configurable on purpose: they were measured over repeated identical calls.",
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:ACT_ABOVE",
@@ -1832,7 +1882,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 385,
+   "line": 386,
    "text": "DRIFT** - The model says the code and the sentence disagree, with confidence **≥ 0.905** - Investigate **every one**.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:ACT_ABOVE",
    "status": "reviewed",
@@ -1840,7 +1890,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 385,
+   "line": 386,
    "text": "Read the claim and the code that was sent, then the real code around it.",
    "code": null,
    "status": "excluded",
@@ -1849,7 +1899,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 385,
+   "line": 386,
    "text": "Decide which side is wrong — `git log -p` and `git blame` usually show whether the change was deliberate (the spec is stale) or accidental (a bug).",
    "code": null,
    "status": "excluded",
@@ -1858,7 +1908,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 386,
+   "line": 387,
    "text": "review** - It leans one way but is not sure enough: a \"drifted\" below 0.905, or an \"accurate\" below 0.987, or a confident \"accurate\" contradicted by a stated value (`value_mismatch ≥ 0.70`) - Sorted by P(drifted).",
    "code": "plugins/jevmcp/scripts/spec_drift.py:CLEAN_ABOVE",
    "status": "reviewed",
@@ -1866,7 +1916,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 386,
+   "line": 387,
    "text": "Investigate from **0.3** up; skim below that.",
    "code": null,
    "status": "excluded",
@@ -1875,7 +1925,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 387,
+   "line": 388,
    "text": "??** - The model answered `not_enough_information` or `unrelated` - **Not a pass.** The code shown cannot settle the claim.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:check_claims",
    "status": "reviewed",
@@ -1883,7 +1933,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 387,
+   "line": 388,
    "text": "Fix that map entry — add the implementation, the constant, the caller — then check again.",
    "code": null,
    "status": "excluded",
@@ -1892,7 +1942,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 388,
+   "line": 389,
    "text": "ok** - \"Accurate\" at confidence **≥ 0.987**, with no value conflict - Spot-check a couple, plus any whose `value_mismatch` is 0.5 or more.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:CLEAN_ABOVE",
    "status": "reviewed",
@@ -1900,7 +1950,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 390,
+   "line": 391,
    "text": "A low-confidence \"accurate\" is not a clean bill of health, which is why it lands in `review` rather than `ok`.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:CLEAN_ABOVE",
    "status": "reviewed",
@@ -1908,7 +1958,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 390,
+   "line": 391,
    "text": "And `??` is not a threshold at all — it is the model declining to judge.",
    "code": null,
    "status": "excluded",
@@ -1917,7 +1967,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 393,
+   "line": 394,
    "text": "Known blind spots — judge these yourself whatever the label:** settings hard-coded in code (a dict or `Map.of(...)` literal reads as configuration); library and framework behaviour; arithmetic on variables (only literal expressions are worked out for the model); and anything spanning several files, such as \"only X calls Y\".",
    "code": null,
    "status": "excluded",
@@ -1926,7 +1976,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 393,
+   "line": 394,
    "text": "A low P(drifted) on one of these is not a pass.",
    "code": null,
    "status": "excluded",
@@ -1935,7 +1985,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 402,
+   "line": 403,
    "text": "`scripts/spec_drift.py` runs the same checks, the same questions and the same thresholds as the MCP tools — both call the same code, so they judge identically.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:main",
    "status": "reviewed",
@@ -1943,7 +1993,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 414,
+   "line": 415,
    "text": "`--docs PATH [PATH ...]` - The spec:",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -1951,7 +2001,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 414,
+   "line": 415,
    "text": "Pairs only sentences that name code in backticks; everything else is listed as not checked.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:find_claims",
    "status": "reviewed",
@@ -1959,7 +2009,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 415,
+   "line": 416,
    "text": "`--map FILE` - A reviewed map.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -1967,7 +2017,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 415,
+   "line": 416,
    "text": "Use this to check every requirement, not only the ones that name code.",
    "code": null,
    "status": "excluded",
@@ -1976,7 +2026,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 415,
+   "line": 416,
    "text": "`--docs` and `--map` are alternatives, never both.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -1984,7 +2034,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 416,
+   "line": 417,
    "text": "`--src DIR` - Folder to read the code from.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -1992,7 +2042,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 417,
+   "line": 418,
    "text": "`--ignore NAME [NAME ...]` - More folder names to skip, on top of the defaults.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2000,7 +2050,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 418,
+   "line": 419,
    "text": "`--no-default-ignore` - Skip only what `--ignore` names (defaults include `.venv`, `node_modules`, `.git`, `build`, `dist`, `target`, `coverage`, `.idea`, `.claude`, `.agents`, `.cursor`).",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2008,7 +2058,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 419,
+   "line": 420,
    "text": "`--dry-run` - Show every claim, its paired code, how much would be sent, and the estimated cost.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2016,7 +2066,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 419,
+   "line": 420,
    "text": "Exit 2 if anything is wrong with the map, so it doubles as a map check in CI.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2024,7 +2074,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 420,
+   "line": 421,
    "text": "`--show-payload` - With `--dry-run`, also print exactly what would be sent for each claim.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2032,7 +2082,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 421,
+   "line": 422,
    "text": "`--strict` - Also fail (exit 2) on unchecked spec sentences, unreviewed entries, entries that may be stale, exclusions with no `why`, and exclusions whose sentence has changed.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2040,7 +2090,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 422,
+   "line": 423,
    "text": "`--draft-map FILE` - Write a first-draft map (with its own `_readme`) and stop.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2048,7 +2098,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 423,
+   "line": 424,
    "text": "`--out FILE` - Where results go.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2056,7 +2106,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 423,
+   "line": 424,
    "text": "Default `drift.json`; an existing file is overwritten.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2064,7 +2114,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 423,
+   "line": 424,
    "text": "With `--dry-run` it writes the plan instead — a CI artefact that costs nothing.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2072,7 +2122,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 424,
+   "line": 425,
    "text": "`--changed [FILE ...]` - Check only claims whose paired code is in these files.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2080,7 +2130,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 424,
+   "line": 425,
    "text": "With no file given: what git reports as changed or new (`git diff HEAD`, plus untracked).",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2088,7 +2138,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 425,
+   "line": 426,
    "text": "`--jobs N` - Claims asked about at once.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2096,7 +2146,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 425,
+   "line": 426,
    "text": "Default 4 on the command line (the MCP server uses 8).",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2104,7 +2154,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 426,
+   "line": 427,
    "text": "`--limit N` - Check only the first N claims, in spec order — a cheap first try.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2112,7 +2162,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 427,
+   "line": 428,
    "text": "`--key-file FILE` - Read `TYPESAFE_API_KEY=...` from this file and nothing else.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
    "status": "reviewed",
@@ -2121,6 +2171,57 @@
   {
    "spec": "plugins/jevmcp/docs/tools.md",
    "line": 429,
+   "text": "`--samples N` - How many times to ask about a claim the first answer did not settle.",
+   "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
+   "status": "reviewed",
+   "spec_text": "| --samples n | how many times to ask about a claim the first answer did not settle. default 3; 1 never re-asks. a claim is decided by agreement only when every answer matches and none is below 0.85 confidence. claims the first answer already settled are never asked again. |"
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 429,
+   "text": "Default 3; 1 never re-asks.",
+   "code": "plugins/jevmcp/scripts/spec_drift.py:SAMPLES",
+   "status": "reviewed",
+   "spec_text": "| --samples n | how many times to ask about a claim the first answer did not settle. default 3; 1 never re-asks. a claim is decided by agreement only when every answer matches and none is below 0.85 confidence. claims the first answer already settled are never asked again. |"
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 429,
+   "text": "A claim is decided by agreement only when every answer matches and none is below 0.85 confidence.",
+   "code": "plugins/jevmcp/scripts/spec_drift.py:classify_samples",
+   "status": "reviewed",
+   "spec_text": "| --samples n | how many times to ask about a claim the first answer did not settle. default 3; 1 never re-asks. a claim is decided by agreement only when every answer matches and none is below 0.85 confidence. claims the first answer already settled are never asked again. |"
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 429,
+   "text": "Claims the first answer already settled are never asked again.",
+   "code": "plugins/jevmcp/scripts/spec_drift.py:check_claims",
+   "status": "reviewed",
+   "spec_text": "| --samples n | how many times to ask about a claim the first answer did not settle. default 3; 1 never re-asks. a claim is decided by agreement only when every answer matches and none is below 0.85 confidence. claims the first answer already settled are never asked again. |"
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 430,
+   "text": "`--no-cache` - Ask again even for sentences and code that have not changed.",
+   "code": "plugins/jevmcp/scripts/spec_drift.py:build_parser",
+   "status": "reviewed",
+   "spec_text": "| --no-cache | ask again even for sentences and code that have not changed. answers are cached in ~/.cache/jevmcp/verdicts.json as digests only, never your code. |"
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 430,
+   "text": "Answers are cached in `~/.cache/jevmcp/verdicts.json` as digests only, never your code.",
+   "code": [
+    "plugins/jevmcp/scripts/spec_drift.py:CACHE_FILE",
+    "plugins/jevmcp/scripts/spec_drift.py:_cache_key"
+   ],
+   "status": "reviewed",
+   "spec_text": "| --no-cache | ask again even for sentences and code that have not changed. answers are cached in ~/.cache/jevmcp/verdicts.json as digests only, never your code. |"
+  },
+  {
+   "spec": "plugins/jevmcp/docs/tools.md",
+   "line": 432,
    "text": "Paths are relative to the folder you run from, so run it from the project root.",
    "code": null,
    "status": "excluded",
@@ -2129,7 +2230,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 429,
+   "line": 432,
    "text": "Write results to a temporary folder, not into the repository.",
    "code": null,
    "status": "excluded",
@@ -2138,7 +2239,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 436,
+   "line": 439,
    "text": "0** - Every claim was checked; no DRIFT - Report the result.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2146,7 +2247,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 437,
+   "line": 440,
    "text": "1** - Every claim was checked; at least one DRIFT - Investigate each DRIFT.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2154,7 +2255,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 438,
+   "line": 441,
    "text": "2** - Fix the setup: usage error, missing key or parsers, a map entry that cannot be resolved or is stale — and with `--strict` also unmapped sentences, unreviewed entries, exclusions with no `why` - Fix it.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2162,7 +2263,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 438,
+   "line": 441,
    "text": "In CI this should fail the job.",
    "code": null,
    "status": "excluded",
@@ -2171,7 +2272,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 439,
+   "line": 442,
    "text": "3** - TypeSafe could not be used (outage, errors, credits used up) - Not the code's fault.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2179,7 +2280,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 439,
+   "line": 442,
    "text": "Results produced so far are still written.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2187,7 +2288,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 439,
+   "line": 442,
    "text": "Say the check did not complete — **never report \"no drift\" from an exit-3 run** — and do not block on it.",
    "code": null,
    "status": "excluded",
@@ -2196,7 +2297,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 441,
+   "line": 444,
    "text": "`review` and `??` never change the exit code.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2204,7 +2305,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 441,
+   "line": 444,
    "text": "With `--limit`, the codes cover only the claims checked.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:run",
    "status": "reviewed",
@@ -2212,7 +2313,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 448,
+   "line": 451,
    "text": "Inside an agent session, any client - **The MCP tools.** They keep the parsed code in memory and hold the key themselves.",
    "code": null,
    "status": "excluded",
@@ -2221,7 +2322,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 449,
+   "line": 452,
    "text": "Inside a Codex session - **The MCP tools only.** Codex's sandbox has no network, so a fall-back to the command line silently reaches nothing and reports no drift.",
    "code": null,
    "status": "excluded",
@@ -2230,7 +2331,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 449,
+   "line": 452,
    "text": "The MCP server runs outside the sandbox, which is why the tools work.",
    "code": null,
    "status": "excluded",
@@ -2239,7 +2340,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 450,
+   "line": 453,
    "text": "CI, or any unattended run - **The command line**, where the network works.",
    "code": null,
    "status": "excluded",
@@ -2248,7 +2349,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 450,
+   "line": 453,
    "text": "It is simpler and safer than forcing MCP approvals through.",
    "code": null,
    "status": "excluded",
@@ -2257,7 +2358,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 451,
+   "line": 454,
    "text": "A one-off from a human's terminal - Either.",
    "code": null,
    "status": "excluded",
@@ -2266,7 +2367,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 453,
+   "line": 456,
    "text": "The command line reads a `TYPESAFE_API_KEY=` line from the `.env` of the folder it runs in; the MCP server never does, so a cloned project cannot supply a key.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:_load_key",
    "status": "reviewed",
@@ -2274,7 +2375,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 460,
+   "line": 463,
    "text": "The server enforces two limits, both per rolling minute, both set when the client starts it:",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.rate_limit",
    "status": "reviewed",
@@ -2282,7 +2383,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 464,
+   "line": 467,
    "text": "`check_spec_drift` calls - 20 a minute - `--max-checks-per-minute N` (0 = no limit) - Each check spends TypeSafe credits; this stops a runaway loop.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.rate_limit",
    "status": "reviewed",
@@ -2290,7 +2391,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 465,
+   "line": 468,
    "text": "Tool calls of any kind - 120 a minute - `--max-calls-per-minute N` (0 = no limit) - Each call may re-read a large project.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.rate_limit",
    "status": "reviewed",
@@ -2298,7 +2399,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 467,
+   "line": 470,
    "text": "When you hit one, the error says how many seconds to wait.",
    "code": "plugins/jevmcp/scripts/jevmcp_server.py:Server.rate_limit",
    "status": "reviewed",
@@ -2306,7 +2407,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 467,
+   "line": 470,
    "text": "Do not retry in a tight loop — check more files in one call instead.",
    "code": null,
    "status": "excluded",
@@ -2315,7 +2416,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 474,
+   "line": 477,
    "text": "If you are an agent, do this first: 1.",
    "code": null,
    "status": "excluded",
@@ -2324,7 +2425,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 474,
+   "line": 477,
    "text": "Pass `project`** — the absolute path of your working directory — in every tool call.",
    "code": null,
    "status": "excluded",
@@ -2333,7 +2434,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 475,
+   "line": 478,
    "text": "If you are an agent, do this first: 2.",
    "code": null,
    "status": "excluded",
@@ -2342,7 +2443,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 475,
+   "line": 478,
    "text": "Read [`SKILL.md`](../skills/spec-drift/SKILL.md)** before a real job; this page is the reference, that is the procedure.",
    "code": null,
    "status": "excluded",
@@ -2351,7 +2452,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 477,
+   "line": 480,
    "text": "If you are an agent, do this first: 3.",
    "code": null,
    "status": "excluded",
@@ -2360,7 +2461,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 477,
+   "line": 480,
    "text": "Look for `*spec_map.json` in the project.** No map?",
    "code": null,
    "status": "excluded",
@@ -2369,7 +2470,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 477,
+   "line": 480,
    "text": "The project is not set up: go to `draft_spec_map` and the review step, not to `check_spec_drift`.",
    "code": null,
    "status": "excluded",
@@ -2378,7 +2479,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 479,
+   "line": 482,
    "text": "If you are an agent, do this first: 4.",
    "code": null,
    "status": "excluded",
@@ -2387,7 +2488,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 479,
+   "line": 482,
    "text": "Run `validate_spec_map` first.** It is free, it tells you whether a check is worth running, and it tells you what a full check would cost.",
    "code": null,
    "status": "excluded",
@@ -2396,7 +2497,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 481,
+   "line": 484,
    "text": "If you are an agent, do this first: 5.",
    "code": null,
    "status": "excluded",
@@ -2405,7 +2506,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 481,
+   "line": 484,
    "text": "Get consent before the first `check_spec_drift` in a project**, because code leaves the machine.",
    "code": null,
    "status": "excluded",
@@ -2414,7 +2515,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 481,
+   "line": 484,
    "text": "Use `preview_spec_check` to show exactly what would go.",
    "code": null,
    "status": "excluded",
@@ -2423,7 +2524,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 481,
+   "line": 484,
    "text": "Both free tools need no consent.",
    "code": null,
    "status": "excluded",
@@ -2432,7 +2533,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 484,
+   "line": 487,
    "text": "If you are an agent, do this first: 6.",
    "code": null,
    "status": "excluded",
@@ -2441,7 +2542,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 484,
+   "line": 487,
    "text": "Never ask for, print or pass the API key**, and never run the `--set-key` command yourself — pass it to the user for their own terminal.",
    "code": null,
    "status": "excluded",
@@ -2450,7 +2551,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 486,
+   "line": 489,
    "text": "If you are an agent, do this first: 7.",
    "code": null,
    "status": "excluded",
@@ -2459,7 +2560,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 486,
+   "line": 489,
    "text": "Default to the changed files.** Use `all: true` only for a release or a first full check.",
    "code": null,
    "status": "excluded",
@@ -2468,7 +2569,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 487,
+   "line": 490,
    "text": "If you are an agent, do this first: 8.",
    "code": null,
    "status": "excluded",
@@ -2477,7 +2578,7 @@
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
-   "line": 487,
+   "line": 490,
    "text": "Treat `??` as unfinished work, not a pass**, and never report \"no drift\" from a run that could not reach TypeSafe.",
    "code": null,
    "status": "excluded",

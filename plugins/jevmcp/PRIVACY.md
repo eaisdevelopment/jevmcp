@@ -64,4 +64,8 @@ project.
 - Command line: the results, including the exact code sent, in `drift.json` in the folder you run
   it from (or `--out FILE`); `--dry-run --out FILE` writes the plan of what would be sent.
 - The spec map you create, in your project — you decide whether to commit it.
+- Answers from earlier checks, in `~/.cache/jevmcp/verdicts.json` (`$XDG_CACHE_HOME` is
+  respected), so a claim whose sentence and code have not changed is not paid for twice. It holds
+  a SHA-256 digest of each request and the model's answers - never your code, never your spec text,
+  never your API key. Delete the file to clear it, or pass `--no-cache` to ignore it.
 - The Python dependencies, in uv's cache.

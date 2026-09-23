@@ -1,5 +1,5 @@
-<!-- Generated 2026-09-23 from the shipped plugin, jevmcp 1.5.3.
-     Verbatim sources: plugins/jevmcp/skills/spec-drift/SKILL.md (sha256 413773695c920bdd...),
+<!-- Generated 2026-09-23 from the shipped plugin, jevmcp 1.6.0.
+     Verbatim sources: plugins/jevmcp/skills/spec-drift/SKILL.md (sha256 9e046879687110e0...),
      tools/jevmcp_server.py (INSTRUCTIONS and TOOLS).
      Everything quoted is verbatim unless the text says it was reflowed. -->
 
@@ -198,7 +198,7 @@ never block the user's task on it.
 |---|---|
 | **DRIFT** | Investigate every one. Read the claim and the code that was sent, then the real code around it. Decide which side is wrong: the history of the code (`git log -p`, `git blame`) usually shows whether the change was deliberate (the spec is stale) or accidental (a bug). |
 | **review** | Sorted by P(drifted). Investigate from 0.3 up; skim below that. |
-| **??** | **Not a pass.** The code shown cannot settle the claim. Fix the map entry (add the implementation, the constant, the caller), then check that file again. |
+| **??** | **Not a pass.** The code shown cannot settle the claim. Fix the map entry (add the implementation, the constant, the caller), then check that file again. The result's `map_health.entries_to_fix` says why each one could not be settled and, where the sentence's own words suggest one, what to pair it with instead. |
 | **ok** | Spot-check two, plus any whose `value_mismatch` is 0.5 or more. |
 
 ## Always judge these yourself: the fast model's blind spots

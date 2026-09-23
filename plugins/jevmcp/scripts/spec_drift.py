@@ -51,6 +51,7 @@ import functools
 import heapq
 import importlib
 import io
+import hashlib
 import json
 import os
 import re
@@ -74,6 +75,8 @@ ACT_ABOVE = 0.905              # off-grid: values are rounded to 2dp
 # Found on a real project: a drifted claim answered "accurate" at 0.87-0.94 over 8
 # identical calls - it passed as clean in 4 of them with a 0.905 line.
 CLEAN_ABOVE = 0.987
+SAMPLES = 3                    # asks for a claim the first answer did not settle (1 = never re-ask)
+AGREE_FLOOR = 0.85             # every sample must be at least this confident to decide by agreement
 MAX_CODE_CHARS = 2_600         # keep state small; accuracy falls with clutter
 MAX_FILE_BYTES = 1_500_000     # bigger than this is generated or vendored
 
@@ -2661,16 +2664,109 @@ def ask(state: dict, questions: dict, key: str, timeout: int = 60, retries: int 
     return {"_error": "exhausted"}
 
 
+# ─────────────────────────────────────────────────────── 3b. do not ask twice for nothing
+
+CACHE_FILE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "jevmcp" / "verdicts.json"
+CACHE_MAX = 20_000                 # entries; the oldest are dropped when it grows past this
+LAST_RUN_REPLAYED = 0              # answers the last check took from the cache instead of the API
+
+
+def _cache_key(state: dict, questions: dict) -> str:
+    """A verdict is a pure function of what was asked. The key is a hash of exactly that, so
+    NO code and no claim text is ever written to the cache file - only a digest of them."""
+    blob = json.dumps({"state": canonical(state), "model": MODEL, "questions": questions},
+                      sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def load_cache(path: Path | None = None) -> dict[str, list]:
+    """Answers kept from earlier runs, as {key: [answer, ...]}. A list, not one answer: the
+    agreement gate needs several INDEPENDENT answers, and replaying one answer three times
+    would make unanimity meaningless."""
+    try:
+        data = json.loads((path or CACHE_FILE).read_text())
+        return data.get("answers", {}) if isinstance(data, dict) else {}
+    except Exception:                                  # noqa: BLE001 - a bad cache is not an error
+        return {}
+
+
+def save_cache(answers: dict[str, list], path: Path | None = None) -> None:
+    try:
+        path = path or CACHE_FILE          # read at call time: a default argument could not be patched
+        if len(answers) > CACHE_MAX:
+            answers = dict(list(answers.items())[-CACHE_MAX:])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"version": 1, "model": MODEL, "answers": answers}))
+        tmp.replace(path)
+    except Exception:                                  # noqa: BLE001 - never fail a run over a cache
+        pass
+
+
+def map_health(results: list[dict], claims: list[Claim], syms: dict[str, Symbol] | None = None) -> dict:
+    """What the run says about the MAP rather than the code.
+
+    A "??" is not a fact about the project: it is an entry whose pairing cannot settle its
+    sentence. On this tool's own documentation 38% of claims came back that way, and nothing
+    in the output said so - the user had to notice. It is reported now, with the pairing the
+    claim's own words suggest, because that is the cheapest fix available.
+    """
+    unver = [r for r in results if r.get("label") == "??"]
+    by_line = {(c.doc, c.line): c for c in claims}
+    worst: dict[str, int] = {}
+    fixes: list[dict] = []
+    for r in unver:
+        worst[r.get("symbol", "?")] = worst.get(r.get("symbol", "?"), 0) + 1
+        c = by_line.get((r.get("doc"), r.get("line")))
+        entry = {"doc": r.get("doc"), "line": r.get("line"), "claim": r.get("claim"),
+                 "paired_with": r.get("code_refs", []), "why": r.get("why", "")}
+        if c is not None:
+            entry["reasons"] = preflight(c)
+            if syms:
+                named, _why = _mentions(c.text, syms)
+                have = {s.name for s in c.symbols}
+                better = [f"{s.file}:{s.name}" for s in named if s.name not in have]
+                if better:
+                    entry["try_pairing_with"] = better[:4]
+        fixes.append(entry)
+    return {"checked": len(results), "unverifiable": len(unver),
+            "unverifiable_pct": round(100.0 * len(unver) / len(results), 1) if results else 0.0,
+            "most_often_paired_with": sorted(worst.items(), key=lambda kv: -kv[1])[:5],
+            "entries_to_fix": fixes}
+
+
+def next_step_for_drift(r: dict) -> str:
+    """What a human or an agent has to do about one DRIFT.
+
+    Jev answers questions; it does not write prose, so it cannot produce the corrected
+    sentence. It can say exactly what the decision is, which is the part that is easy to get
+    wrong: which side is being changed, and against what evidence.
+    """
+    return (f"Read {r['doc']}:{r['line']} against {', '.join(r.get('code_refs', [])) or 'the paired code'}, "
+            f"and the code around it. Then decide ONE of: (a) the code is wrong - fix it; "
+            f"(b) the sentence is stale - rewrite it to describe what the code does now, and update the "
+            f"map entry's text and spec_text; (c) neither - the pairing is wrong, so repoint `code`. "
+            f"`git log -p`/`git blame` on the paired code usually shows which.")
+
+
 def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[str], None] = print,
                  on_answer: Callable[[int, int], None] | None = None,
-                 cancelled: Callable[[], bool] | None = None) -> tuple[list[dict], int, list[str], list[str]]:
+                 cancelled: Callable[[], bool] | None = None,
+                 samples: int = SAMPLES, agree_floor: float = AGREE_FLOOR, use_cache: bool = True
+                 ) -> tuple[list[dict], int, list[str], list[str]]:
     """Ask Jev about every claim, `jobs` at a time, and label each answer. Returns the results
     in claim order, the input tokens used, and what kept claims from being checked: problems
     (exit 2 - fix your setup, e.g. a rejected key) and vendor failures (exit 3 - TypeSafe
     could not be used). Shared by the CLI and jevmcp_server.py, so both judge identically.
 
     `on_answer(done, total)` is called as each answer arrives (from worker threads);
-    once `cancelled()` returns true, no further claims are sent."""
+    once `cancelled()` returns true, no further claims are sent.
+
+    Every claim is asked once. A claim the single-answer gate does NOT settle is then asked
+    `samples - 1` more times, and is decided only if every answer agrees and none is below
+    `agree_floor`. Claims the first answer already settled are never asked again, so the extra
+    cost falls only on the uncertain middle. `samples=1` restores the single-answer behaviour
+    exactly."""
     problems: list[str] = []
     vendor: list[str] = []
     results: list[dict] = []
@@ -2678,12 +2774,32 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
     states = [build_state(c) for c in claims]
     import threading
     done_lock, done = threading.Lock(), [0]
+    questions = build_questions()
+    store = load_cache() if use_cache else {}
+    keys = [_cache_key(s, questions) for s in states]
+    cache_lock, replayed = threading.Lock(), [0]
+
+    def answer_n(k: int, n: int) -> dict:
+        """The n-th independent answer for claim k: replayed from the cache when we already
+        have that many, otherwise asked and remembered. Answers are kept as a LIST per claim,
+        because the agreement gate needs independent answers - handing it one answer three
+        times would make unanimity mean nothing."""
+        with cache_lock:
+            have = store.get(keys[k], [])
+            if n < len(have):
+                replayed[0] += 1
+                return {"answers": have[n], "usage": {"input_tokens": 0}, "_cached": True}
+        got = ask(states[k], questions, key, cancelled=cancelled)
+        if use_cache and "answers" in got:
+            with cache_lock:
+                store.setdefault(keys[k], []).append(got["answers"])
+        return got
 
     def one(k: int):
         if cancelled and cancelled():
             return {"_error": "cancelled before it was sent"}
         try:
-            return ask(states[k], build_questions(), key, cancelled=cancelled)
+            return answer_n(k, 0)
         except Stop as e:                      # re-raised in order below
             return {"_stop": e}
         finally:
@@ -2722,6 +2838,8 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
                                               if "computed_values" in state else ""),
                 "request_id": ans.get("_request_id"),
                 "upstream_ms": ans.get("_upstream_ms"),
+                "samples": 1,
+                "_k": i - 1, "_a": a,
             })
             flag = {"act": "DRIFT ", "review": "review", "unverifiable": "  ??  ", "clean": "  ok  "}[action]
             show(f"  [{i}/{len(claims)}] {flag} {conf:.2f}  {c.doc}:{c.line}  {c.text[:64]}")
@@ -2729,6 +2847,45 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
         vendor.append(f"the run stopped early: {e}")
     except Stop as e:
         problems.append(f"the run stopped early: {e}")
+
+    # Ask again about what one answer did not settle. Measured on the graded corpus: this
+    # takes the share of claims decided without a human from 4.3% to 18.3%, with no real
+    # drift passed as `ok` and no accurate claim called drifted (tools/score_eval.py).
+    undecided = [r for r in results if r["action"] not in ("act", "clean")]
+    if samples > 1 and undecided and not problems and not vendor and not (cancelled and cancelled()):
+        show(f"  asking again about {len(undecided)} claim(s) one answer did not settle "
+             f"({samples - 1} more each)")
+
+        def again(r: dict) -> list[dict]:
+            return [answer_n(r["_k"], n) for n in range(1, samples)]
+
+        try:
+            with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+                more = list(pool.map(again, undecided))
+        except Stop as e:
+            problems.append(f"re-asking stopped early: {e}")
+            more = []
+        changed = 0
+        for r, extra in zip(undecided, more):
+            good = [m["answers"] for m in extra if "_error" not in m and "answers" in m]
+            tokens += sum(m.get("usage", {}).get("input_tokens", 0) for m in extra if "_error" not in m)
+            r["samples"] = 1 + len(good)
+            settled = classify_samples([r["_a"], *good], agree_floor)
+            if settled:
+                action, conf, why = settled
+                r["action"], r["confidence"], r["why"] = action, round(conf, 3), why
+                r["label"] = {"act": "DRIFT", "review": "review",
+                              "unverifiable": "??", "clean": "ok"}[action]
+                changed += 1
+        if changed:
+            show(f"  {changed} settled by agreement across answers")
+    for r in results:
+        r.pop("_k", None); r.pop("_a", None)
+    if use_cache:
+        save_cache(store)
+    globals()["LAST_RUN_REPLAYED"] = replayed[0]
+    if replayed[0]:
+        show(f"  {replayed[0]} answer(s) replayed from the cache - unchanged code is never asked about twice")
     return results, tokens, problems, vendor
 
 
@@ -2778,17 +2935,112 @@ def classify(ans: dict) -> tuple[str, float, str]:
 
 
 
+def classify_samples(answers: list[dict], floor: float = AGREE_FLOOR) -> tuple[str, float, str] | None:
+    """A verdict the model gave the SAME answer to every time, each time confidently.
+
+    Measured on the 115-claim graded corpus (tools/score_eval.py, `--sweep`): the verdict
+    itself moves between identical calls on 32% of claims, so agreement is real evidence
+    rather than a formality. Unanimity alone decides 69% of claims but lets 5 real drifts
+    through as `ok`; unanimity *plus* a floor of 0.85 on every sample decides 18.3% (against
+    4.3% for a single answer) with zero false cleans and zero false alarms.
+
+    Returns None when the samples do not settle it, and the caller keeps the single-answer
+    label - so this can only ever move a claim OUT of `review`, never quietly into it.
+    """
+    if len(answers) < 2:
+        return None
+    votes = [a.get("verdict", {}).get("choice") for a in answers]
+    confs = [a.get("verdict", {}).get("confidence", 0.0) for a in answers]
+    if len(set(votes)) > 1 or min(confs, default=0.0) < floor:
+        return None
+    conf = sum(confs) / len(confs)
+    if votes[0] == "drifted":
+        return "act", conf, f"all {len(answers)} answers say drifted, none below {floor:.2f}"
+    if votes[0] == "accurate":
+        worst = max(a.get("value_mismatch", {}).get("noul", 0.0) for a in answers)
+        if worst >= 0.70:
+            return None                       # a value conflict still outranks agreement
+        return "clean", conf, f"all {len(answers)} answers say accurate, none below {floor:.2f}"
+    if set(votes) <= {"not_enough_information", "unrelated"}:
+        return "unverifiable", conf, f"all {len(answers)} answers abstained - fix the pairing"
+    return None
+
+
+# A claim about what the code does NOT do. One excerpt can never settle it: code that does
+# not do X proves nothing, and the one place that does X reads as a refutation. Measured on
+# this project's own PRIVACY.md, where "sends no telemetry" paired with the single function
+# that makes a request came back DRIFT at 0.93 against correct code.
+_NEGATIVE_UNIVERSAL = re.compile(r"\b(?:never|nothing|nobody|no one|none|no other|anyone but)\b", re.I)
+
+
+def _relevant_slice(source: str, claim: str, budget: int) -> tuple[str, bool]:
+    """As much of `source` as fits, preferring the lines the claim is actually about.
+
+    Cutting at the first `budget` characters hands the model the top of a long function and
+    calls it the whole thing - which is how 31 claims pointed at one big function came back
+    "??" in this project's own audit. Keeping the lines that mention the claim's identifiers,
+    with a little context, puts the relevant part inside the budget instead.
+
+    Returns the text and whether anything was left out.
+    """
+    if len(source) <= budget:
+        return source, False
+    lines = source.splitlines()
+    wanted = {m.group(1) or m.group(2) for m in IDENT.finditer(claim)} - {None}
+    keep: set[int] = set()
+    for i, line in enumerate(lines):
+        if any(w in line for w in wanted):
+            keep.update(range(max(0, i - 2), min(len(lines), i + 3)))
+    if not keep:                                     # nothing to aim at: the head, honestly marked
+        return source[:budget].rstrip() + "\n# ... cut here: the rest of this code was not sent", True
+    out, last, used = [], -1, 0
+    for i in sorted(keep):
+        gap = (last < 0 and i > 0) or (last >= 0 and i > last + 1)
+        piece = ("# ... lines skipped ...\n" if gap else "") + lines[i]
+        if used + len(piece) + 1 > budget:
+            out.append("# ... lines skipped ...")
+            break
+        out.append(piece); used += len(piece) + 1; last = i
+    if 0 <= last < len(lines) - 1:
+        out.append("# ... lines skipped ...")
+    return "\n".join(out), True
+
+
+def preflight(c: Claim) -> list[str]:
+    """Why this claim will probably come back "??", worked out locally and for free.
+
+    A "??" costs a request and returns nothing, and in this project's own audit 38% of claims
+    came back that way. Every cause below is visible without asking anyone.
+    """
+    out = []
+    if _NEGATIVE_UNIVERSAL.search(c.text):
+        out.append("says what the code does NOT do - no excerpt can settle that; exclude it with a "
+                   "why, or reword the sentence to name the one place involved")
+    if c.text.rstrip().endswith(":"):
+        out.append("ends in a colon - a lead-in, not a requirement; exclude it and check the items below it")
+    total = sum(len(s.source) for s in dict.fromkeys(c.symbols))
+    if total > MAX_CODE_CHARS:
+        out.append(f"the paired code is {total:,} characters and only {MAX_CODE_CHARS:,} are sent - "
+                   f"point at the part that enforces the sentence, not the whole thing")
+    return out
+
+
 def build_state(c: Claim) -> dict:
     """The exact `state` sent for one claim: the sentence, the paired code
     (comments already stripped, secrets redacted, capped), and any arithmetic
-    the tool worked out so the model does not have to."""
+    the tool worked out so the model does not have to.
+
+    When the code does not fit, the part the claim names is preferred over the first N
+    characters, and the cut is marked so the model knows it is judging an excerpt."""
     parts, seen_src, budget = [], set(), MAX_CODE_CHARS
     for s in c.symbols:
         if s.source in seen_src or budget <= 0:
             continue
         seen_src.add(s.source)
         shown = _shown(Path(s.file)) if os.path.isabs(s.file) else s.file     # never an absolute path
-        block = f"# {shown}:{s.line}\n{s.source}"[:budget]
+        head = f"# {shown}:{s.line}\n"
+        body, _cut = _relevant_slice(s.source, c.text, max(0, budget - len(head)))
+        block = head + body
         parts.append(block)
         budget -= len(block)
     state = {"claim": c.text, "code": redact("\n\n".join(parts))}
@@ -2798,14 +3050,17 @@ def build_state(c: Claim) -> dict:
     return state
 
 
-def estimate_cost(claims: list[Claim]) -> float:
+def estimate_cost(claims: list[Claim], samples: int = 1) -> float:
     """From the real payload sizes: ~3.4 bytes per token plus the fixed 259-token
-    charge per request, at $0.042 per million input tokens (output is free)."""
+    charge per request, at $0.042 per million input tokens (output is free).
+
+    With `samples > 1` this is the WORST case - every claim needing every re-ask. Claims the
+    first answer settles are never asked again, so a real run costs less."""""
     total = 0
     for c in claims:
         body = json.dumps({"state": canonical(build_state(c)), "model": MODEL, "questions": build_questions()})
         total += 259 + len(body) / 3.4
-    return total * 0.042 / 1e6
+    return total * max(1, samples) * 0.042 / 1e6
 
 
 def _tool_path(p: Path | None = None) -> str:
@@ -3024,6 +3279,13 @@ def build_parser() -> argparse.ArgumentParser:
     todo.add_argument("--key-file", metavar="FILE",
                       help="Read TYPESAFE_API_KEY=... from this file instead of the environment or ./.env - "
                            "keep one protected file instead of a key in every project.")
+    todo.add_argument("--no-cache", action="store_true",
+                      help=f"Ask again even for code and sentences that have not changed since the last "
+                           f"run. Answers are cached in {CACHE_FILE} as hashes only - never your code.")
+    todo.add_argument("--samples", type=int, default=SAMPLES, metavar="N",
+                      help=f"how many times to ask about a claim the first answer did not settle "
+                           f"(default {SAMPLES}; 1 never re-asks). A claim is decided by agreement "
+                           f"only when every answer matches and none is below {AGREE_FLOOR}.")
     todo.add_argument("--limit", type=int, default=0, metavar="N",
                       help="Check only the first N claims, in spec order - a cheap first try. Default: all")
     return ap
@@ -3226,10 +3488,20 @@ def run(args, inside_tool_folder: bool) -> int:
             if args.show_payload:
                 print("    state sent for this claim:")
                 print(textwrap.indent(json.dumps(canonical(state), indent=2, ensure_ascii=False), "      "))
+            warn = preflight(c)
+            for w in warn:
+                print(f"    LIKELY ?? : {w}")
             plan.append({"doc": c.doc, "line": c.line, "claim": c.text,
-                         "code_refs": [f"{s.file}:{s.line} {s.name}" for s in c.symbols], "state": canonical(state)})
+                         "code_refs": [f"{s.file}:{s.line} {s.name}" for s in c.symbols],
+                         "likely_unverifiable": warn, "state": canonical(state)})
+        weak = sum(1 for e in plan if e["likely_unverifiable"])
+        if weak:
+            print(f"\n  {weak} of {len(claims)} claims will probably come back \"??\" - each costs a request "
+                  f"and answers nothing. Fix those entries before spending.")
         print(f"\ndry run - nothing was sent. {len(claims)} claim{'s' if len(claims) != 1 else ''}, "
-              f"estimated cost ${estimate_cost(claims):.4f}.")
+              f"estimated cost ${estimate_cost(claims):.4f}"
+              + (f", up to ${estimate_cost(claims, args.samples):.4f} if every claim needs re-asking."
+                 if getattr(args, "samples", 1) > 1 else "."))
         if args.out:
             Path(args.out).write_text(json.dumps({"claims": plan, "problems": problems,
                                                   "estimated_cost_usd": round(estimate_cost(claims), 5)},
@@ -3246,7 +3518,9 @@ def run(args, inside_tool_folder: bool) -> int:
     if args.show_payload:
         for c in claims:
             print(textwrap.indent(json.dumps(canonical(build_state(c)), indent=2, ensure_ascii=False), "      "))
-    results, tokens, stopped, failed = check_claims(claims, key, args.jobs)
+    results, tokens, stopped, failed = check_claims(claims, key, args.jobs,
+                                                    samples=max(1, args.samples),
+                                                    use_cache=not args.no_cache)
     problems += stopped
     vendor += failed
 
@@ -3262,9 +3536,25 @@ def run(args, inside_tool_folder: bool) -> int:
     print(f"needs review:   {len(revs)}")
     print(f"??:             {len(unv)}   <- NOT a pass: the code shown could not settle these")
     print(f"ok:             {len(results) - len(acts) - len(revs) - len(unv)}")
+    if LAST_RUN_REPLAYED:
+        print(f"({LAST_RUN_REPLAYED} answer(s) came from the cache - unchanged code is not paid for twice)")
+    health = map_health(results, claims, syms)
+    if health["unverifiable"]:
+        print(f"\nMAP HEALTH: {health['unverifiable']} of {health['checked']} claims "
+              f"({health['unverifiable_pct']}%) came back ?? - their pairing cannot settle their sentence. "
+              f"That is a map problem, not a code problem.")
+        for e in health["entries_to_fix"][:5]:
+            print(f"  {e['doc']}:{e['line']}  {e['claim'][:70]}")
+            for why in e.get("reasons", [])[:1]:
+                print(f"      because: {why}")
+            if e.get("try_pairing_with"):
+                print(f"      try pairing with: {', '.join(e['try_pairing_with'])}")
+        if len(health["entries_to_fix"]) > 5:
+            print(f"  ... and {len(health['entries_to_fix']) - 5} more (every one is in {args.out})")
     print(f"\nfull results -> {Path(args.out).resolve()}")
     for r in sorted(acts, key=lambda r: -r["severity"])[:10]:
-        print(f"\n  {r['doc']}:{r['line']}  severity {r['severity']}/3  conf {r['confidence']}")
+        print(f"\n  {r['doc']}:{r['line']}  severity {r['severity']}/3  conf {r['confidence']}"
+              + (f"  ({r['samples']} answers agreed)" if r.get("samples", 1) > 1 else ""))
         print(f"    says: {r['claim'][:100]}")
         print(f"    code: {r['code_file']}:{r['code_line']} ({r['symbol']})")
     if problems or vendor:

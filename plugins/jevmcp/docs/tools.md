@@ -101,6 +101,7 @@ it as a second text block of JSON for clients that do not read structured output
 | `results_file` | string or null | Path to the full results, **including the exact code that was sent**. |
 | `map_problems` | array of strings | Entries that could not be used, so were **not** checked. |
 | `not_checked` | array of strings | Claims stopped or failed part-way through. |
+| `map_health` | object | What the run says about the **map**: how many claims came back `??`, which symbol they were paired with most often, and for each one why it could not be settled and what the sentence's own words suggest pairing it with instead. A `??` is a map problem, not a code problem. |
 | `flagged` | array of objects | Everything that is not `ok`, in the order to work through it: DRIFT by severity, then review by P(drifted), then `??`. |
 
 Each `flagged` item has `label` (`DRIFT` / `review` / `??`), `doc`, `line`, `claim`,
@@ -425,6 +426,8 @@ uv run --script <plugin>/scripts/spec_drift.py --help
 | `--jobs N` | Claims asked about at once. Default 4 on the command line (the MCP server uses 8). |
 | `--limit N` | Check only the first N claims, in spec order — a cheap first try. |
 | `--key-file FILE` | Read `TYPESAFE_API_KEY=...` from this file and nothing else. |
+| `--samples N` | How many times to ask about a claim the first answer did not settle. Default 3; 1 never re-asks. A claim is decided by agreement only when every answer matches and none is below 0.85 confidence. Claims the first answer already settled are never asked again. |
+| `--no-cache` | Ask again even for sentences and code that have not changed. Answers are cached in `~/.cache/jevmcp/verdicts.json` as digests only, never your code. |
 
 Paths are relative to the folder you run from, so run it from the project root. Write results to
 a temporary folder, not into the repository.
