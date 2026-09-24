@@ -1,5 +1,76 @@
 # Changelog
 
+## 1.7.2 — 2026-09-24
+
+**What you name is what is checked.** 1.7.1 second-guessed the spec you named. A folder that held
+several versions of a spec, or a file that looked like an old copy, was refused, and a named file got
+warnings from its name or its commit dates. So `specification/v3` was refused because its folder's name
+has a version number, and a one-character typo fix in `specification/v3/` made the tool call
+`specification/final/` "an older version". Now:
+
+- **A named file or folder is used exactly as named.** Nothing is refused, left out or flagged for its
+  name, its date or what its top says. A folder gives every `.md` and `.rst` file on disk in it and below
+  it; templates are no longer left out. Name `specification/final` and only `final` is used; name
+  `specification` and all of it is. A path is refused only when it cannot be used: missing, outside the
+  project, a folder with no `.md` or `.rst` file, or a named file whose name is not valid UTF-8.
+- **Nothing in a named folder is dropped without a word** (this was already wrong in 1.7.1). A folder
+  lost files silently whenever git listed at least one other file there: a git-ignored file next to a
+  tracked one, a tracked file under a folder named like build output (`reqs/target/`), a symbolic link.
+  Now every tracked file is used wherever it is; git-ignored files are used with a warning that in a fresh
+  clone or CI their entries are problems (commit them, or leave them out); a skipped folder (`node_modules`,
+  `build`, ...) that holds other spec files, a link that leads out of the project, to a folder or nowhere,
+  and a file that cannot be read are named in a warning. When git cannot list the project at all
+  ("dubious ownership" in a CI container, a corrupt index), every file is used and the warning quotes git
+  in full, instead of refusing the folder. A named link keeps its own name in the map (`latest.md`,
+  `current/`, not what it leads to), so the map follows the link when it is repointed. Naming a skipped
+  folder or a link's target too stops its warning. An empty path, or one inside a folder that cannot be
+  entered, is refused with a plain message instead of a traceback.
+- **A named folder stays the source.** The map's `specs` records what was named, a folder as a folder.
+  Before, a folder was frozen into its file list: a spec file added to it later was never checked and
+  the strict check still passed. Now its sentences are reported as not in the map, and a spec file it
+  holds that the check does not reach (in a skipped folder, behind a link) is named in a new `warnings`
+  field of `validate_spec_map`, `preview_spec_check` and `check_spec_drift` every time. A named path that
+  is gone, or a `specs` that is not a list of paths, is a problem.
+- **A fresh draft covers every sentence** (already wrong before 1.7.2). The drafter skipped a sentence with
+  no word in the Latin alphabet, which the strict check then reported as missing: a Russian or Japanese
+  spec failed the strict check before anyone had edited its map. Every sentence now gets an entry, and an
+  entry the drafter could suggest no code for is reported once ("has no code"), not also as missing.
+- **The check uses the spec the map records.** A spec that says at its top that it is superseded no longer
+  makes `validate_spec_map` report the map as not ready, and `check_spec_drift` and `spec_drift.py --map`
+  no longer refuse it; a newer-looking version next to it is no longer a warning; `preview_spec_check` no
+  longer shows the `OUTDATED SPEC` and `SPEC VERSIONS` blocks. The `spec_versions` output field is gone. A map's
+  `confirmed_current` list is no longer needed and is ignored; maps that have it still load.
+- **The candidate list stays, for when nothing is named.** `draft_spec_map` without `docs`
+  (`--find-specs`) still lists every file that looks like a spec, with its last commit date and hints
+  about old copies, and says which of several versions looks newest. It now says that these are hints to
+  help the user choose, not a decision. Files whose names are not in the Latin alphabet (`требования.md`,
+  `要件定義.md`) are no longer grouped as versions of one document, and a project folder that an enclosing
+  repository ignores is listed instead of "no file looks like a spec".
+- **The skill tells the agent to pass what the user named, a folder included, without listing candidates
+  first.** 1.7.1's skill covered only named files, so when a user said "use the docs/spec folder" the agent
+  listed candidates instead, and the folder path was never exercised in a real session.
+- **A map written inside a folder link gets a warning.** `current/spec_map.json`, with `current/` a link to
+  `specification/final/`, really lands in `specification/final/` and stays there when the link is
+  repointed. `draft_spec_map` and `--draft-map` now say so, and the skill writes the map outside the link.
+
+**How it was tested.**
+- **335 tests** (321 in 1.7.1), including the layout that started this: `specification/v1`, `v2`, `v3` and
+  `final`, with `v3` edited after `final`.
+- **38 real agent sessions** on the installed plugin, 27 in Claude Code and 11 in Codex. Cases: a folder named,
+  a file named, the parent folder named, nothing named, the `v3` folder named while `final` is newer (1.7.1
+  refused this), a check of a spec whose top says "Superseded" (1.7.1 refused this), a file added later to a
+  named folder, a git-ignored file in a named folder, a skipped folder with a spec in it, a folder link.
+  Every session used exactly what the user named, or listed the candidates and asked when nothing was named.
+  One Codex session wrote its map inside a folder link, which led to the warning above; both clients then
+  wrote it outside.
+- **Three rounds of independent review**, each finding re-checked by a second reviewer who tried to refute
+  it: 39 findings confirmed (14, 17 and 8) and all fixed; 1 refuted; 2 left without a verdict, both
+  repeats of confirmed findings, reproduced and fixed.
+- **Real open-source repositories**: named folders in OpenAPI (`versions/`, 23 files), rust-lang/rfcs (651),
+  python/peps (761 files, 95,977 map entries, validated in 11 s), GraphQL, JSON Schema, semver, CloudEvents,
+  OpenTelemetry and ADR collections gave exactly the files `find` lists, with no warning on an unmodified
+  repository. The slowest run was `--find-specs` on the full PEPs history: 25 s.
+
 ## 1.7.1 — 2026-09-24
 
 **Spec drift now knows which spec is the current one.** A project can hold several spec documents, or

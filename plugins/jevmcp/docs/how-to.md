@@ -63,20 +63,22 @@ free; only step 7 sends anything.
    finds one, this recipe does not apply — go to recipe 2. `check_spec_drift` on a project with no
    map fails with `this project (<path>) has no spec map yet (no *spec_map.json)`.
 
-2. **Let the user choose the spec (free).** Call `draft_spec_map` without `docs`; it writes
-   nothing and lists every file that looks like a spec, with its last commit date and its flags —
-   a version number or date in its name, a folder such as `archive/`, a line in its first 40 that
-   says it is superseded or deprecated, a newer version next to it.
+2. **Let the user choose the spec (free).** If the user named it — a file, several files or a
+   folder, such as `specification/final` — go to step 3 with exactly that: it is used as named,
+   never second-guessed, and a folder gives every `.md` and `.rst` file in it. Otherwise call
+   `draft_spec_map` without `docs`; it writes nothing and lists every file that looks like a spec,
+   with its last commit date and hints — a version number or date in its name, a folder such as
+   `archive/`, a line in its first 40 that says it is superseded or deprecated, which of several
+   versions looks newest.
 
    ```json
    {"name": "draft_spec_map", "arguments": {"project": "/absolute/path/to/project"}}
    ```
 
-   Command line: `$SD --find-specs`. Show the user the list with the dates and flags, and ask which
-   file(s) are the current source of truth, even when only one looks right. Only the files the
-   user names are checked. Do not write a spec yourself, and never point the drafter at a folder
-   that holds several versions of a spec or old copies: it refuses, and nothing is written. If
-   nothing is listed, ask the user where the spec is (a `README.md` is listed only when its title
+   Command line: `$SD --find-specs`. Show the user the list with the dates and hints, and ask which
+   file(s) or folder hold the current spec, even when only one looks right. The hints help the user
+   choose; they decide nothing, and exactly what the user names is checked. Do not write a spec
+   yourself. If nothing is listed, ask the user where the spec is (a `README.md` is listed only when its title
    or first heading has a word such as spec, design or architecture; `ARCHITECTURE.md` and
    `DESIGN.md` are listed by their names).
 
@@ -108,10 +110,11 @@ free; only step 7 sends anything.
    Command line: `$SD --docs docs/spec.md --draft-map docs/spec_map.json`.
 
    The output tells you how many entries name code in backticks (usually right), how many are
-   word-overlap guesses (often wrong) and which lines they are on, and ends with any `WARNINGS`
-   about a named file that looks like an old copy or has a newer version — show each to the user.
+   word-overlap guesses (often wrong) and which lines they are on, and ends with any `WARNINGS` —
+   a file it could not use, or a named folder whose files git ignores — show each to the user.
    The file is `{"_readme": [...], "specs": [...], "entries": [...]}`; `_readme` explains every
-   field and stays in the file, and `specs` records the file(s) the user chose.
+   field and stays in the file, and `specs` records what the user named. A named folder stays the
+   source: a spec file added to it later shows up as sentences not in the map.
 
 5. **Review every entry.** This is the step that needs judgement and it is your job. Work section
    by section for a long spec, and tell the user what you changed.
@@ -168,7 +171,7 @@ free; only step 7 sends anything.
 
    Set `"status": "reviewed"` on each entry you have checked. (An entry with no `status` field at
    all is treated as reviewed; the drafter always writes one — `named in the sentence`,
-   `suggested`, or `NO MATCH - fill in the code or delete this entry` — so anything you have not
+   `suggested`, or `NO MATCH - point 'code' at what enforces this, or set 'excluded' with a why` — so anything you have not
    touched is caught by step 6.)
 
 6. **Validate (free).** Repeat until it says OK.
@@ -343,6 +346,8 @@ message has one correct fix.
 | `the spec changed since this entry was reviewed - NOT checked` | `spec_text` no longer appears in the spec | Re-read the entry against the current spec, update `text` if the requirement itself changed, and paste the current spec paragraph into `spec_text`. |
 | `N sentences in docs/spec.md are not in the map, so NOT checked: lines ...` | the spec gained sentences | Decide each one as in recipe 1, step 5: map it, or exclude it with a `why`. |
 | `N excluded sentences have changed in the spec` | an excluded sentence was reworded | Decide again — rewording often turns rationale into a rule — then update its `spec_text`. |
+| `the map's "specs" names 'X', which is not found` | the spec file or folder the user named was moved or renamed | Ask the user where it is now and write that path in the map's top-level `specs`, or draft the map again. |
+| `WARNINGS - spec files in a named folder that were NOT used` | a named folder holds spec files the check does not reach: a skipped folder (`build/`, `node_modules/`), a link, a name that is not UTF-8 | Tell the user. If they are part of the spec, add that folder or file to the map's `specs` and map its sentences. |
 | `N map entries are not marked "status": "reviewed"` | drafted entries never reviewed | Review them; a word-overlap guess is often wrong. |
 | `N excluded entries do not say why` | an exclusion with no reason | Add the `why`, so the next reader sees it was a decision. |
 | `N entries have no spec_text and their text is not word-for-word in the spec` | a spec change cannot be ruled out for those entries | Paste the spec paragraph each one is about into its `spec_text`. |

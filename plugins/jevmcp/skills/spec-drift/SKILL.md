@@ -46,7 +46,7 @@ two folders above this SKILL.md: `../../scripts/spec_drift.py`, relative to this
 | Validate the map (free) | `validate_spec_map` | `$DD --map <map> --dry-run --strict` |
 | See exactly what is sent (free) | `preview_spec_check` | `$DD --map <map> --dry-run --show-payload` |
 | List the candidate spec files (free) | `draft_spec_map` without `docs` | `$DD --find-specs` |
-| Draft a map for a new project (free) | `draft_spec_map` with `docs` and `out` | `$DD --docs <spec file> --draft-map <spec folder>/spec_map.json` |
+| Draft a map for a new project (free) | `draft_spec_map` with `docs` and `out` | `$DD --docs <spec file or folder> --draft-map <spec folder>/spec_map.json` |
 
 Write results to a temporary folder, not into the repository. Exit codes: **0** no drift ·
 **1** at least one DRIFT · **2** setup or map problem, fix it (the output names each broken
@@ -71,19 +71,22 @@ never block the user's task on it.
 
 ## A. Setting up a project that has no spec map
 
-1. **Let the user choose the spec.** If the user already named the spec file(s), pass exactly
-   those as `docs` and go on: the tool warns when a named file looks like an old copy or a newer
-   version of it exists (see the end of this step). Otherwise call `draft_spec_map` **without
-   `docs`** (command line:
+1. **Let the user choose the spec.** If the user already named it - a file, several files, or a
+   folder ("use specification/final", "the spec is in docs/spec") - pass exactly what they named
+   as `docs` and go on. Do not list candidates first, do not swap a folder for the files you think
+   are current, and do not question the choice: the tool uses exactly what is named, and which
+   spec is current is the user's call. A folder gives every `.md` and `.rst` file in it and below
+   it. If the named folder is a symbolic link (`current/`), write the map outside it
+   (`spec_map.json` at the project root): inside, it would really land in the folder the link leads
+   to and stay there when the link is repointed. Only if the user named nothing, call `draft_spec_map` **without `docs`** (command line:
    `$DD --find-specs`). It drafts nothing; it lists every file that looks like a spec, with the
-   date of its last commit and its flags: a version number or date in its name, a folder such as
-   `archive/` or `old/`, a line near its top that says it is superseded or deprecated, and whether a
-   newer version of it exists. Show the user that list, dates and flags included, and ask which
-   file(s) are the current source of truth - even when only one candidate looks right. Then pass
-   exactly those files as `docs`. Never pass a folder that holds several versions of a spec or
-   old copies: the tool refuses it, and nothing is written. If the list is empty, ask the user
-   where the spec is. If `draft_spec_map` returns `warnings` (a named file looks like an old
-   copy, or a newer version of it exists), show each to the user and settle it before step 4.
+   date of its last commit and hints: a version number or date in its name, a folder such as
+   `archive/` or `old/`, a line near its top that says it is superseded or deprecated, and which of
+   several versions looks newest. Show the user that list, dates and hints included, and ask which
+   file(s) or folder hold the current spec - even when only one candidate looks right. The hints
+   help the user choose; they decide nothing. Then pass exactly what the user chose as `docs`. If
+   the list is empty, ask the user where the spec is. If `draft_spec_map` returns `warnings`
+   (files it could not use, or a named folder whose files git ignores), show each to the user.
 2. **See what the tool can read:** `$DD --docs <spec> --dry-run`. It reports the languages,
    routes and config keys it found, and lists the sentences it cannot pair on its own. If it
    says a parser is missing or a language can only be paired by line range, note it.
@@ -166,20 +169,17 @@ user can ask for another pass. One reply beats twenty minutes of silence.
 - **"the spec changed since this entry was reviewed":** re-read the entry against the current
   spec, update `text` if the requirement changed, and paste the current paragraph into
   `spec_text` (markdown and line breaks are fine).
-- **"N sentences ... are not in the map":** decide each one, as in step A4.
+- **"N sentences ... are not in the map":** decide each one, as in step A4. A file the user added
+  later to a folder the map's `specs` names shows up this way.
+- **"WARNINGS - spec files in a named folder that were NOT used"** (`warnings` in validate, preview and
+  check): tell the user each one. If such a file is part of the spec, add it or its folder to the
+  map's top-level `specs` and map its sentences.
+- **"the map's "specs" names 'X', which is not found":** the file or folder the user named was moved;
+  ask the user for its new path and write it in `specs`.
 - **"excluded sentences have changed":** decide again; rewording can turn rationale into a rule.
-- **"says it is out of date"** (a problem in `validate_spec_map`; `check_spec_drift` then sends
-  nothing): a spec file the map checks says at its top that it is superseded, deprecated or
-  obsolete. Tell the user which file and which line, and ask which file is the current spec. Then
-  draft a new map from that file and review it. If the line is not about the document itself
-  (for example "the password form is superseded by SSO") and the user says this spec IS current,
-  add the file to the map's top-level `"confirmed_current"` list: the line then only warns. Do that
-  only on the user's word, and never edit the spec yourself to get past it.
-- **"looks like a newer version of"** (a warning in `spec_versions`; the check still runs): tell
-  the user both files, and ask whether the newer one is now the current spec. If it is, draft a
-  new map from it and review it. If it is not, the user can move the other file into an
-  `archive/` folder or add "Superseded by ..." at its top, and the warning stops. Never keep
-  checking a spec that may be outdated without saying so in your report.
+- **The user moves to another spec** (a new version, another file or folder): draft a new map
+  from exactly what they name, review it, and use it. The tool checks the spec the map records;
+  it never decides on its own that another file is more current.
 - **"sentences are now on another line of the spec"** (`moved_entries`): the check still finds
   them. To store the current lines, run `$DD --map <map> --update-lines`; it changes only the
   `line` fields. `preview_spec_check` accepts either line.
@@ -196,5 +196,5 @@ the project, say which findings are new and which are already known.
 
 **Never:** send code without consent, print or ask for the key, treat `??` as a pass, overwrite
 a reviewed map, change the checker's questions or thresholds, commit without asking, block the
-user's task on exit 3, choose the spec file for the user, or keep checking a spec that may be
-outdated without telling them.
+user's task on exit 3, choose the spec for the user, or replace the file(s) or folder the user
+named with ones you think are more current.

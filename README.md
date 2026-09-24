@@ -23,15 +23,16 @@ one server process, one API key. Your client can still approve or disable each t
 
 You do not create or edit any file yourself. In your project, ask your agent:
 
-> Set up spec-drift checking for this project.
+> Set up spec-drift checking for this project. The spec is in specification/final.
 
-1. It lists the files that look like specs — design, requirements, architecture, ADR or RFC
-   documents (Markdown or reStructuredText) — with the date each was last committed, and flags
-   the ones that look like old copies: a version number or a date in the name, a folder such as
-   `archive/`, a line near its top that says "superseded" or "deprecated", or a newer version
-   next to it. **You choose** which file or files are the current spec. The tool never guesses, and only
-   the files you name are checked.
-2. It runs `draft_spec_map` on those files, which **writes `spec_map.json` for you**: one entry per
+1. **You name the spec** — a file, several files, or a folder — and exactly that is checked. The
+   tool never second-guesses it: name `specification/final` and only `final` is used, even if
+   `specification/v3` next to it was edited later. If you do not name it, the agent lists the
+   files that look like specs — design, requirements, architecture, ADR or RFC documents (Markdown
+   or reStructuredText) — with the date each was last committed and hints about old copies (a
+   version number or a date in the name, a folder such as `archive/`, a line near its top that
+   says "superseded" or "deprecated"), and asks you to choose. The hints never decide.
+2. It runs `draft_spec_map` on what you named, which **writes `spec_map.json` for you**: one entry per
    sentence of the spec, each with a suggested place in the code. Nothing is sent anywhere; this
    is free.
 3. It reviews the entries with you, fixes the wrong guesses, and marks sentences that are not

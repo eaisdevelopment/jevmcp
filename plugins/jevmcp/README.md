@@ -118,13 +118,14 @@ does not expand the standard's `${PLUGIN_ROOT}`.
 
 You never write or edit a file yourself. Ask your agent, in the project:
 
-> Set up spec-drift checking for this project.
+> Set up spec-drift checking for this project. The spec is in specification/final.
 
-1. It lists the files that look like specs (design, requirements, architecture, ADR or RFC
-   documents), each with its last commit date, and flags old copies: a version number or date in
-   the name, a folder such as `archive/`, a line near its top that says "superseded", or a newer
-   version next to it. **You choose** the current spec file(s); only the files you name are checked.
-2. `draft_spec_map` **writes `spec_map.json` for you** from those files — one entry per sentence of
+1. **You name the spec** — files or a folder — and exactly that is checked, never second-guessed.
+   If you do not name it, the agent lists the files that look like specs (design, requirements,
+   architecture, ADR or RFC documents), each with its last commit date and hints about old copies
+   (a version number or date in the name, a folder such as `archive/`, a line near its top that
+   says "superseded"), and asks you to choose.
+2. `draft_spec_map` **writes `spec_map.json` for you** from what you named — one entry per sentence of
    the spec, each with a suggested place in the code. Free: nothing is sent anywhere.
 3. The agent reviews the entries with you: it fixes wrong guesses and marks sentences that are not
    requirements as excluded, with a reason. Your knowledge is needed here, and only here.
