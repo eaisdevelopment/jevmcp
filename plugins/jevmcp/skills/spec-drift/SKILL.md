@@ -45,7 +45,8 @@ two folders above this SKILL.md: `../../scripts/spec_drift.py`, relative to this
 | Full check | `check_spec_drift` with `all: true` | `$DD --map <map> --jobs 8 --out <tmp>/drift.json` |
 | Validate the map (free) | `validate_spec_map` | `$DD --map <map> --dry-run --strict` |
 | See exactly what is sent (free) | `preview_spec_check` | `$DD --map <map> --dry-run --show-payload` |
-| Draft a map for a new project (free) | `draft_spec_map` | `$DD --docs <spec> --draft-map <spec folder>/spec_map.json` |
+| List the candidate spec files (free) | `draft_spec_map` without `docs` | `$DD --find-specs` |
+| Draft a map for a new project (free) | `draft_spec_map` with `docs` and `out` | `$DD --docs <spec file> --draft-map <spec folder>/spec_map.json` |
 
 Write results to a temporary folder, not into the repository. Exit codes: **0** no drift ·
 **1** at least one DRIFT · **2** setup or map problem, fix it (the output names each broken
@@ -70,9 +71,19 @@ never block the user's task on it.
 
 ## A. Setting up a project that has no spec map
 
-1. **Find the spec.** Look for design, specification, requirements or architecture documents
-   (Markdown or reStructuredText). If there are several candidates, ask which one is the source
-   of truth.
+1. **Let the user choose the spec.** If the user already named the spec file(s), pass exactly
+   those as `docs` and go on: the tool warns when a named file looks like an old copy or a newer
+   version of it exists (see the end of this step). Otherwise call `draft_spec_map` **without
+   `docs`** (command line:
+   `$DD --find-specs`). It drafts nothing; it lists every file that looks like a spec, with the
+   date of its last commit and its flags: a version number or date in its name, a folder such as
+   `archive/` or `old/`, a line near its top that says it is superseded or deprecated, and whether a
+   newer version of it exists. Show the user that list, dates and flags included, and ask which
+   file(s) are the current source of truth - even when only one candidate looks right. Then pass
+   exactly those files as `docs`. Never pass a folder that holds several versions of a spec or
+   old copies: the tool refuses it, and nothing is written. If the list is empty, ask the user
+   where the spec is. If `draft_spec_map` returns `warnings` (a named file looks like an old
+   copy, or a newer version of it exists), show each to the user and settle it before step 4.
 2. **See what the tool can read:** `$DD --docs <spec> --dry-run`. It reports the languages,
    routes and config keys it found, and lists the sentences it cannot pair on its own. If it
    says a parser is missing or a language can only be paired by line range, note it.
@@ -157,6 +168,21 @@ user can ask for another pass. One reply beats twenty minutes of silence.
   `spec_text` (markdown and line breaks are fine).
 - **"N sentences ... are not in the map":** decide each one, as in step A4.
 - **"excluded sentences have changed":** decide again; rewording can turn rationale into a rule.
+- **"says it is out of date"** (a problem in `validate_spec_map`; `check_spec_drift` then sends
+  nothing): a spec file the map checks says at its top that it is superseded, deprecated or
+  obsolete. Tell the user which file and which line, and ask which file is the current spec. Then
+  draft a new map from that file and review it. If the line is not about the document itself
+  (for example "the password form is superseded by SSO") and the user says this spec IS current,
+  add the file to the map's top-level `"confirmed_current"` list: the line then only warns. Do that
+  only on the user's word, and never edit the spec yourself to get past it.
+- **"looks like a newer version of"** (a warning in `spec_versions`; the check still runs): tell
+  the user both files, and ask whether the newer one is now the current spec. If it is, draft a
+  new map from it and review it. If it is not, the user can move the other file into an
+  `archive/` folder or add "Superseded by ..." at its top, and the warning stops. Never keep
+  checking a spec that may be outdated without saying so in your report.
+- **"sentences are now on another line of the spec"** (`moved_entries`): the check still finds
+  them. To store the current lines, run `$DD --map <map> --update-lines`; it changes only the
+  `line` fields. `preview_spec_check` accepts either line.
 - Never delete an entry or blank a `spec_text` to make the strict check pass, and never change
   an exclusion without saying so in your report.
 - A lesson specific to this project (a blind spot seen twice, a file every claim needs) belongs
@@ -169,5 +195,6 @@ A short table: claim (spec file:line) · label · P(drifted) · what you found �
 the project, say which findings are new and which are already known.
 
 **Never:** send code without consent, print or ask for the key, treat `??` as a pass, overwrite
-a reviewed map, change the checker's questions or thresholds, commit without asking, or block the
-user's task on exit 3.
+a reviewed map, change the checker's questions or thresholds, commit without asking, block the
+user's task on exit 3, choose the spec file for the user, or keep checking a spec that may be
+outdated without telling them.

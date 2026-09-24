@@ -63,11 +63,22 @@ free; only step 7 sends anything.
    finds one, this recipe does not apply — go to recipe 2. `check_spec_drift` on a project with no
    map fails with `this project (<path>) has no spec map yet (no *spec_map.json)`.
 
-2. **Find the spec.** Look for a design, specification, requirements or architecture document in
-   Markdown or reStructuredText — `docs/`, `README.md`, `ARCHITECTURE.md`, `SPEC.md`, `docs/adr/`.
-   If there are several candidates, ask the user which one is the source of truth. Do not write a
-   spec yourself, and do not point the drafter at a whole `docs/` tree of mixed material unless the
-   user says all of it is normative.
+2. **Let the user choose the spec (free).** Call `draft_spec_map` without `docs`; it writes
+   nothing and lists every file that looks like a spec, with its last commit date and its flags —
+   a version number or date in its name, a folder such as `archive/`, a line in its first 40 that
+   says it is superseded or deprecated, a newer version next to it.
+
+   ```json
+   {"name": "draft_spec_map", "arguments": {"project": "/absolute/path/to/project"}}
+   ```
+
+   Command line: `$SD --find-specs`. Show the user the list with the dates and flags, and ask which
+   file(s) are the current source of truth, even when only one looks right. Only the files the
+   user names are checked. Do not write a spec yourself, and never point the drafter at a folder
+   that holds several versions of a spec or old copies: it refuses, and nothing is written. If
+   nothing is listed, ask the user where the spec is (a `README.md` is listed only when its title
+   or first heading has a word such as spec, design or architecture; `ARCHITECTURE.md` and
+   `DESIGN.md` are listed by their names).
 
 3. **See what the checker can read (free).** From the project root:
 
@@ -97,8 +108,10 @@ free; only step 7 sends anything.
    Command line: `$SD --docs docs/spec.md --draft-map docs/spec_map.json`.
 
    The output tells you how many entries name code in backticks (usually right), how many are
-   word-overlap guesses (often wrong) and which lines they are on. The file is
-   `{"_readme": [...], "entries": [...]}`; `_readme` explains every field and stays in the file.
+   word-overlap guesses (often wrong) and which lines they are on, and ends with any `WARNINGS`
+   about a named file that looks like an old copy or has a newer version — show each to the user.
+   The file is `{"_readme": [...], "specs": [...], "entries": [...]}`; `_readme` explains every
+   field and stays in the file, and `specs` records the file(s) the user chose.
 
 5. **Review every entry.** This is the step that needs judgement and it is your job. Work section
    by section for a long spec, and tell the user what you changed.
@@ -396,7 +409,8 @@ Points that decide whether this works:
   | 3 | TypeSafe could not be used (outage, credits) | report, do not block; never call this "no drift" |
 
 - **Do not run an agent in CI to do this.** In Codex, `codex exec` uses approval policy "never",
-  which blocks every MCP tool, and `--approve-for-me` does not help because the automatic reviewer
+  which blocks every tool that sends (with Codex 0.156.1 the free read-only tools still ran), and
+  `--approve-for-me` does not help because the automatic reviewer
   refuses a tool that sends code to a third party. Codex's sandbox also has no network, so a
   fallback to the command line inside a session reaches nothing and reports nothing. Run the script
   directly, as above. See [clients.md](clients.md) for the one flag that does work and why it is

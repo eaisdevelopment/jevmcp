@@ -5,9 +5,11 @@ installed, where the key comes from, what the tools are called, when you are ask
 and what does not work — so that an agent installing or using the plugin does not have to guess.
 
 Everything on this page was checked against the code in this repository and against the two
-clients on 2026-09-22. The CI-triage and code-audit tools added in 1.7.0 were checked against the
-code and its tests, not yet end to end inside the two clients; the lines about them say what was
-not verified. Where something was not verified, it says so.
+clients on 2026-09-22. The CI-triage and code-audit tools added in 1.7.0 were then run end to end
+in both clients on 2026-09-24, on the installed 1.7.0: headless Claude Code 2.1.281 sessions ran a
+CI triage (preview, then triage by snapshot), a code audit (validate, preview, then check) and the
+free spec-drift tools; Codex 0.156.1 ran `preview_ci_triage`, and its tools that send needed
+approval, as designed. Where something was not verified, it says so.
 
 ## At a glance
 
@@ -21,7 +23,7 @@ not verified. Where something was not verified, it says so.
 | Must a call pass `project`? | no (but see the boundary rule below) | **yes, always**, absolute path | yes, unless the client starts the server in the project |
 | Approval for the tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`) | the client's normal MCP tool permission | **every time, by design** | the client's own rule |
 | Reading a GitHub run for CI triage | the server's `gh`, with the user's environment | the server's `gh`, with Codex's minimal environment (no token variables) | the server's `gh`, with whatever environment the client passes |
-| Unattended / CI | not established here — use the command line | MCP tools blocked unless the sandbox is switched off — use the command line | unknown |
+| Unattended / CI | not established here — use the command line | `codex exec` (0.156.1): the read-only `preview_ci_triage` ran; the tools that send are blocked unless approvals and the sandbox are switched off — use the command line | unknown |
 | Network in the agent's shell | yes | **no** (sandboxed) | unknown |
 | Update | `claude plugin update jevmcp@jev` | `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev` | the client's own way |
 
@@ -48,7 +50,7 @@ Same in every client, because it is in the server, not the client:
 
 ## Claude Code
 
-Tested with Claude Code 2.1.278.
+Tested with Claude Code 2.1.278; the CI-triage and code-audit tools with 2.1.281, on 2026-09-24.
 
 ### Discovery and install
 
@@ -64,7 +66,7 @@ at the repository root, `plugins/jevmcp/.claude-plugin/plugin.json`, and
 why both sets of files exist.
 
 Installed copies live at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.claude/plugins/cache/jev/jevmcp/1.7.0/`. Older versions stay beside the new one.
+`~/.claude/plugins/cache/jev/jevmcp/1.7.1/`. Older versions stay beside the new one.
 
 Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 **"Restart to apply changes"** — the MCP server process is only replaced on restart.
@@ -106,7 +108,7 @@ mcp__plugin_jevmcp_jevmcp__draft_rule_map
 
 The skills are `jevmcp:spec-drift`, `jevmcp:ci-triage` and `jevmcp:code-audit`. Always in context:
 each skill's name and frontmatter description (825, 775 and 788 characters, roughly 200 tokens
-each). A skill's body (about 11.5 kB, 8.7 kB and 9.6 kB) is read only when that skill is used.
+each). A skill's body (about 13.6 kB, 10.2 kB and 10.8 kB) is read only when that skill is used.
 While the server is connected, Claude Code also shows the model the server's own `instructions`
 block (1,764 characters, roughly 450 tokens) under "MCP Server Instructions"; it states the key
 and consent rules first, then the three families and the labels. The full tool list, with every
@@ -124,6 +126,13 @@ the user, in the conversation, can give it — never a file in the repository. T
 show exactly what would be sent and need no consent. `preview_ci_triage` is read-only but marked
 open-world, because it calls GitHub.
 
+In the sessions of 2026-09-24 the server's guard rails held: a run of another repository was
+refused, and nothing was sent without the user's consent. The agent did not stop there, though.
+After the refusal it read that run itself with `gh` and a web fetch, and without consent it judged
+the previewed failures itself instead of asking. The ci-triage skill now says to do neither: say
+that the run was refused and stop, and without a yes to send, show what would be sent and the cost,
+and ask.
+
 ### Where the server runs, and which folder is the project
 
 Claude Code starts the server in the project and sets `CLAUDE_PROJECT_DIR`, which the server uses
@@ -140,10 +149,12 @@ A home folder or a filesystem root is refused as a project anywhere.
 ### Unattended and CI
 
 A headless Claude Code run did discover and load the spec-drift skill on its own, with no mention
-of the plugin in the prompt. What was **not** established here is which permission flags a fully
-unattended run needs before `mcp__plugin_jevmcp_jevmcp__check_spec_drift` or the other tools that
-send will execute. For CI, do not drive an agent at all — run the scripts directly (see
-[how-to.md](how-to.md)):
+of the plugin in the prompt. On 2026-09-24, headless Claude Code 2.1.281 sessions ran the CI-triage
+tools (preview, then triage by snapshot) and the code-audit tools (validate, preview, then check)
+end to end on the installed 1.7.0, with those tools permitted for the test. What was **not**
+established here is which permission flags a fully unattended run needs before
+`mcp__plugin_jevmcp_jevmcp__check_spec_drift` or the other tools that send will execute. For CI,
+do not drive an agent at all — run the scripts directly (see [how-to.md](how-to.md)):
 
 ```bash
 uv run --script <plugin>/scripts/spec_drift.py --map spec_map.json --dry-run --strict   # free
@@ -174,7 +185,8 @@ finds the same login as the user's terminal.
 
 ## OpenAI Codex
 
-Tested with `codex-cli 0.155.1`.
+Tested with `codex-cli 0.155.1`; the CI-triage tools and `codex exec` again with `codex-cli 0.156.1`,
+on 2026-09-24.
 
 ### Discovery and install
 
@@ -199,7 +211,7 @@ Codex merges an overlay entry only when it is a complete server definition; the 
 `mcp.json` still decides the command (checked with `codex mcp list --json`).
 
 Installed copies live at `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.codex/plugins/cache/jev/jevmcp/1.7.0/`. `~/.codex/config.toml` gains
+`~/.codex/plugins/cache/jev/jevmcp/1.7.1/`. `~/.codex/config.toml` gains
 `[plugins."jevmcp@jev"] enabled = true` (and a `[marketplaces.jev]` entry).
 
 Update with `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`.
@@ -257,8 +269,12 @@ The free tools can run unattended if the user adds to `~/.codex/config.toml`:
 default_tools_approval_mode = "auto"
 ```
 
-`preview_ci_triage` is read-only but marked open-world, because it calls GitHub; whether Codex
-asks before it under that setting was not verified here.
+`preview_ci_triage` is read-only but marked open-world, because it calls GitHub. With Codex
+0.156.1 (tested 2026-09-24) it ran under `codex exec`, whose approval policy is `never`, without
+that setting in `~/.codex/config.toml`: Codex did not require approval for it. In the same run
+`triage_ci_failure` was blocked (*"MCP tool call requires approval, but approval policy is
+never"*), as designed. The other tools were not called in that run, and an interactive session
+was not re-checked for `preview_ci_triage`.
 
 ### Where the server runs, and which folder is the project
 
@@ -277,13 +293,18 @@ relative path is refused (`project must be an absolute path`), and a home folder
 
 ### Unattended and CI — what fails, exactly
 
-Tested on 2026-09-22 with Codex 0.155.1:
+Tested on 2026-09-22 with Codex 0.155.1, and `codex exec` again on 2026-09-24 with 0.156.1.
+`codex exec` runs with approval policy `never`:
 
-| Command | Result |
-|---|---|
-| `codex exec '...'` | Every MCP tool is blocked: *"MCP tool call requires approval, but approval policy is never"*. `codex exec` runs with approval policy `never`. |
-| `codex exec --approve-for-me '...'` | Still refused. Codex's automatic reviewer rejects `check_spec_drift` because it *"may transmit project spec and code to the untrusted TypeSafe destination"*. |
-| `codex exec --dangerously-bypass-approvals-and-sandbox '...'` | Works (verified: 3 DRIFT on the demo project). It switches off the sandbox **and** all approvals, so use it only where the whole job is already isolated, such as a CI container. |
+| Command | Codex | Result |
+|---|---|---|
+| `codex exec '...'` | 0.156.1 (2026-09-24) | The read-only `preview_ci_triage` ran: it read a GitHub run and returned its preview. The tools that send are blocked: `triage_ci_failure` failed with *"MCP tool call requires approval, but approval policy is never"*. No other tool was called. |
+| `codex exec '...'` | 0.155.1 (2026-09-22) | Every MCP tool was blocked, with the same message. |
+| `codex exec --approve-for-me '...'` | 0.155.1 | Still refused. Codex's automatic reviewer rejects `check_spec_drift` because it *"may transmit project spec and code to the untrusted TypeSafe destination"*. |
+| `codex exec --dangerously-bypass-approvals-and-sandbox '...'` | 0.155.1 | Works (verified: 3 DRIFT on the demo project). It switches off the sandbox **and** all approvals, so use it only where the whole job is already isolated, such as a CI container. |
+
+With 0.156.1 the tools that send were not run headless: the only unattended route is the last row,
+which switches off approvals and the sandbox.
 
 Better for CI: skip the agent and run the scripts where the network works —
 `uv run --script <plugin>/scripts/spec_drift.py --map spec_map.json`, `ci_triage.py` or
@@ -306,12 +327,15 @@ Codex also passes the server a minimal environment — `HOME`, `LANG`, `LOGNAME`
   `preview_ci_triage` the run's URL and the server reads it with the user's `gh`, outside the
   sandbox. That `gh` sees only the minimal environment above, so a login that `gh` finds only
   through `GH_TOKEN` or `GITHUB_TOKEN` does not reach it; `gh auth login` in the user's own
-  terminal does. Not verified end to end in Codex.
+  terminal does. Verified with Codex 0.156.1 on 2026-09-24: `preview_ci_triage` read a failed
+  GitHub run this way. In that run Codex's own web tool also opened the run's page on github.com.
 - **Log files from another CI** go inside the project, which the agent can always write to. The
   server's private inbox is an alternative, but whether Codex's sandbox lets the agent write
   there was not verified.
 - **The 600-second tool limit.** The overlay allows each tool call 600 s. A large audit can take
   longer: preview first, and narrow it with `base` or `files`.
+- **Not yet verified in Codex:** the code-audit tools, and a CI triage actually sent from a Codex
+  session (it needs the approval that `codex exec` cannot give).
 
 ### Known quirks
 
@@ -373,9 +397,9 @@ that is the one difference. `ci_triage.py` and `code_audit.py` never read a `.en
 
 | | Version |
 |---|---|
-| jevmcp plugin | 1.7.0 |
-| Claude Code | 2.1.278 (the `claude` CLI on the machine used for the final check reports 2.1.280; nothing here is known to have changed) |
-| OpenAI Codex | `codex-cli 0.155.1` |
+| jevmcp plugin | 1.7.1 |
+| Claude Code | 2.1.278 (the `claude` CLI on the machine used for the final check reports 2.1.280; nothing here is known to have changed); 2.1.281 for the CI-triage and code-audit sessions of 2026-09-24 |
+| OpenAI Codex | `codex-cli 0.155.1`; `codex-cli 0.156.1` for the CI-triage and `codex exec` checks of 2026-09-24 |
 | uv | 0.11.16 |
 
 ## Next

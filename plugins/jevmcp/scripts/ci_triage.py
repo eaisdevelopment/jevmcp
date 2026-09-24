@@ -39,6 +39,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -61,7 +62,16 @@ MAX_LINE_CHARS = 240
 MAX_LOG_CHARS = 5_000    # end of the failing step's output
 MAX_DIFF_CHARS = 5_000
 MAX_FACT_FILES = 12
-MAX_LOG_BYTES = 25_000_000
+MAX_LOG_BYTES = 25_000_000     # the end of one job's log that is kept (read as it arrives, never whole)
+MAX_LOG_JOBS = 40              # failed jobs whose logs are read, per run
+# All the logs of one GitHub run together. Reading stops before the next job once the logs kept reach
+# this, so at most LOG_BUDGET_BYTES + MAX_LOG_BYTES (75 MB) of log text is held. Parsing is what costs
+# memory, 5 to 7 times the text. Measured on real logs (tokio's): 35 MB peaked at 261 MB and took 14 s;
+# the worst case, 75 MB in three jobs, peaked at 395 MB and took 54 s. Before this budget, 40 jobs of
+# 25 MB each (1 GB of text) could all be held and parsed at once. Every run of the 73-run real corpus
+# is still read whole (the most any of them logs in its failed jobs is 35 MB). The jobs not read are
+# named in a note, and their failures come back with no log.
+LOG_BUDGET_BYTES = 50_000_000
 STATE_VERSION = "ci-state-1"   # thresholds were fitted on this state layout; change it, re-measure
 
 CHANGE_CAUSES = ("change_broke_code", "change_needs_test_update")
@@ -560,9 +570,11 @@ def _gh_exe() -> str:
     return exe
 
 
-def gh_api(path: str, accept: str | None = None, cache_dir: str | None = None, timeout: int = 120) -> str:
+def gh_api(path: str, accept: str | None = None, cache_dir: str | None = None, timeout: int = 120,
+           tail: int | None = None) -> str:
     """GET one GitHub REST path with the user's gh login. Only GET, only repos/... paths built here
-    from validated parts; gh writes no cache of its own; nothing is prompted for."""
+    from validated parts; gh writes no cache of its own; nothing is prompted for. With `tail`, only
+    the last `tail` bytes of the answer are kept: a job log is read as it arrives, never held whole."""
     if not re.fullmatch(r"repos/[\w.-]+/[\w.-]+(?:/[\w.:~-]+)*(?:\?[\w=&%.,:-]*)?", path) \
             or any(seg.strip(".") == "" for seg in path.split("?")[0].split("/")):      # no '.' or '..' segment
         raise Stop(f"refusing an unexpected GitHub API path: {path[:80]}")
@@ -576,11 +588,15 @@ def gh_api(path: str, accept: str | None = None, cache_dir: str | None = None, t
     if cache_dir:
         env["XDG_CACHE_HOME"] = cache_dir
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, errors="replace")
+        if tail is None:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, errors="replace")
+            code, stdout, stderr = out.returncode, out.stdout, out.stderr
+        else:
+            code, stdout, stderr = _run_keeping_tail(cmd, env, timeout, tail)
     except subprocess.TimeoutExpired:
         raise Stop(f"GitHub did not answer in {timeout} s ({path.split('?')[0]}).")
-    if out.returncode != 0:
-        err = (out.stderr or out.stdout).strip()
+    if code != 0:
+        err = (stderr or stdout).strip()
         if re.search(r"auth login|authentication|401", err, re.I):
             raise Stop("`gh` is not logged in to GitHub. Run `gh auth login` in your own terminal, then try again.")
         if re.search(r"HTTP 404|Not Found", err):
@@ -588,7 +604,40 @@ def gh_api(path: str, accept: str | None = None, cache_dir: str | None = None, t
         if re.search(r"HTTP 410|Gone|expired", err, re.I):
             raise Stop(f"GitHub no longer keeps {path.split('?')[0]} (logs expire after the repository's retention period).")
         raise Stop(f"reading {path.split('?')[0]} from GitHub failed: {err[:240]}")
-    return out.stdout
+    return stdout
+
+
+def _run_keeping_tail(cmd: list[str], env: dict, timeout: int, tail: int) -> tuple[int, str, str]:
+    """Run `cmd` and keep only the last `tail` bytes of what it prints, read 1 MiB at a time, so
+    memory stays under 2 x `tail` + 1 MiB however much it prints. Killed after `timeout` seconds."""
+    timed_out = threading.Event()
+    with tempfile.TemporaryFile() as err:          # a file, not a pipe: a full stderr pipe would stall gh
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, env=env)
+
+        def kill() -> None:
+            if proc.poll() is None:
+                timed_out.set()
+                proc.kill()
+        timer = threading.Timer(timeout, kill)
+        timer.start()
+        buf = bytearray()
+        try:
+            while chunk := proc.stdout.read(1 << 20):
+                buf += chunk
+                if len(buf) > 2 * tail:
+                    del buf[:len(buf) - tail]
+            code = proc.wait()
+        finally:
+            timer.cancel()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            proc.stdout.close()
+        if timed_out.is_set():
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        err.seek(0)
+        stderr = err.read().decode("utf-8", errors="replace")
+    return code, bytes(buf[-tail:]).decode("utf-8", errors="replace"), stderr
 
 
 def _all_jobs(api, path: str) -> list[dict]:
@@ -698,15 +747,23 @@ def from_github(ref: str, repo: str | None = None, root: Path | None = None, any
     if not failed_jobs:
         raise Stop(f"attempt {attempt} of run {r['run']} has no failed job. Nothing to triage.")
     info = {"jobs": failed_jobs, "url": run.get("html_url"), "attempt": attempt, "workflowName": run.get("name")}
-    logs = []
-    for j in failed_jobs[:40]:
+    logs, kept, unread = [], 0, []
+    for n, j in enumerate(failed_jobs):
+        if n >= MAX_LOG_JOBS or kept >= LOG_BUDGET_BYTES:
+            unread.append(clean_line(j["name"]))
+            continue
         try:
-            text = api(f"repos/{o_r}/actions/jobs/{j['id']}/logs")
-            logs.append(f"===== job: {j['name']} (job_id {j['id']}) =====\n{text[-MAX_LOG_BYTES:]}")
+            text = gh_api(f"repos/{o_r}/actions/jobs/{j['id']}/logs", cache_dir=cache_dir, tail=MAX_LOG_BYTES)
         except Stop as e:
-            notes.append(f"the log of job {clean_line(j['name'])} could not be read: {e}")
-    if len(failed_jobs) > 40:
-        notes.append(f"{len(failed_jobs) - 40} more failed jobs were not read")
+            notes.append(f"INCOMPLETE: the log of job {clean_line(j['name'])} could not be read: {e}")
+            continue
+        kept += len(text)
+        logs.append(f"===== job: {j['name']} (job_id {j['id']}) =====\n{text}")
+        del text
+    if unread:
+        notes.append(f"INCOMPLETE: the logs of {len(unread)} failed job(s) were not read, because reading stops "
+                     f"after {MAX_LOG_JOBS} jobs or once {LOG_BUDGET_BYTES // 1_000_000} MB of logs have been read: "
+                     f"{', '.join(unread)}. This triage does not cover them; pass a job's own URL to triage it alone.")
     sha, event = run.get("head_sha"), run.get("event")
     diff = None
     trusted = (run.get("head_repository") or {}).get("full_name", o_r).lower() == \
@@ -741,7 +798,9 @@ def from_github(ref: str, repo: str | None = None, root: Path | None = None, any
             same_job = "failure" if "failure" in hits else ("success" if hits else None)
     except (Stop, KeyError, json.JSONDecodeError) as e:
         notes.append(f"the default branch's record could not be read: {str(e)[:120]}")
-    fails, ctx = assemble(info, "\n".join(logs), diff, source=f"github:{o_r}#{r['run']}", notes=notes)
+    log = "\n".join(logs)
+    logs.clear()                                   # one copy of the log text while it is parsed, not two
+    fails, ctx = assemble(info, log, diff, source=f"github:{o_r}#{r['run']}", notes=notes)
     ctx.later_attempt_passed, ctx.default_branch_same_job, ctx.trusted = later_passed, same_job, trusted
     return fails, ctx
 
@@ -1182,8 +1241,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--run", help="GitHub Actions run, job or pull-request URL (or a run id with --repo)")
     ap.add_argument("--repo", help="OWNER/NAME for a bare run id")
     ap.add_argument("--any-repo", action="store_true", help="allow a run from a repository that is not a remote of --src")
-    ap.add_argument("--log", nargs="+", default=[], type=Path, help="log file(s) from any CI")
-    ap.add_argument("--junit", nargs="+", default=[], type=Path, help="JUnit XML report(s)")
+    ap.add_argument("--log", nargs="+", default=[], type=Path, help="log file(s) from any CI, inside --src")
+    ap.add_argument("--junit", nargs="+", default=[], type=Path, help="JUnit XML report(s), inside --src")
     ap.add_argument("--base", help="with --log/--junit: git ref the change is compared against (e.g. origin/main)")
     ap.add_argument("--src", type=Path, default=Path("."), help="project checkout (default: .)")
     ap.add_argument("--dry-run", action="store_true", help="show what would be sent and the cost; send nothing")
@@ -1231,13 +1290,17 @@ def main(argv: list[str] | None = None) -> int:
     for r in results:
         root_line = (r.get("root_error") or {}).get("line", "")
         print(f"{r['label']:<7} {r.get('lean', ''):<28} {r['step'][:36]:<36} x{r['job_count']}  {root_line[:80]}")
+    unread = [n for n in ctx.notes if n.startswith("INCOMPLETE")]     # failed jobs whose logs were not read
+    complete = run.complete and not unread
     print(f"\n{len(results)} failure(s), {run.tokens} tokens, ${run.cost_usd:.5f}"
-          + ("" if run.complete else "  INCOMPLETE - not every failure was checked"))
+          + ("" if complete else "  INCOMPLETE - not every failure was checked"))
+    for n in unread:
+        print(f"  {n}")
     for p in run.problems + run.vendor:
         print(f"  {p}", file=sys.stderr)
     out = a.out or Path("triage.json")
     out.write_text(json.dumps({"source": ctx.source, "url": ctx.url, "notes": ctx.notes, "results": results,
-                               "cost_usd": run.cost_usd, "complete": run.complete}, indent=1, ensure_ascii=False))
+                               "cost_usd": run.cost_usd, "complete": complete}, indent=1, ensure_ascii=False))
     return exit_code(results, run)
 
 

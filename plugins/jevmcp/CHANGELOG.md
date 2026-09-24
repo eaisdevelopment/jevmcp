@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.7.1 — 2026-09-24
+
+**Spec drift now knows which spec is the current one.** A project can hold several spec documents, or
+several historical versions of one spec. Before, a folder given to `draft_spec_map` was read whole, so a
+`specs/` folder with `v1.md`, `v2.md` and an `archive/` put obsolete requirements into the map, and nothing
+said so later. Now:
+
+- **`draft_spec_map` without `docs` drafts nothing.** It lists every file that looks like a spec, with its
+  last commit date. It flags any that look like an old copy (a version number or date in the name, a folder
+  such as `archive/` or `old/`, a history word, or a line near the top that says it is superseded,
+  deprecated, withdrawn or reverted), and groups the files that look like versions of one document, with the
+  newest named. The agent shows this list and asks the user which file(s) are current. Command line:
+  `spec_drift.py --find-specs`.
+- **A folder that holds old copies or several versions of one spec is refused**, with the files and the
+  reasons listed, and the files nothing flags named. Nothing is written. A file the user names is always
+  used, with a warning if it looks old or a newer version exists.
+- **Staleness is checked on every run.**
+  - If a spec the map checks says near its top that it is superseded or out of date, the map is not ready:
+    `validate_spec_map` reports a problem, `check_spec_drift` sends nothing, and the command line exits 2.
+  - If the line is about something else and the user confirms the spec is current, the map's new
+    `confirmed_current` list turns it into a warning.
+  - If a newer version of a mapped spec appears, every check, validate and preview warns, and names both files.
+- The map records the spec files it was drafted from (`specs`).
+
+**Tested on real repositories before release:** OpenAPI-Specification (`versions/` holds 12 versions of one
+spec: all but the newest flagged, and 3.2.1 chosen as newest), rust-lang/rfcs (numbered RFCs are not treated
+as versions of each other; withdrawn and superseded RFCs are caught), python/peps (102 superseded or withdrawn
+PEPs flagged, 0 wrongly), the GraphQL and JSON Schema specs, and ADR collections (superseded, reverted ADRs).
+That testing found, and 1.7.1 fixes:
+- a regular expression that took about 10 minutes on a Sphinx title underline;
+- hard-wrapped prose ("replaced by terminal characters.") that wrongly blocked the real GraphQL spec;
+- 19 files wrongly called old copies by their name alone.
+
+**Map upkeep.**
+- `validate_spec_map` reports how many entries' sentences moved to another line.
+- `spec_drift.py --update-lines` rewrites only those line numbers.
+- `preview_spec_check` finds an entry by its stored or its current line.
+- Entries that share a line are listed once among the likely `??`.
+
+**CI triage.**
+- A job log is read a piece at a time, and only its end is kept.
+- Reading stops at a total budget across jobs. A triage that could not read every job's log says so and
+  reports `complete: false`.
+- The skill now tells the agent two things. When a run of another repository is refused, stop: do not read
+  that run another way. Without the user's yes to send, stop after the free preview, show what would be sent
+  and the cost, and ask. Real Claude Code sessions on 1.7.0 did neither.
+
+**Also fixed.**
+- Non-UTF-8 file names no longer stop the server.
+- A spec checked from another folder is found for the staleness check.
+- `codex exec` behaviour is documented for Codex 0.156.1: the free, read-only tools run, and only the tools
+  that send need approval.
+- `--log` and `--junit` say they must be inside `--src`.
+
 ## 1.7.0 — 2026-09-23
 
 **Two new tool families, in the same plugin and on the same server: CI failure triage and code

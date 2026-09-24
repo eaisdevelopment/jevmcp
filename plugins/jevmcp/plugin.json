@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "jevmcp",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Jev tools for coding agents, in one plugin: spec-drift checking, CI failure triage and code audit. A fast model (TypeSafe's Jev) screens - each requirement against its code, each failure of a CI run against the change under test, each of your project's own rules against the code it covers - and the agent investigates only what it flags. More tools are added to this same plugin, so you install once.",
   "author": {
     "name": "Essential AI Solutions Ltd.",

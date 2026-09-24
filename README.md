@@ -25,9 +25,15 @@ You do not create or edit any file yourself. In your project, ask your agent:
 
 > Set up spec-drift checking for this project.
 
-1. It finds your spec — a design, requirements or architecture document (Markdown).
-2. It runs `draft_spec_map`, which **writes `spec_map.json` for you**: one entry per sentence of the
-   spec, each with a suggested place in the code. Nothing is sent anywhere; this is free.
+1. It lists the files that look like specs — design, requirements, architecture, ADR or RFC
+   documents (Markdown or reStructuredText) — with the date each was last committed, and flags
+   the ones that look like old copies: a version number or a date in the name, a folder such as
+   `archive/`, a line near its top that says "superseded" or "deprecated", or a newer version
+   next to it. **You choose** which file or files are the current spec. The tool never guesses, and only
+   the files you name are checked.
+2. It runs `draft_spec_map` on those files, which **writes `spec_map.json` for you**: one entry per
+   sentence of the spec, each with a suggested place in the code. Nothing is sent anywhere; this
+   is free.
 3. It reviews the entries with you, fixes the wrong guesses, and marks sentences that are not
    requirements as excluded with a reason. This is the part that needs your knowledge, and it is
    the only part that takes time.

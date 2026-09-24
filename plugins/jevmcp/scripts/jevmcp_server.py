@@ -73,8 +73,11 @@ from collections import deque
 from pathlib import Path
 
 # The protocol owns stdout. Anything else that prints - the checker's notes, a library
-# warning - goes to stderr, which Claude Code keeps in its MCP log.
-_PROTOCOL_OUT = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", newline="\n", write_through=True)
+# warning - goes to stderr, which Claude Code keeps in its MCP log. errors="replace": a lone
+# surrogate in a reply (a file name that is not UTF-8, a "\udcff" escape in the arguments) is
+# written as "?" - otherwise the write fails and the server stops answering.
+_PROTOCOL_OUT = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", newline="\n",
+                                 write_through=True)
 try:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except (AttributeError, ValueError):
@@ -88,7 +91,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -135,6 +138,70 @@ Labels: DRIFT, CHANGE, BREAKS = investigate each one; review = sorted by probabi
 from the top; ?? = NOT a pass (what was shown cannot settle it); ok = spot-check a couple.
 An incomplete run is never a pass."""
 
+# Whether the spec files a map checks are still the current ones (spec_drift.spec_version_report).
+_SPEC_VERSIONS_OUT = {
+    "type": "object", "additionalProperties": False,
+    "description": "whether each spec file the map checks is still the current one. problems: a spec says at its top "
+                   "that it is superseded, deprecated or obsolete - the map is not ready and check_spec_drift sends "
+                   "nothing. warnings: another file looks like a newer version of a spec - ask the user whether it "
+                   "is the current spec",
+    "properties": {
+        "specs": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "spec": {"type": "string"},
+                "declares_old": {"type": ["object", "null"], "additionalProperties": False,
+                                 "description": "the line near its top that says it is out of date",
+                                 "properties": {"line": {"type": "integer"}, "text": {"type": "string"}},
+                                 "required": ["line", "text"]},
+                "confirmed_current": {"type": "boolean", "description": "the map's confirmed_current lists it: the user "
+                                      "confirmed it is current, so a line that reads as out of date is only a warning"},
+                "newer": {"type": ["string", "null"], "description": "a file that looks like a newer version of it"},
+                "other_versions": {"type": "array", "items": {"type": "string"},
+                                   "description": "files that look like other versions of the same document"},
+                "newest_decided_by": {"type": "string"}},
+            "required": ["spec", "declares_old", "confirmed_current", "newer", "other_versions", "newest_decided_by"]}},
+        "problems": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}}},
+    "required": ["specs", "problems", "warnings"]}
+# One file that looks like a spec (spec_drift.spec_candidates), for the user to choose from.
+_SPEC_CANDIDATE_OUT = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "path": {"type": "string"},
+        "title": {"type": ["string", "null"],
+                  "description": "its title: front matter title, a Title: header field, else its first heading"},
+        "last_commit": {"type": ["string", "null"], "description": "date of the last commit that changed it"},
+        "committed": {"type": "boolean"},
+        "last_commit_not_found": {"type": ["string", "null"],
+                                  "description": "why last_commit is null although git tracks the file (git log "
+                                                 "stopped before it got there): its last commit is unknown, which "
+                                                 "is not the same as not committed. null otherwise"},
+        "looks_historical": {"type": "array", "items": {"type": "string"},
+                             "description": "why it may be an old copy: a version number, a date or a word such "
+                                            "as archive in its path, or a line at its top that says so. A version "
+                                            "number or date is not counted against the newest version of a "
+                                            "document, or against a document that has no other version"},
+        "self_declared": {"type": ["string", "null"],
+                          "description": "the line near its top that says it is superseded, deprecated, withdrawn "
+                                         "or reverted"},
+        "family": {"type": "string", "description": "the document it is a version of"},
+        "family_size": {"type": "integer", "description": "how many files look like versions of that document"},
+        "newest_in_family": {"type": ["string", "null"], "description": "null: which is newest cannot be told"},
+        "newest_decided_by": {"type": "string"}},
+    "required": ["path", "title", "last_commit", "committed", "last_commit_not_found", "looks_historical",
+                 "self_declared", "family", "family_size", "newest_in_family", "newest_decided_by"]}
+_SPEC_FAMILY_OUT = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "family": {"type": "string"}, "members": {"type": "array", "items": {"type": "string"}},
+        "newest": {"type": ["string", "null"]}, "decided_by": {"type": "string"},
+        "last_commits": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+        "last_commit_not_found": {"type": "object", "additionalProperties": {"type": "string"},
+                                  "description": "member -> why its last commit is unknown (git log stopped before "
+                                                 "it got there); such a member is committed, not new"}},
+    "required": ["family", "members", "newest", "decided_by", "last_commits", "last_commit_not_found"]}
+
 # One list per family; TOOLS below joins them. A new family adds its list there and its methods to
 # Server.call's table - people keep one server and one key.
 SPEC_DRIFT_TOOLS = [
@@ -150,7 +217,8 @@ SPEC_DRIFT_TOOLS = [
             "important first: DRIFT, then 'review' sorted by P(drifted), then '??' (not a pass), then "
             "a count of 'ok'. By default only claims about the files git reports as changed are "
             "checked (a few seconds, fractions of a cent). Sends the spec sentence and the paired code "
-            "(comments removed, secrets redacted) to TypeSafe."),
+            "(comments removed, secrets redacted) to TypeSafe. Sends nothing when a spec file the map checks "
+            "says it is superseded or deprecated; warns (spec_versions) when a newer version of it exists."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -203,9 +271,11 @@ SPEC_DRIFT_TOOLS = [
                     "samples": {"type": "integer", "description": "how many times this claim was asked about"},
                     "next_step": {"type": "string", "description": "on a DRIFT: the decision to make"}},
                     "required": ["label", "doc", "line", "claim", "p_drifted", "code_refs", "why"]}},
+                "spec_versions": _SPEC_VERSIONS_OUT,
             },
             "required": ["project", "map", "claims_in_map", "claims_selected", "checked", "counts", "cost_usd",
-                         "complete", "results_file", "map_problems", "not_checked", "map_health", "flagged"],
+                         "complete", "results_file", "map_problems", "not_checked", "map_health", "flagged",
+                         "spec_versions"],
         },
     },
     {
@@ -216,7 +286,10 @@ SPEC_DRIFT_TOOLS = [
         "description": (
             "Check that the spec map still fits the spec and the code - every reference resolves, "
             "nothing is stale, and (strict, the default) every spec sentence is either mapped or "
-            "marked excluded with a reason. Free: sends nothing. Run after editing the spec or the map."),
+            "marked excluded with a reason. Also says whether each spec file the map checks is still the "
+            "current one (spec_versions: one that says it is superseded makes the map not ready; a newer "
+            "version is a warning to take to the user) and how many entries' sentences moved to another "
+            "line (moved_entries). Free: sends nothing. Run after editing the spec or the map."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -244,12 +317,17 @@ SPEC_DRIFT_TOOLS = [
                 "full_check_cost_usd": {"type": "number"},
                 "full_check_cost_usd_max": {"type": "number", "description": "if every claim is asked again"},
                 "samples": {"type": "integer"},
-                "likely_unverifiable": {"type": "array", "items": {"type": "string"}},
+                "likely_unverifiable": {"type": "array", "items": {"type": "string"},
+                                        "description": "one line per spec line; it says how many entries share it"},
                 "problems": {"type": "array", "items": {"type": "string"}},
                 "notes": {"type": "array", "items": {"type": "string"}},
+                "spec_versions": _SPEC_VERSIONS_OUT,
+                "moved_entries": {"type": "integer",
+                                  "description": "entries whose sentence is now on another line of the spec than "
+                                                 "the map stores; the check still finds them"},
             },
             "required": ["project", "map", "ready", "entries_to_check", "excluded", "full_check_cost_usd",
-                         "problems", "notes"],
+                         "problems", "notes", "spec_versions", "moved_entries"],
         },
     },
     {
@@ -260,7 +338,8 @@ SPEC_DRIFT_TOOLS = [
         "description": (
             "Show exactly what check_spec_drift would send to TypeSafe for some claims: the sentence, the "
             "code with comments removed and secrets redacted, any computed values, and the 3 fixed "
-            "questions. Free: sends nothing."),
+            "questions; and whether the spec files the map checks are still current (spec_versions). "
+            "Free: sends nothing."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -268,7 +347,8 @@ SPEC_DRIFT_TOOLS = [
                           "description": "Claims about these files. Leave out (and leave out 'line') "
                                          "for the files git reports as changed."},
                 "line": {"type": "integer",
-                         "description": "Only the claim(s) from this line of the spec."},
+                         "description": "Only the claim(s) from this line of the spec - the line the sentence is "
+                                        "on now, or the line the map stores for it."},
                 "map": {"type": "string",
                         "description": "The spec map (spec_map.json: which code implements which spec "
                                        "sentence) to use, relative to the project. Leave out: the "
@@ -281,6 +361,20 @@ SPEC_DRIFT_TOOLS = [
             },
             "additionalProperties": False,
         },
+        "outputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "project": {"type": "string"}, "map": {"type": "string"}, "model": {"type": "string"},
+                "claims": {"type": "array", "description": "the claims shown; their states are in the text",
+                           "items": {"type": "object", "additionalProperties": False,
+                                     "properties": {"doc": {"type": "string"}, "line": {"type": "integer"},
+                                                    "map_line": {"type": ["integer", "null"],
+                                                                 "description": "the line the map stores, when "
+                                                                                "the sentence has moved since"}},
+                                     "required": ["doc", "line", "map_line"]}},
+                "spec_versions": _SPEC_VERSIONS_OUT},
+            "required": ["project", "map", "model", "claims", "spec_versions"],
+        },
     },
     {
         "name": "draft_spec_map",
@@ -288,26 +382,53 @@ SPEC_DRIFT_TOOLS = [
         "annotations": {"title": "Draft the spec map (pair each requirement with code)", "readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": False},
         "description": (
-            "Set up a project that has no spec map yet: suggest a code location for every sentence of the "
-            "spec(s) and write them to a new map file for review. Every entry must then be reviewed - point "
+            "Set up a project that has no spec map yet, in two calls. First call it WITHOUT docs: it drafts "
+            "nothing and lists every file that looks like a spec, with its last commit date and flags (looks "
+            "like an old copy, says it is superseded, a newer version exists). Show that list to the user and "
+            "ask which file(s) are the current source of truth - never pick one yourself. Then call it with "
+            "docs = exactly those files and out: it suggests a code location for every sentence and writes a "
+            "new map file for review, with warnings about any named file that looks old. A folder that holds "
+            "old copies or several versions of a spec is refused. Every entry must then be reviewed - point "
             "'code' at what enforces the sentence and set status 'reviewed', or set status 'excluded' with a "
             "'why' - before check_spec_drift is worth running. Free: sends nothing. Never overwrites a file."),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "docs": {"type": "array", "items": {"type": "string"},
-                         "description": "The spec file(s) or folder(s), relative to the project."},
+                         "description": "The spec file(s) the user named as current, relative to the project. "
+                                        "Leave out to list the candidates instead (nothing is written). A folder "
+                                        "is refused when it holds old copies or several versions of a spec."},
                 "out": {"type": "string",
                         "description": "The new map file, relative to the project - usually next to the "
-                                       "spec, named spec_map.json."},
+                                       "spec, named spec_map.json. Needed with docs."},
                 "project": {"type": "string",
                             "description": "Absolute path of the project folder - your working directory. "
                                            "Needed when the client does not tell the server which project "
                                            "it is in (Codex). Where the client does tell it, this must be that same "
                                            "folder or one inside it - another project is refused."},
             },
-            "required": ["docs", "out"],
             "additionalProperties": False,
+        },
+        "outputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "project": {"type": "string"},
+                "drafted": {"type": "boolean", "description": "a map file was written"},
+                "out": {"type": ["string", "null"], "description": "the map written, relative to the project"},
+                "specs": {"type": "array", "items": {"type": "string"},
+                          "description": "the spec files drafted from (also recorded in the map as 'specs')"},
+                "entries": {"type": "integer", "description": "entries written"},
+                "warnings": {"type": "array", "items": {"type": "string"},
+                             "description": "named files that look old or have a newer version, files left out "
+                                            "(templates, names that are not valid UTF-8), a named folder whose files "
+                                            "git ignores: show each to the user"},
+                "candidates": {"type": "array", "items": _SPEC_CANDIDATE_OUT,
+                               "description": "without docs: every file that looks like a spec"},
+                "families": {"type": "array", "items": _SPEC_FAMILY_OUT,
+                             "description": "without docs: files that look like versions of one document"},
+                "next_step": {"type": "string"}},
+            "required": ["project", "drafted", "out", "specs", "entries", "warnings", "candidates", "families",
+                         "next_step"],
         },
     },
 ]
@@ -441,7 +562,9 @@ CI_TRIAGE_TOOLS = [
                            "properties": {k: _INT for k in ("CHANGE", "review", "??")},
                            "required": ["CHANGE", "review", "??"]},
                 "cost_usd": _NUM,
-                "complete": {"type": "boolean", "description": "every failure was checked"},
+                "complete": {"type": "boolean", "description": "every failure was checked, and every failed "
+                                                                "job's log was read (false when a note starts "
+                                                                "INCOMPLETE)"},
                 "not_checked": _STRS,
                 "results_file": {"type": "string", "description": "every result, with the exact states sent"},
                 "results": {"type": "array", "items": _CI_RESULT_OUT,
@@ -920,7 +1043,8 @@ class Server:
             maps = self.find_maps()
             if not maps:
                 raise ToolError(f"this project ({self.root}) has no spec map yet (no *spec_map.json). Set one up: "
-                                f"draft_spec_map with the spec file(s), then review every entry.")
+                                f"draft_spec_map without docs lists the files that look like specs - ask the user "
+                                f"which are current, draft from exactly those, then review every entry.")
             if len(maps) > 1:
                 raise ToolError("this project has several spec maps - say which one with 'map': " + ", ".join(maps))
             chosen = maps[0]
@@ -946,6 +1070,9 @@ class Server:
                     map: str | None = None) -> tuple[str, bool]:
         problems: list[str] = []
         self.resolve_map(map)                     # a project without a map: say so before reading the code
+        versions = self.spec_versions()
+        if versions["problems"]:                  # an outdated spec is never checked, not even in part
+            raise ToolError("check refused - nothing was sent: " + " ".join(versions["problems"]))
         syms = self.index()
         claims = self.claims(syms, problems, map)
         total = len(claims)
@@ -957,6 +1084,7 @@ class Server:
         if problems:
             head += ["", "MAP PROBLEMS - these entries were NOT checked (fix the map, then validate_spec_map):"]
             head += [f"  - {p}" for p in problems]
+        head += _version_text(versions)
         structured = {"summary": head[0], "project": str(self.root), "map": self.map_used, "claims_in_map": total,
                       "claims_selected": len(claims), "checked": 0,
                       "counts": {"DRIFT": 0, "review": 0, "??": 0, "ok": 0}, "cost_usd": 0.0,
@@ -964,7 +1092,7 @@ class Server:
                       "not_checked": [],
                       "map_health": {"checked": 0, "unverifiable": 0, "unverifiable_pct": 0.0,
                                      "most_often_paired_with": [], "entries_to_fix": []},
-                      "flagged": []}
+                      "flagged": [], "spec_versions": versions}
         if not claims:
             head.append("nothing to check" + ("" if all else " - no claim in the map is about those files. "
                                               "Use all=true for a full check."))
@@ -1051,9 +1179,15 @@ class Server:
         if strict:
             problems += [f"{n} (strict)" for n in dd.MAP_NOTES]
         excluded = dd.MAP_COUNTS.get("excluded", 0)
+        moved = dd.MAP_COUNTS.get("moved", 0)
+        versions = self.spec_versions()
+        problems = versions["problems"] + problems  # an outdated spec comes first: nothing else matters until it is fixed
         # Worked out locally, for free: claims whose pairing cannot settle them. Each would cost
         # a request and come back "??", so it is cheaper to say so before anything is sent.
         weak_list = [(c, w) for c in claims if (w := dd.preflight(c))]
+        weak_lines: dict[str, int] = {}          # entries that share a spec line and a reason are listed once
+        for c, w in weak_list:
+            weak_lines[f"{c.doc}:{c.line} - {w[0]}"] = weak_lines.get(f"{c.doc}:{c.line} - {w[0]}", 0) + 1
         lines = [f"{self.map_used}: {len(claims)} entries ready to check"
                  + (f"; {excluded} marked excluded (not requirements, never sent)" if excluded else "")
                  + f" | {self.last_index}"]
@@ -1063,68 +1197,111 @@ class Server:
         lines.append(f"a full check would cost about ${dd.estimate_cost(claims):.4f}"
                      + (f" (up to ${dd.estimate_cost(claims, self.samples):.4f} if every claim has to be "
                         f"asked again)" if self.samples > 1 else ""))
+        if moved:
+            lines.append(f"{moved} entries' sentences are now on another line of the spec than the map stores; the "
+                         f"check still finds each one by its spec_text, and reports show the current line. To store "
+                         f"the current lines in the map, run in the project folder:  {dd._cmd()} --map "
+                         f"{self.map_used} --update-lines  (it changes only the \"line\" fields).")
         notes = [ln.strip()[len("note: "):] for ln in buf.getvalue().splitlines() if ln.strip().startswith("note:")]
         if not strict:
             lines += [f"note: {n}" for n in notes]
+        lines += _version_text(versions)
         if problems:
             lines += ["", f"PROBLEMS ({len(problems)}) - fix these; the map is not ready:"] + [f"  - {p}" for p in problems]
         else:
             lines.append("OK - the map is complete and every entry resolves.")
         structured = {"project": str(self.root), "map": self.map_used, "ready": not problems,
                       "entries_to_check": len(claims), "excluded": excluded,
-                      "likely_unverifiable": [f"{c.doc}:{c.line} - {w[0]}" for c, w in weak_list],
+                      "likely_unverifiable": [k + (f" ({n} entries)" if n > 1 else "") for k, n in weak_lines.items()],
                       "full_check_cost_usd": round(dd.estimate_cost(claims), 6),
                       "full_check_cost_usd_max": round(dd.estimate_cost(claims, self.samples), 6),
                       "samples": self.samples, "problems": problems,
-                      "notes": [] if strict else notes}
+                      "notes": [] if strict else notes, "spec_versions": versions, "moved_entries": moved}
         return "\n".join(lines), False, structured
 
     def preview_spec_check(self, files: list[str] | None = None, line: int | None = None,
                      map: str | None = None) -> tuple[str, bool]:
         problems: list[str] = []
         self.resolve_map(map)
+        versions = self.spec_versions()
         syms = self.index()
         with contextlib.redirect_stdout(io.StringIO()):
             claims = self.claims(syms, problems, map)
-        if line is not None:
-            claims = [c for c in claims if c.line == line]
+        if line is not None:                      # the line the sentence is on now, or the one the map stores
+            claims = [c for c in claims if line in (c.line, c.map_line)]
             if files:
                 claims, _ = self.select(claims, files)
         else:
             claims, _ = self.select(claims, files)
+        structured = {"project": str(self.root), "map": self.map_used, "model": dd.MODEL,
+                      "claims": [{"doc": c.doc, "line": c.line,
+                                  "map_line": c.map_line if c.map_line not in (None, c.line) else None}
+                                 for c in claims],
+                      "spec_versions": versions}
+        extra = _version_text(versions, problems=True)
         if not claims:
-            return "no claim matches (a line number is the spec line; files are paths relative to the project).", False
+            return ("\n".join(["no claim matches (a line number is the sentence's line in the spec now, or the line the "
+                               "map stores for it; files are paths relative to the project)."] + extra)), False, structured
         parts = [f"{len(claims)} claim(s). Every request is model {dd.MODEL} with these 3 fixed questions:",
                  json.dumps(dd.build_questions(), indent=1, ensure_ascii=False)]
         for c in claims:
-            parts += ["", f"--- {c.doc}:{c.line}  state sent:",
+            moved = f" (the map stores line {c.map_line})" if c.map_line not in (None, c.line) else ""
+            parts += ["", f"--- {c.doc}:{c.line}{moved}  state sent:",
                       json.dumps(dd.canonical(dd.build_state(c)), indent=1, ensure_ascii=False)]
-        return "\n".join(parts), False
+        return "\n".join(parts + extra), False, structured
 
-    def draft_spec_map(self, docs: list[str], out: str) -> tuple[str, bool]:
+    def spec_versions(self) -> dict:
+        """Whether the spec files the map in use checks are still the current ones. Free."""
+        return dd.spec_version_report(Path(self.map_used), self.root, self.ignore)
+
+    def draft_spec_map(self, docs: list[str] | None = None, out: str | None = None) -> tuple:
+        """Without docs: the candidate spec files for the user to choose from - nothing is drafted.
+        With docs: the map, drafted from exactly those files."""
+        empty = {"project": str(self.root), "drafted": False, "out": None, "specs": [], "entries": 0,
+                 "warnings": [], "candidates": [], "families": []}
+        if not docs:
+            survey = dd.SpecSurvey(self.root, self.ignore)
+            found = dd.spec_candidates(self.root, self.ignore, survey=survey)
+            families = dd.spec_families(found, survey)
+            step = ("Nothing was drafted. Show the user these files with their last commit dates and flags, and ask "
+                    "which file(s) are the current source of truth for the spec - do not choose for them. Then call "
+                    "draft_spec_map again with docs set to exactly those files (never a folder that holds several "
+                    "versions) and out, usually spec_map.json next to the spec." if found else
+                    "Nothing was drafted. Ask the user which file(s) hold the spec, then call draft_spec_map again "
+                    "with docs set to those files and out, usually spec_map.json next to the spec.")
+            unlisted = dd._not_utf8_warning(dd.not_utf8_specs(survey), "that look like specs")
+            warnings = [unlisted] if unlisted else []
+            return ("\n".join(dd.candidates_text(found, families) + [f"\nWARNING: {w}" for w in warnings]
+                              + ["", step]), False,
+                    {**empty, "warnings": warnings, "candidates": found, "families": families, "next_step": step})
+        if not out:
+            raise ToolError("draft_spec_map needs out when docs is given: the new map file, relative to the project "
+                            "- usually spec_map.json next to the spec.")
         target = (self.root / out).resolve()
         if not target.is_relative_to(self.root):
             raise ToolError(f"{out} is outside the project - refused")
         if target.exists():
             raise ToolError(f"{out} already exists and may hold a reviewed map - nothing was written. "
                             f"Draft into a new file and compare.")
-        specs: list[Path] = []
-        for d in docs:
-            p = (self.root / d).resolve()
-            if not p.is_relative_to(self.root) or not p.exists():
-                raise ToolError(f"spec not found in the project: {d}")
-            specs += sorted(f for f in [*p.rglob("*.md"), *p.rglob("*.rst")]) if p.is_dir() else [p]
-        if not specs:
-            raise ToolError("no .md or .rst files in " + ", ".join(docs))
+        specs, warnings = dd.expand_docs(self.root, docs, self.ignore)    # refuses a folder of spec versions
         syms = self.index()
         if self.current_cancel.is_set():
             raise ToolError("cancelled - nothing was written")
         target.parent.mkdir(parents=True, exist_ok=True)
+        rel_specs = [Path(os.path.relpath(f, self.root)) for f in specs]
+        rel_out = os.path.relpath(target, self.root)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            dd.draft_map([Path(os.path.relpath(f, self.root)) for f in specs], syms, Path(os.path.relpath(target, self.root)))
-        return (f"{self.last_index}\n{buf.getvalue().strip()}\n\nNothing is checked until the entries are reviewed. "
-                f"Then validate_spec_map (map: {out}) must report OK before check_spec_drift."), False
+            entries = dd.draft_map(rel_specs, syms, Path(rel_out))
+        step = (f"Nothing is checked until the entries are reviewed. Then validate_spec_map (map: {out}) must report "
+                f"OK before check_spec_drift.")
+        text = f"{self.last_index}\n{buf.getvalue().strip()}"
+        if warnings:
+            text += ("\n\nWARNINGS - show each one to the user and settle it before reviewing the entries:\n"
+                     + "\n".join(f"  - {w}" for w in warnings))
+        return (f"{text}\n\n{step}", False,
+                {**empty, "drafted": True, "out": rel_out, "specs": [p.as_posix() for p in rel_specs],
+                 "entries": entries, "warnings": warnings, "next_step": step})
 
     # ── CI failure triage ───────────────────────────────────────────────────
     def _arg_path(self, given: str) -> Path:
@@ -1253,9 +1430,11 @@ class Server:
                                   cancelled=self.current_cancel.is_set, on_answer=self.progress)
         ordered = ci.in_triage_order(results)
         sent = {id(s.item): s.item.state for s in done.results}
+        unread = [n for n in ctx.notes if n.startswith("INCOMPLETE")]   # failed jobs whose logs were not read
+        complete = done.complete and not unread
         out = self.results_file("ci-triage")
         out.write_text(json.dumps({"source": ctx.source, "url": ctx.url, "trusted": ctx.trusted, "notes": ctx.notes,
-                                   "cost_usd": done.cost_usd, "complete": done.complete,
+                                   "cost_usd": done.cost_usd, "complete": complete,
                                    "results": [{**r, "state_sent": sent[id(s.item)]}
                                                for r, s in zip(results, done.results)]},
                                   indent=1, ensure_ascii=False))
@@ -1286,13 +1465,13 @@ class Server:
             lines.append(f"    next: {r['next_step']}")
         if len(ordered) > 15:
             lines.append(f"\n... {len(ordered) - 15} more in structuredContent.results and {out}")
-        if not_checked:
-            lines += ["", "INCOMPLETE - not everything was checked:"] + [f"  - {p}" for p in not_checked]
+        if not_checked or unread:
+            lines += ["", "INCOMPLETE - not everything was checked:"] + [f"  - {p}" for p in not_checked + unread]
             if done.vendor and not done.problems:
                 lines.append("  (TypeSafe could not be used - not a problem with the code. Carry on without it.)")
         structured = {"summary": head, "project": str(self.root), "source": ctx.source, "url": ctx.url,
                       "trusted": ctx.trusted, "notes": ctx.notes, "failures": len(results), "counts": counts,
-                      "cost_usd": done.cost_usd, "complete": done.complete, "not_checked": not_checked,
+                      "cost_usd": done.cost_usd, "complete": complete, "not_checked": not_checked,
                       "results_file": str(out), "results": shown, "results_shown": len(shown),
                       "inbox": str(self.inbox())}
         failed_all = not any(r["label"] != "not checked" for r in results)
@@ -1643,6 +1822,19 @@ def _check_value(key: str, prop: dict, value):
         if "maximum" in prop and value > prop["maximum"]:
             raise ToolError(f"{key} must be at most {prop['maximum']} (got {value})")
     return value
+
+
+def _version_text(versions: dict, problems: bool = False) -> list[str]:
+    """What spec_version_report found, as lines of a tool's text: the warnings (a newer version of a
+    spec the map checks), and with `problems` also a spec that says it is out of date."""
+    out = []
+    if problems and versions["problems"]:
+        out += ["", "OUTDATED SPEC - check_spec_drift will send nothing until the map checks the current spec:"]
+        out += [f"  - {p}" for p in versions["problems"]]
+    if versions["warnings"]:
+        out += ["", "SPEC VERSIONS - tell the user and ask; never keep checking an outdated spec without saying so:"]
+        out += [f"  - {w}" for w in versions["warnings"]]
+    return out
 
 
 def _in_triage_order(results: list[dict]) -> list[dict]:

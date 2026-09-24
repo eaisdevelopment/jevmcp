@@ -84,9 +84,11 @@ consent. The free tools can run without asking if you add to `~/.codex/config.to
 default_tools_approval_mode = "auto"
 ```
 
-**Unattended runs in Codex** (tested, 2026-09-22): `codex exec` runs with approval policy
-"never", which blocks every MCP tool, and `--approve-for-me` does not help — Codex's automatic
-reviewer refuses a tool that sends code to a third party. Two honest options:
+**Unattended runs in Codex** (tested 2026-09-22 with Codex 0.155.1 and 2026-09-24 with 0.156.1):
+`codex exec` runs with approval policy "never", which blocks every tool that sends ("MCP tool call
+requires approval"); with 0.156.1 the free, read-only tools such as `preview_ci_triage` still ran.
+`--approve-for-me` does not help — Codex's automatic reviewer refuses a tool that sends code to a
+third party. Two honest options:
 
 - `codex exec --dangerously-bypass-approvals-and-sandbox '...'` — the check then runs (verified).
   The flag switches off Codex's sandbox and all approvals, so use it only where the whole job is
@@ -118,9 +120,12 @@ You never write or edit a file yourself. Ask your agent, in the project:
 
 > Set up spec-drift checking for this project.
 
-1. It finds your spec (a design, requirements or architecture document in Markdown).
-2. `draft_spec_map` **writes `spec_map.json` for you** — one entry per sentence of the spec, each with
-   a suggested place in the code. Free: nothing is sent anywhere.
+1. It lists the files that look like specs (design, requirements, architecture, ADR or RFC
+   documents), each with its last commit date, and flags old copies: a version number or date in
+   the name, a folder such as `archive/`, a line near its top that says "superseded", or a newer
+   version next to it. **You choose** the current spec file(s); only the files you name are checked.
+2. `draft_spec_map` **writes `spec_map.json` for you** from those files — one entry per sentence of
+   the spec, each with a suggested place in the code. Free: nothing is sent anywhere.
 3. The agent reviews the entries with you: it fixes wrong guesses and marks sentences that are not
    requirements as excluded, with a reason. Your knowledge is needed here, and only here.
 4. `validate_spec_map` confirms nothing is missing. Commit the file with your code.
@@ -164,9 +169,10 @@ never placed in the model's context, in tool arguments or in tool results.
 
 In any project, ask your agent, for example:
 
-- *"Set up spec-drift checking for this project"* — it finds the spec, drafts a **spec map** that
-  pairs each requirement with the code that implements it, reviews every entry with you, and
-  validates it. The map (`spec_map.json`) belongs in your repository.
+- *"Set up spec-drift checking for this project"* — it lists the files that look like specs and
+  asks you which is current, drafts a **spec map** from the file(s) you name that pairs each
+  requirement with the code that implements it, reviews every entry with you, and validates it.
+  The map (`spec_map.json`) belongs in your repository.
 - *"Check my changes against the spec"* — after that, a check is seconds.
 - *"Why did CI fail on this pull request?"* or *"Triage https://github.com/OWNER/REPO/actions/runs/123"*
   — it reads the failed run, shows you what would be sent, and with your yes says for each failure

@@ -1914,6 +1914,7 @@ class Claim:
     symbols: list[Symbol]      # every symbol the sentence names
     why_paired: str
     numbers: list[str] = field(default_factory=list)
+    map_line: int | None = None    # the line the map stores, when the sentence has since moved to `line`
 
     @property
     def symbol(self) -> Symbol:
@@ -2280,10 +2281,16 @@ MAP_README = [
     "              spec changed, re-check the entry, then paste the current spec paragraph (or the lines",
     "              of a code block) into spec_text - markdown and line breaks are fine.",
     "Deleting an entry also works, but --strict then reports its sentence as not in the map.",
+    "specs       - (top level) the spec file(s) this map was drafted from - the one(s) the user named as current.",
+    "confirmed_current - (top level, optional) spec files the USER confirmed are current although a line near",
+    "              their top reads as if they were out of date (a line about something else). Listed there, that",
+    "              line is a warning instead of a problem. Add a file only on the user's word.",
+    "              A check warns when a newer version of one appears in the project, and refuses to run when",
+    "              one says at its top that it is superseded, deprecated or obsolete.",
 ]
 
 
-def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path) -> None:
+def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path) -> int:
     """Suggest a code location for every spec sentence, for a human to review.
 
     Real specs describe behaviour in prose and rarely name functions, so they
@@ -2329,7 +2336,8 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path) -> None:
                 "alternatives": [_ref_of(s) for s in best[1:4]],
                 "spec_text": _norm_text(paragraphs.get(lineno, sent)),
             })
-    out.write_text(json.dumps({"_readme": MAP_README, "entries": entries}, indent=1, ensure_ascii=False))
+    out.write_text(json.dumps({"_readme": MAP_README, "specs": [Path(d).as_posix() for d in docs],
+                               "entries": entries}, indent=1, ensure_ascii=False))
     named = sum(1 for e in entries if e["status"] == "named in the sentence")
     guessed = [e for e in entries if e["status"] == "suggested"]
     print(f"wrote {len(entries)} spec sentences to {out}")
@@ -2340,6 +2348,7 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path) -> None:
     print(f"\nNext: open {out}; its \"_readme\" explains every field. Fix each \"code\" and set \"status\" to\n"
           f"\"reviewed\"; for sentences that are not requirements set \"status\" to \"excluded\" with a \"why\".\n"
           f"Then check it loads:  --map {out} --dry-run --strict")
+    return len(entries)
 
 
 def _norm_text(t: str) -> str:
@@ -2462,10 +2471,21 @@ def load_map(path: Path) -> list:
     except json.JSONDecodeError as e:
         raise Stop(f"{path} is not valid JSON: {e.msg} at line {e.lineno}, column {e.colno}. "
                    f"A trailing comma or a missing quote is the usual cause.") from None
+    except UnicodeDecodeError as e:
+        raise Stop(f"{path} is not UTF-8 text (byte {e.start} cannot be read), so it is not a map. Save it as "
+                   f"UTF-8.") from None
     entries = data.get("entries") if isinstance(data, dict) else data
     if not isinstance(entries, list):
         raise Stop(f"{path} should hold a list of entries (or {{\"entries\": [...]}}), as --draft-map writes.")
     return entries
+
+
+def _as_line(value) -> int:
+    """A map entry's "line" as a line number: a hand-edited "12" is 12; missing, null or anything
+    that is not a whole number is 0 (unknown), so a claim's line is always a number."""
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None,
@@ -2493,15 +2513,17 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
         if not refs and not is_excluded:
             fail(f"{where} has no \"code\" - NOT checked. Fill it in, or if the sentence is not a requirement "
                  f"set \"status\": \"excluded\" and say why in \"why\"."); continue
-        spec_file = next((b / e["spec"] for b in bases if e.get("spec") and (b / e["spec"]).is_file()), None)
+        spec_file = next((b / e["spec"] for b in bases
+                          if isinstance(e.get("spec"), str) and e["spec"] and (b / e["spec"]).is_file()), None)
         if e.get("spec") and spec_file is None:
             fail(f"{where}: spec file {e['spec']!r} not found - NOT checked."); continue
+        line = _as_line(e.get("line"))
         text = e.get("text")
-        if not text and spec_file is not None and e.get("line"):
-            text = spec_file.read_text(encoding="utf-8").split("\n")[e["line"] - 1].strip(" -*|#")
-        if not text:
+        if not text and spec_file is not None and line:
+            spec_lines = spec_file.read_text(encoding="utf-8", errors="replace").split("\n")
+            text = spec_lines[line - 1].strip(" -*|#") if line <= len(spec_lines) else None
+        if not isinstance(text, str) or not text:
             fail(f"{where} has no \"text\" - NOT checked."); continue
-        line = e.get("line", 0)
         if spec_file is not None:
             if str(spec_file) not in spec_cache:          # not setdefault(): that would parse the spec every time
                 spec_cache[str(spec_file)] = _spec_index(spec_file)
@@ -2542,8 +2564,9 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
                  f"reference(s) could not be resolved (see above)."); continue
         if str(e.get("status", "reviewed")).lower() != "reviewed":
             unreviewed += 1
-        out.append(Claim(text=text, doc=e.get("spec", str(path)), line=line, symbols=found, why_paired="from map"))
-    MAP_COUNTS.update(excluded=len(excluded))
+        out.append(Claim(text=text, doc=e.get("spec", str(path)), line=line, symbols=found, why_paired="from map",
+                         map_line=_as_line(e.get("line")) or None))
+    MAP_COUNTS.update(excluded=len(excluded), moved=moved)
     notes = []
     if no_reason:
         notes.append(f"{len(no_reason)} excluded entries do not say why (lines "
@@ -2576,7 +2599,999 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
 
 
 MAP_NOTES: list[str] = []      # coverage and review notes from the last map load (--strict turns them into problems)
-MAP_COUNTS: dict[str, int] = {"excluded": 0}
+MAP_COUNTS: dict[str, int] = {"excluded": 0, "moved": 0}
+
+# ─────────────────────────────────────────── 2b. which spec file is the current one
+#
+# A project can hold several spec documents, or several versions of one: spec-v1.md next to
+# spec-v2.md, a copy in archive/, a dated snapshot, a file whose first lines say it was
+# superseded. The map is the only record of what is checked, so an outdated file in it means
+# the code is compared with requirements nobody holds any more - silently. So: list the
+# candidates for the user to choose from, refuse a folder that mixes versions, warn about a
+# named file that looks old, and tell every check when the spec it checks is no longer current.
+import datetime as _datetime  # noqa: E402
+import subprocess as _subprocess  # noqa: E402
+import threading as _threading  # noqa: E402
+from pathlib import PurePosixPath  # noqa: E402
+
+SPEC_SUFFIXES = (".md", ".rst")
+HEAD_LINES = 40                  # a document says it is superseded at its top, if anywhere
+_HISTORY_WORDS = frozenset("old archive archived archives deprecated obsolete superseded legacy backup backups bak "
+                           "previous prev history outdated".split())
+# Words that mark another edition of the same document without saying it is old: they are left
+# out of the family key only, and never reported as a sign of age.
+_EDITION_WORDS = frozenset("new latest final copy updated revised".split())
+_SPEC_WORDS = frozenset("spec specs specification specifications requirement requirements design designs "
+                        "architecture adr adrs decision decisions rfc rfcs prd prds srs proposal proposals api "
+                        "apis pep peps".split())
+_DATE_TOKEN = re.compile(r"(?<!\d)((?:19|20)\d\d)([-_.]?)(0[1-9]|1[0-2])(?:\2(0[1-9]|[12]\d|3[01]))?(?!\d)")
+# A pre-release belongs to its version: spec-2.0-rc1.md and v1.10.0-next.0-changelog.md are versions
+# of spec.md and of the changelog, older than 2.0 and 1.10.0. Oldest kind first. The word must have a
+# number after it or end the name: api-v2-dev-guide.md is a developer guide, not a pre-release.
+_PRERELEASE = ("dev", "alpha", "beta", "pre", "preview", "next", "rc")
+_VERSION_TOKEN = re.compile(r"(?:^|(?<=[-_.\s]))(?:(?:v|ver|version|rev|revision)[-_\s]?(\d+(?:\.\d+)*)"
+                            r"|(\d+(?:\.\d+)+))(?:[-_.]?(dev|alpha|beta|preview|pre|next|rc)(?:[-_.]?(\d+)|$))?"
+                            r"(?=$|[-_.\s])", re.I)
+
+# How the top of a document says that it is no longer the current one.
+_OLD = r"(?:superseded|deprecated|obsolete|outdated|retired|archived|replaced|withdrawn|reverted)"
+_NO_LONGER = (r"no\s+longer\s+(?:current|valid|maintained|in\s+use|used|accurate|applies|applicable|"
+              r"up[-\s]to[-\s]date)")
+# Quote, admonition, emphasis - not list items. An emphasis mark must be followed by text, never by
+# another mark: otherwise a line of 35 stars (a Sphinx title's underline) is split every possible
+# way before the match fails, and that takes minutes.
+_BANNER_MARKS = r"(?:>\s*|\[!\w+\]\s*|[*_]{1,3}(?=[^\s*_]))*"
+_BANNER_END = r"[*_`]*\s*(?:$|[:.,;!()\[\]|–—-]|\s+(?:by|in\s+favou?r\s+of|see|use)\b)"
+_LATER = r"(?:ultimately|finally|later|eventually|since|subsequently)"
+_DOC_NOUN = r"(?:document|doc|page|spec|specification|design|adr|rfc|proposal|decision|prd|srs|requirements)"
+_DECLARATIONS = [
+    # "Status: Superseded by ADR-7", "- **Status:** deprecated", "| Status | Obsolete |", "status: accepted,
+    # superseded by ADR-9", "Status: Proposed, accepted, reconsidered, and ultimately reverted.", YAML front matter
+    re.compile(rf"^\s*(?:[>*_|-]\s*)*status\s*[*_]*\s*[:=|]\s*[*_`]*\s*(?:(?:{_OLD}|{_NO_LONGER}){_BANNER_END}"
+               rf"|\w+\s*[,;(]\s*superseded\s+by\b|[^|]*?[,;]\s*(?:and\s+)?{_LATER}\s+[*_]*{_OLD}{_BANNER_END})",
+               re.I),
+    re.compile(r"^\s*(?:deprecated|obsolete|superseded|archived|outdated)\s*:\s*(?:true|yes)\s*$", re.I),
+    # "> **Deprecated:** see v2", "Superseded by spec-v2.md", "OBSOLETE", "No longer maintained."
+    # Only where a paragraph starts, or after a quote or emphasis mark (see declared_old).
+    re.compile(rf"^\s*{_BANNER_MARKS}(?:(?:note|warning|important|caution|attention)[*_]*\s*:?\s*[*_]*\s*)?"
+               rf"(?:{_OLD}|{_NO_LONGER}){_BANNER_END}", re.I),
+    # "This document is obsolete", "This spec has been superseded by ...", "This page is no longer
+    # maintained", "This RFC was previously approved, but later withdrawn". Only "this": "the file is
+    # archived after 30 days" is a requirement, not a status. Never a part of it: "This RFC was
+    # previously approved, but part of it later withdrawn", "Part of this RFC was later withdrawn".
+    # The look ahead for "part" reads at most 300 characters: unbounded, it read to the end of the
+    # sentence at every "this spec", and a long line that repeats it took minutes.
+    re.compile(rf"\bthis\s+{_DOC_NOUN}\b[^.;]{{0,80}}?\b(?:is|was|are|were|has\s+been|have\s+been)\s+(?:now\s+)?"
+               rf"(?:{_OLD}|{_NO_LONGER})\b"
+               rf"|(?<!\bpart of )(?<!\bparts of )\bthis\s+{_DOC_NOUN}\b"
+               rf"(?![^.;]{{0,300}}\b(?:part|parts|partly|partially|mostly|largely)\b)"
+               rf"[^.;]{{0,80}}?\b{_LATER}\s+(?:been\s+)?[*_]*{_OLD}\b", re.I),
+]
+# A header field that names what replaced the document: "Superseded-By: 3333" (a PEP's header). It
+# counts anywhere in the header block, not only where a paragraph starts.
+_FIELD_BY = re.compile(r"^\s*(?:superseded|replaced|obsoleted)[-_ ]by\s*:\s*\S", re.I)
+# A template's empty field says nothing: "Superseded by: N/A", "| Replaced by | - |", "Superseded-By:
+# <pep number>". One run of marks, then at most one placeholder: no two parts of the pattern can take
+# the same characters, so a long line cannot make the search slow.
+_EMPTY_BY = re.compile(r"\b(?:by|favou?r\s+of)[\s*_`|:=]*(?:(?:n/?a|none|nothing(?:\s+yet)?|tbd|null|-+|–|—|~|"
+                       r"<[^>/@]*>)[\s*_`|]*)?$", re.I)
+# After such a line the next line starts a new paragraph, as it does after a blank line: a lone HTML
+# tag, an admonition (:::, !!!, ???) or an RST directive (".. note::").
+_BLOCK_OPENER = re.compile(r"^\s*(?:</?[A-Za-z][^>]*>\s*$|:::|!!!|\?\?\?|\.\.\s+[\w-]+::)")
+_TITLE_MARK = re.compile(rf"[(\[]\s*(?:{_OLD}|{_NO_LONGER})\s*[)\]]|[-–—:|]\s*[*_]*(?:{_OLD}|{_NO_LONGER})"
+                         rf"[*_]*\s*$", re.I)
+_UNDERLINE = re.compile(r"^\s*([=\-~^*#+`])\1{2,}\s*$")
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+
+def _name_tokens(name: str) -> tuple[list, list, list[str]]:
+    """What one file or folder name says about its age: (dates, versions, other words). Dates are
+    real calendar dates only; a bare number is not a version (0001-use-postgres.md is decision 1,
+    not version 1 of anything)."""
+    s = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=v\d)", " ", name)
+    dates: list = []
+    versions: list = []
+
+    def date(m: re.Match) -> str:
+        year, sep, month, day = m.group(1), m.group(2), m.group(3), m.group(4)
+        if not sep and day is None:
+            return m.group(0)                     # 202405 is not how anyone writes a date
+        try:
+            when = _datetime.date(int(year), int(month), int(day or 1))
+        except ValueError:
+            return m.group(0)                     # 2024-02-30
+        if not 1990 <= when.year <= _datetime.date.today().year + 1:
+            return m.group(0)
+        dates.append((when, m.group(0)))
+        return " "
+
+    def version(m: re.Match) -> str:
+        numbers = tuple(int(x) for x in (m.group(1) or m.group(2)).split("."))
+        numbers += (0,) * (8 - len(numbers))
+        pre = (0, _PRERELEASE.index(m.group(3).lower()), int(m.group(4) or 0)) if m.group(3) else (1,)
+        versions.append((numbers + pre, m.group(0).strip("-_. ")))     # (sort key, as written)
+        return " "
+    s = _VERSION_TOKEN.sub(version, _DATE_TOKEN.sub(date, s))
+    return dates, versions, [w.lower() for w in re.split(r"[^A-Za-z0-9]+", s) if w]
+
+
+def _age_words(words: list[str]) -> list[str]:
+    """The words of one name that mark it as an old copy - old, archive, legacy and the like - when
+    such a word is the whole name, or its first or last word (words such as copy or new are not
+    counted). In the middle it is the name's subject: infra-database-backups-bucket is a bucket for
+    backups and no-deprecated-bui-tokens a lint rule, not old copies of anything."""
+    core = [w for w in words if w not in _EDITION_WORDS]
+    return [w for k, w in enumerate(core) if w in _HISTORY_WORDS and k in (0, len(core) - 1)]
+
+
+_INDEX_NAMES = frozenset("readme index contents".split())
+
+
+def _segments(rel: str) -> list[tuple[str, str, bool]]:
+    """(the part as written, the name to read, is it the file itself) for each part of a path."""
+    parts = PurePosixPath(rel).parts
+    return [(p, PurePosixPath(p).stem if k == len(parts) - 1 else p, k == len(parts) - 1)
+            for k, p in enumerate(parts)]
+
+
+def _family_word(name: str) -> str:
+    core = [w for w in _name_tokens(name)[2] if w not in _EDITION_WORDS]
+    return "".join(w for w in core if w not in _age_words(core))
+
+
+def spec_family(rel: str) -> str:
+    """The document a file is a version of: its path with version numbers, dates, words such as
+    old/archive/legacy, and separators taken out. docs/spec-v2.md, docs/archive/spec.md and
+    docs/2024-05/spec.md are all 'docs/spec'. Numbered documents stay apart: 0001-use-postgres.md
+    and 0002-use-redis.md are two decisions, not two versions of one. When nothing of the name is
+    left (versions/3.0.0.md) the folder is the family: 'versions/'. A README, index or contents
+    file directly in a folder named only by such a word (archive/, _archive_/, old/) is that
+    folder's own page, not an old copy of the README above it: _archive_/README.md is
+    'archive/readme'. app-legacy/README.md is still a version of app/README.md."""
+    segs = _segments(rel)
+    words = [_family_word(n) for _, n, last in segs if not last]
+    if words and not words[-1] and segs[-1][1].lower() in _INDEX_NAMES and _age_words(_name_tokens(segs[-2][1])[2]):
+        words[-1] = "".join(_name_tokens(segs[-2][1])[2])  # the folder's name is only such words: archive/, _old_/
+    folder = "/".join(w for w in words if w)
+    stem = _family_word(segs[-1][1]) if segs else ""
+    if stem:
+        return f"{folder}/{stem}" if folder else stem
+    return f"{folder}/" if folder else "./"
+
+
+def _family_key(rel: str) -> str:
+    return spec_family(rel).rstrip("/") or "."      # docs/spec.md and docs/spec/v2.md are one family
+
+
+def path_history(rel: str) -> list[str]:
+    """Why a path looks like an old copy, in plain words: a version number, a date, or a word such
+    as old or archive, in its name or in one of its folders."""
+    out = []
+    for seg, name, last in _segments(rel):
+        dates, versions, words = _name_tokens(name)
+        where = "its name" if last else f"its folder '{seg}'"
+        out += [f"{where} has a date ({raw})" for _, raw in dates]
+        out += [f"{where} has a version number ({raw})" for _, raw in versions]
+        old = list(dict.fromkeys(_age_words(words)))
+        if not last and old and words == old[:1]:
+            out.append(f"it is in a folder named '{seg}'")
+        else:
+            out += [f"{where} has the word '{w}'" for w in old]
+    return out
+
+
+# The other words a template's name may have: template.md, 0000-template.md, adr000-template.md,
+# 2019-01-01-Proposal-Template.md. email-template.md is a spec about an email, not a template.
+_TEMPLATE_WORDS = frozenset("template adr rfc pep proposal decision record spec design doc document madr".split())
+
+
+def template_name(rel: str) -> str | None:
+    """Why a file's name says it is a template to copy, not a document, in plain words; None when
+    it does not. A placeholder number (pep-NNNN.rst, adr-XXXX.md), or the word template with only
+    a number or a word such as adr or proposal next to it."""
+    words = [w for w in re.split(r"[^a-z0-9]+", PurePosixPath(rel).stem.lower()) if w]
+    if holder := next((w for w in words if re.fullmatch(r"n{3,}|x{3,}", w)), None):
+        return f"its name has the placeholder '{holder.upper()}'"
+    if "template" in words and all(w in _TEMPLATE_WORDS or re.fullmatch(r"(?:adr|rfc|pep)?\d+", w) for w in words):
+        return "its name has the word 'template'"
+    return None
+
+
+def _read_head(path: Path, n: int = HEAD_LINES) -> list[str]:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return [line.rstrip("\r\n") for line, _ in zip(f, range(n))]
+    except OSError:
+        return []
+
+
+def _title_index(lines: list[str]) -> int | None:
+    """The line of the document's first heading (markdown #, or a line underlined with === or ---)."""
+    start = 0
+    if lines and lines[0].strip() == "---":                 # YAML front matter
+        start = next((i + 1 for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), 0)
+    fence = None
+    for i in range(start, len(lines)):
+        if m := _FENCE.match(lines[i]):
+            fence = None if fence and m.group(1)[0] == fence else (fence or m.group(1)[0])
+            continue
+        if fence or not lines[i].strip():
+            continue
+        if re.match(r"^\s{0,3}#{1,6}\s+\S", lines[i]):
+            return i
+        if i + 1 < len(lines) and _UNDERLINE.match(lines[i + 1]) and not _UNDERLINE.match(lines[i]):
+            return i
+    return None
+
+
+def _front_matter_end(lines: list[str]) -> int:
+    """The index of the line that closes the YAML front matter; 0 when there is none."""
+    if lines and lines[0].strip() == "---":
+        return next((i for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), 0)
+    return 0
+
+
+def _title_says_old(text: str) -> bool:
+    """Does a title say the document is old: "Payments spec (DEPRECATED)", "ADR013: [superseded] ..."."""
+    return bool(_TITLE_MARK.search(text) or _DECLARATIONS[2].match(text) or _DECLARATIONS[3].search(text))
+
+
+def declared_old(lines: list[str]) -> tuple[int, str] | None:
+    """(line number, the line) where the top of a document says it is superseded, deprecated,
+    obsolete, withdrawn, reverted or no longer current; None if it does not. Code blocks are
+    skipped, and so is a template's empty field ("Superseded by: N/A"). A spec that talks ABOUT
+    deprecated things ("Deprecated endpoints return 410") is not saying that it is deprecated
+    itself. A bare "Deprecated." or "Replaced by ..." counts only where a paragraph starts (or after
+    a quote or emphasis mark): in the middle of a hard-wrapped paragraph it is the end of a sentence
+    ("... until all non-terminal symbols have been / replaced by terminal characters.")."""
+    title = _title_index(lines)
+    matter = _front_matter_end(lines)
+    fence = None
+    starts = True                                           # does this line start a paragraph?
+    for i, raw in enumerate(lines):
+        if m := _FENCE.match(raw):
+            fence = None if fence and m.group(1)[0] == fence else (fence or m.group(1)[0])
+            starts = True
+            continue
+        if fence:
+            continue
+        if not raw.strip() or _UNDERLINE.match(raw):       # a blank line, ---, a title's underline
+            starts = True
+            continue
+        first, starts = starts, bool(_BLOCK_OPENER.match(raw))
+        if _EMPTY_BY.search(raw):
+            continue
+        if 0 < i < matter and (m := re.match(r"\s*title\s*:\s*['\"]?(.+?)['\"]?\s*$", raw, re.I)):
+            if _title_says_old(m.group(1)):                 # title: 'ADR013: [superseded] Use node-fetch'
+                return i + 1, raw.strip()
+            continue
+        if i == title:
+            if _title_says_old(re.sub(r"^\s{0,3}#{1,6}\s+", "", raw)):
+                return i + 1, raw.strip()
+            starts = True
+            continue
+        if raw.lstrip().startswith("#"):
+            starts = True
+            continue                                        # a section heading ("## Deprecated fields")
+        banner = first or raw.lstrip().startswith((">", "[!", "*", "_"))
+        if (_DECLARATIONS[0].match(raw) or _DECLARATIONS[1].match(raw) or _FIELD_BY.match(raw)
+                or (banner and _DECLARATIONS[2].match(raw)) or _DECLARATIONS[3].search(raw)):
+            return i + 1, raw.strip()
+    return None
+
+
+def _title_of(lines: list[str], fields: bool = True) -> str | None:
+    """The document's title: its front matter's title, a Title: field of a header block at the top
+    (not with fields=False), else its first heading."""
+    if lines and lines[0].strip() == "---":
+        for ln in lines[1:]:
+            if ln.strip() in ("---", "..."):
+                break
+            if m := re.match(r"\s*title\s*:\s*['\"]?(.+?)['\"]?\s*$", ln, re.I):
+                return m.group(1)
+    # A header block of "Name: value" fields at the very top, as PEPs and Rust RFCs have ("Title:
+    # Style Guide for Python Code", "- Feature Name: `box_syntax`"): their first heading is only
+    # "Abstract" or "Summary".
+    field = re.compile(r"(?:[-*]\s+)?[A-Za-z][\w -]*:(?:\s|$)")
+    if fields and lines and field.match(lines[0]):
+        for ln in lines:
+            if m := re.match(r"(?:[-*]\s+)?(?:title|feature[-\s]name)\s*:\s*(.+?)\s*$", ln, re.I):
+                return m.group(1).strip("`'\" ") or None
+            if not ln.strip() or not (field.match(ln) or ln[:1].isspace()):
+                break                                       # the end of the header block
+    i = _title_index(lines)
+    if i is None:
+        return None
+    return re.sub(r"^\s{0,3}#{1,6}\s+|\s+#+\s*$", "", lines[i]).strip() or None
+
+
+def _suggests_spec(rel: str, title: str | None) -> bool:
+    words = {w for _, name, _ in _segments(rel) for w in _name_tokens(name)[2]}
+    if title:
+        words |= {w.lower() for w in re.split(r"[^A-Za-z0-9]+", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", title)) if w}
+    return bool(words & _SPEC_WORDS)
+
+
+def _git_list(root: Path, extra: list[str]) -> list[str]:
+    r = _subprocess.run(["git", "-C", str(root), "ls-files", "-z", *extra], capture_output=True, timeout=60)
+    if r.returncode != 0:
+        err = r.stderr.decode(errors="replace")
+        if "not a git repository" in err:
+            raise LookupError(err)
+        raise Stop(f"git could not list this project's files, so no spec file could be looked for: "
+                   f"{err.strip()[:200]}")
+    # os.fsdecode, not a decode that replaces bytes: a name that is not valid UTF-8 must still name
+    # the file on disk (SpecSurvey sets such names aside, see _utf8).
+    return [os.fsdecode(p) for p in r.stdout.split(b"\0") if p]
+
+
+def _doc_listing(root: Path, ignore: tuple[str, ...]) -> tuple[list[str], set[str], bool]:
+    """(every .md/.rst file git would commit - tracked, or new and not ignored; the ones git
+    tracks; whether this is a git repository). Outside git: every such file outside the ignored
+    folders. Symbolic links, files in ignored folders, and tracked files deleted from the working
+    tree (git still lists them until the deletion is committed) are never listed."""
+    ign = set(ignore)
+
+    def keep(rel: str) -> bool:
+        parts = rel.split("/")
+        return (PurePosixPath(rel).suffix.lower() in SPEC_SUFFIXES and not any(p in ign for p in parts[:-1])
+                and not (root / rel).is_symlink() and (root / rel).is_file())
+    try:
+        tracked = _git_list(root, [])
+        new = _git_list(root, ["-o", "--exclude-standard"])
+    except (LookupError, FileNotFoundError):
+        walked = (p.relative_to(root).as_posix() for p in _discover(root, ignore))
+        return sorted(f for f in walked if keep(f)), set(), False
+    except _subprocess.TimeoutExpired:
+        raise Stop("git took more than 60 s to list this project's files, so no spec file could be looked "
+                   "for.") from None
+    return sorted({f for f in tracked + new if keep(f)}), set(tracked), True
+
+
+def _last_commits(root: Path, paths: list[str], timeout: float = 60) -> tuple[dict[str, int], str | None]:
+    """Unix time of the last commit that touched each path - ONE `git log` pass, newest commit
+    first, stopped as soon as every path has been seen. Paths git never committed are left out.
+    Returns (those times, None) - or, when git log did not get to the end, (what it found, why):
+    the paths it had not reached yet may well be committed, so they are unknown, not uncommitted."""
+    want, found = set(paths), {}
+    if not want:
+        return found, None
+    cmd = ["git", "-C", str(root), "-c", "core.quotepath=off", "log", "-z", "--relative", "--no-renames",
+           "--format=%x01%ct", "--name-only", "--", *(f":(literal){p}" for p in sorted(want))]
+    try:
+        proc = _subprocess.Popen(cmd, stdout=_subprocess.PIPE, stderr=_subprocess.DEVNULL)
+    except OSError as e:
+        return found, f"git log could not be run ({e})"
+    stopped = _threading.Event()
+
+    def stop() -> None:
+        stopped.set()
+        proc.kill()
+    timer = _threading.Timer(timeout, stop)
+    timer.start()
+    try:
+        buf, when = b"", None
+        while len(found) < len(want):
+            chunk = proc.stdout.read1(65536)
+            if not chunk:
+                break
+            *tokens, buf = (buf + chunk).split(b"\0")
+            for t in tokens:
+                t = t.lstrip(b"\n")
+                if t.startswith(b"\x01"):
+                    when = int(t[1:] or 0)
+                elif t and when is not None:
+                    name = os.fsdecode(t)                       # as _git_list names it
+                    if name in want and name not in found:
+                        found[name] = when
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+    if stopped.is_set() and len(found) < len(want):
+        return found, f"git log was stopped after {timeout:g} s"
+    return found, None
+
+
+def _utf8(name: str) -> bool:
+    """Is a file name valid UTF-8? One that is not cannot be written into a map (JSON is UTF-8)
+    or shown in a reply, so such a file is named in a warning and never used."""
+    try:
+        name.encode("utf-8")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def _readable(name: str) -> str:
+    """A file name as it can be shown: each byte that is not UTF-8 becomes the replacement mark."""
+    return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
+def _not_utf8_warning(names: list[str], where: str) -> str | None:
+    """The warning for files that were set aside because their names are not valid UTF-8."""
+    if not names:
+        return None
+    return (f"{len(names)} file(s) {where} were left out because their names are not valid UTF-8, so a map "
+            f"cannot record them: {', '.join(_readable(n) for n in names)}. Rename them if they are part of the "
+            f"spec.")
+
+
+class SpecSurvey:
+    """What a project's documents say about which spec is current: one listing of the documents,
+    the top of each file read at most once, one `git log` pass per prefetch."""
+
+    def __init__(self, root: Path, ignore) -> None:
+        self.root = Path(root).resolve()
+        listed, self.tracked, self.is_git = _doc_listing(self.root, tuple(ignore))
+        self.docs = [f for f in listed if _utf8(f)]
+        self.not_utf8 = [f for f in listed if not _utf8(f)]     # set aside: see _utf8
+        self._known = set(self.docs)
+        self._groups: dict[str, list[str]] = {}
+        for f in self.docs:
+            self._groups.setdefault(_family_key(f), []).append(f)
+        self._heads: dict[str, list[str]] = {}
+        self._declared: dict[str, tuple[int, str] | None] = {}
+        self._commits: dict[str, int] = {}
+        self._unknown: dict[str, str] = {}      # committed file -> why its last commit was not found
+        self._asked: set[str] = set()
+
+    def head(self, rel: str) -> list[str]:
+        if rel not in self._heads:
+            self._heads[rel] = _read_head(self.root / rel)
+        return self._heads[rel]
+
+    def declared(self, rel: str) -> tuple[int, str] | None:
+        if rel not in self._declared:
+            self._declared[rel] = declared_old(self.head(rel))
+        return self._declared[rel]
+
+    def title(self, rel: str) -> str | None:
+        return _title_of(self.head(rel))
+
+    def reasons(self, rel: str) -> list[str]:
+        """Every sign that `rel` is an old copy (see path_history), and what its top says."""
+        out = path_history(rel)
+        if d := self.declared(rel):
+            out.append(f"line {d[0]} says it is out of date: \"{d[1]}\"")
+        return out
+
+    def marked_old(self, rel: str) -> bool:
+        """A word such as old or archive in its path, or its top says it is superseded."""
+        return (any(_age_words(_name_tokens(name)[2]) for _, name, _ in _segments(rel))
+                or self.declared(rel) is not None)
+
+    def against(self, rel: str) -> list[str]:
+        """The signs that count against using `rel`: all of them, except that a version number or a
+        date in its path is not held against the newest version of a document."""
+        why = self.reasons(rel)
+        if why and not self.marked_old(rel) and self.newest(rel)[0] == rel:
+            return []
+        return why
+
+    def members(self, rel: str) -> list[str]:
+        """Every document that looks like a version of the same one, `rel` included."""
+        return sorted(set(self._groups.get(_family_key(rel), [])) | {rel})
+
+    def family(self, rel: str) -> str:
+        return min(spec_family(m) for m in self.members(rel))
+
+    def add(self, paths) -> None:
+        """Count files the listing left out (git ignores them, or they are in an ignored folder) as
+        documents too: a folder the user named is still searched for versions of one spec."""
+        for f in paths:
+            if f not in self._known:
+                self._known.add(f)
+                self.docs.append(f)
+                self._groups.setdefault(_family_key(f), []).append(f)
+
+    def prefetch(self, paths) -> None:
+        """Ask git, once, for the last commit of every path a caller is about to need."""
+        todo = [p for p in dict.fromkeys(paths) if p in self.tracked and p not in self._asked]
+        if todo:
+            self._asked.update(todo)
+            found, why = _last_commits(self.root, todo)
+            self._commits.update(found)
+            if why:
+                self._unknown.update({p: why for p in todo if p not in found})
+
+    def prefetch_versions(self, paths) -> None:
+        """prefetch, for those of `paths` that have other versions, and for those versions. A file
+        with no other version never needs its last commit (newest() answers at once), and on a long
+        history git log can take all of its 60 s to reach a file that was last changed long ago."""
+        self.prefetch([m for f in dict.fromkeys(paths) if len(ms := self.members(f)) > 1 for m in ms])
+
+    def commit_date(self, rel: str) -> str | None:
+        self.prefetch([rel])
+        ts = self._commits.get(rel)
+        return _datetime.datetime.fromtimestamp(ts).date().isoformat() if ts else None     # local, as git log shows it
+
+    def commit_unknown(self, rel: str) -> str | None:
+        """Why the last commit of a file git tracks was not found (git log stopped before it got
+        there), or None. Such a file is not "not committed": its last commit is simply unknown."""
+        self.prefetch([rel])
+        return self._unknown.get(rel)
+
+    def changed(self, rel: str) -> tuple[float | None, bool]:
+        """When the file last changed: (its last commit, True), else - not committed, or no git -
+        (its file time, False). (None, False) when git log stopped before it reached the file's
+        last commit: its file time would be a guess (after a clone every file has the same one)."""
+        self.prefetch([rel])
+        if rel in self._commits:
+            return float(self._commits[rel]), True
+        if rel in self._unknown:
+            return None, False
+        try:
+            return (self.root / rel).stat().st_mtime, False
+        except OSError:
+            return None, False
+
+    @staticmethod
+    def _version(rel: str) -> tuple | None:
+        for _, name, _ in reversed(_segments(rel)):
+            if versions := _name_tokens(name)[1]:
+                return versions[-1][0]              # 8 numbers, then the pre-release (see _name_tokens)
+        return None
+
+    @staticmethod
+    def _date(rel: str):
+        for _, name, _ in reversed(_segments(rel)):
+            if dates := _name_tokens(name)[0]:
+                return dates[-1][0]
+        return None
+
+    def newest(self, rel: str) -> tuple[str | None, str]:
+        """The newest of the documents that look like versions of `rel`'s, and how that was decided,
+        in plain words; None when nothing tells them apart. A file marked old (a word such as
+        archive in its path, or a line at its top) is never the newest while another one is not.
+        Then: the version number in the name, else the date in the name, else the last commit."""
+        members = self.members(rel)
+        if len(members) == 1:
+            return rel, "it is the only version"
+        pool = [m for m in members if not self.marked_old(m)] or members
+        if len(pool) == 1:
+            return pool[0], "the others are marked as old, by a word in their path or a line at their top"
+        names = []                                          # what their names said, when it did not decide
+        for how, key, what in (("the version number in the name", self._version, "version number"),
+                               ("the date in the name", self._date, "date")):
+            keys = {m: key(m) for m in pool}
+            have = [m for m in pool if keys[m] is not None]
+            if len(have) == len(pool):
+                best = max(keys.values())
+                pool = [m for m in pool if keys[m] == best]
+                if len(pool) == 1:
+                    return pool[0], f"by {how}"
+                names.append(f"{len(pool)} of them have the same {what} in their name")
+            elif have:
+                names.append(f"only {len(have)} of the {len(pool)} have a {what} in their name")
+        times = {m: self.changed(m) for m in pool}
+        unknown = [m for m in pool if times[m][0] is None]
+        if not unknown:
+            best = max(t for t, _ in times.values())
+            top = [m for m in pool if times[m][0] == best]
+            if len(top) == 1:
+                return top[0], ("by the date of each file's last commit" if all(c for _, c in times.values()) else
+                                "by when each file last changed (its last commit, or its file time when it is not "
+                                "committed)")
+            last = "the same last change"
+        else:
+            why = "; ".join(dict.fromkeys(self._unknown.get(m, "the file could not be read") for m in unknown))
+            last = f"the last change of {', '.join(unknown)} is not known ({why})"
+        return None, (f"nothing tells them apart: {', '.join(names) or 'no version numbers or dates in their names'}"
+                      f", and {last}")
+
+
+def spec_candidates(root: Path, ignore, survey: SpecSurvey | None = None) -> list[dict]:
+    """Every .md/.rst file git would commit (outside git: every one outside the ignored folders)
+    whose path, title or first heading suggests a spec - spec, specification, requirements, design,
+    architecture, ADR, decision, RFC, PEP, PRD, SRS, proposal, API - with what the user needs to choose
+    the current one: its last commit, every sign of age, and the other versions of it. The whole
+    list, nothing left out."""
+    s = survey or SpecSurvey(root, ignore)
+    picked = [f for f in s.docs if _suggests_spec(f, s.title(f)) or _suggests_spec(f, _title_of(s.head(f), False))]
+    s.prefetch(picked + [m for f in picked for m in s.members(f)])
+    out = []
+    for f in picked:
+        members = s.members(f)
+        newest, how = s.newest(f)
+        decl = s.declared(f)
+        # s.against, not s.reasons: a version number or a date in the name of the newest version, or of
+        # a document that has no other version, is not a sign of age (proposals/2019-07-17-Webhooks.md).
+        out.append({"path": f, "title": s.title(f), "last_commit": s.commit_date(f), "committed": f in s.tracked,
+                    "last_commit_not_found": s.commit_unknown(f),
+                    "looks_historical": s.against(f), "self_declared": decl[1] if decl else None,
+                    "family": s.family(f), "family_size": len(members), "newest_in_family": newest,
+                    "newest_decided_by": how if len(members) > 1 else ""})
+    return out
+
+
+def not_utf8_specs(survey: SpecSurvey) -> list[str]:
+    """The files spec_candidates cannot list because their names are not valid UTF-8 (see _utf8):
+    those whose name, title or first heading suggests a spec. The caller names them in a warning."""
+    return [f for f in survey.not_utf8 if _suggests_spec(_readable(f), survey.title(f))
+            or _suggests_spec(_readable(f), _title_of(survey.head(f), False))]
+
+
+def spec_families(candidates: list[dict], survey: SpecSurvey) -> list[dict]:
+    """The candidates' families that have more than one member: every member with its last
+    commit, the newest, and how that was decided."""
+    out, seen = [], set()
+    for c in candidates:
+        key = _family_key(c["path"])
+        if c["family_size"] < 2 or key in seen:
+            continue
+        seen.add(key)
+        members = survey.members(c["path"])
+        out.append({"family": c["family"], "members": members, "newest": c["newest_in_family"],
+                    "decided_by": c["newest_decided_by"], "last_commits": {m: survey.commit_date(m) for m in members},
+                    "last_commit_not_found": {m: why for m in members if (why := survey.commit_unknown(m))}})
+    return out
+
+
+def candidates_text(candidates: list[dict], families: list[dict]) -> list[str]:
+    """The candidates as a person reads them: path, last commit, title, and every flag."""
+    if not candidates:
+        return ["No file in this project looks like a spec by its path, title or first heading."]
+    out = [f"{len(candidates)} file(s) in this project look like specs (by their path, title or first heading):"]
+    for c in candidates:
+        when = (f"last commit {c['last_commit']}" if c["last_commit"] else
+                f"last commit not found: {c['last_commit_not_found']}" if c.get("last_commit_not_found") else
+                "not committed")
+        out.append(f"  {c['path']}  ({when})" + (f"  \"{c['title']}\"" if c["title"] else ""))
+        if c["self_declared"]:
+            out.append(f"      SAYS IT IS OUT OF DATE: \"{c['self_declared']}\"")
+        signs = [r for r in c["looks_historical"] if not r.startswith("line ")]
+        if signs:
+            out.append("      looks like an old copy: " + "; ".join(signs))
+        if c["family_size"] > 1:
+            if c["newest_in_family"] == c["path"]:
+                out.append(f"      the newest of {c['family_size']} files that look like versions of one document "
+                           f"({c['newest_decided_by']})")
+            elif c["newest_in_family"]:
+                out.append(f"      a newer version exists: {c['newest_in_family']} ({c['newest_decided_by']})")
+            else:
+                out.append(f"      one of {c['family_size']} files that look like versions of one document; which "
+                           f"is newest cannot be told - {c['newest_decided_by']}")
+    if families:
+        out += ["", "Files that look like versions of one document:"]
+        for f in families:
+            unknown = f.get("last_commit_not_found") or {}
+            out.append(f"  {f['family']}: " + ", ".join(
+                f"{m} ({f['last_commits'][m] or ('last commit not found' if m in unknown else 'not committed')})"
+                for m in f["members"]))
+            if unknown:
+                out.append(f"      last commit not found for {len(unknown)} of them: "
+                           + "; ".join(dict.fromkeys(unknown.values())))
+            out.append(f"      newest: {f['newest']} ({f['decided_by']})" if f["newest"] else
+                       f"      newest: cannot be told - {f['decided_by']}")
+    return out
+
+
+def _newer_warning(s: SpecSurvey, rel: str, role: str) -> str | None:
+    """A warning when another version of `rel` looks newer, or when nothing tells them apart.
+    `role` finishes "which ...": "was named", "this map checks"."""
+    members = s.members(rel)
+    if len(members) < 2:
+        return None
+    newest, how = s.newest(rel)
+    if newest == rel:
+        return None
+    if newest is None:
+        return (f"the project has other files that look like versions of {rel}, which {role}: "
+                f"{', '.join(m for m in members if m != rel)}. Which is newest cannot be told - {how}. Ask the user "
+                f"which one is the current spec.")
+    return (f"{newest} looks like a newer version of {rel}, which {role} ({how}). Ask the user whether {newest} is "
+            f"the current spec; if it is, draft a new map from it and review that instead.")
+
+
+def _walk_docs(root: Path, rel: str, ignore) -> list[str]:
+    """Every .md/.rst file on disk in the folder `rel` of `root` and below it, whatever git ignores:
+    folders with an ignored name below it and symbolic links are skipped, and so is anything a
+    symbolic link leads to (os.walk does not follow them)."""
+    base = root if rel == "." else root / rel
+    return sorted(p.relative_to(root).as_posix() for p in _discover(base, tuple(ignore))
+                  if p.suffix.lower() in SPEC_SUFFIXES and not p.is_symlink())
+
+
+def expand_docs(root: Path, docs: list[str], ignore) -> tuple[list[Path], list[str]]:
+    """The spec files to draft from or pair, and warnings to show the user. A FILE that is named is
+    always used - the user chose it - but gets a warning when it looks like an old copy, says at
+    its top that it is superseded, or has a newer version in the project. A FOLDER is searched for
+    .md and .rst files (skipping ignored folders, files git ignores and symbolic links, never leaving
+    the project; when git ignores all of them, or the folder is inside an ignored one, they are used
+    with a warning - the folder was named); if
+    it holds a file that looks like an old copy, or several versions of one document, it is
+    refused and nothing is used: which of them is current is for the user to say, never a guess.
+    The refusal lists each such file once, each document with several versions once with its
+    newest, and then every file here that nothing flags - the list to name if they are the spec.
+    A file whose name says it is a template (template.md, 0000-template.md, pep-NNNN.rst) is left
+    out of a folder that is used, with a warning. A path that is missing or outside the project is
+    refused. A file whose name is not valid UTF-8 cannot be recorded in a map: named, it is
+    refused; in a folder, it is left out with a warning."""
+    root = Path(root).resolve()
+    s = SpecSurvey(root, ignore)
+    files: list[Path] = []
+    warnings: list[str] = []
+    for d in docs:
+        p = Path(d).expanduser()
+        p = p if p.is_absolute() else root / p
+        if not p.exists():
+            raise Stop(f"spec not found in the project: {_readable(d)}")
+        real = p.resolve()
+        if not real.is_relative_to(root):
+            raise Stop(f"spec not found in the project: {_readable(d)} - it is outside the project ({root}), refused")
+        rel = real.relative_to(root).as_posix()
+        if not real.is_dir():
+            if not _utf8(rel):
+                raise Stop(f"the name of {_readable(rel)} is not valid UTF-8, so a map cannot record it - rename it, "
+                           f"then name it again")
+            files.append(real)
+            s.prefetch_versions([rel])
+            if why := s.against(rel):
+                warnings.append(f"{rel} may be an old copy: {'; '.join(why)}. It was named, so it is used - make "
+                                f"sure with the user that it is the current spec.")
+            if w := _newer_warning(s, rel, "was named"):
+                warnings.append(w)
+            continue
+        found = [f for f in s.docs if rel == "." or f.startswith(rel + "/")]
+        not_utf8 = [f for f in s.not_utf8 if rel == "." or f.startswith(rel + "/")]
+        if not found and not not_utf8:
+            # The listing has nothing here: git ignores these files, or the folder is inside one that is
+            # skipped (build/, ...). It was named, so its files are the ones meant - use them.
+            on_disk = _walk_docs(root, rel, ignore)
+            found, not_utf8 = [f for f in on_disk if _utf8(f)], [f for f in on_disk if not _utf8(f)]
+            if found:
+                s.add(found)
+                skipped = next((part for part in rel.split("/") if part in set(ignore)), None)
+                warnings.append(
+                    f"{_readable(d)} is inside a folder named '{skipped}', which is skipped when the project is "
+                    f"searched; it was named, so its {len(found)} file(s) were used." if skipped else
+                    f"git ignores the .md and .rst files in {_readable(d)}; the folder was named, so its {len(found)} "
+                    f"file(s) were used. Where they are not present (a fresh clone, CI) the map cannot be checked.")
+        unusable = _not_utf8_warning(not_utf8, f"in {_readable(d)}")
+        if not found:
+            raise Stop(f"nothing was used: {unusable}" if unusable else f"no .md or .rst files in {_readable(d)}")
+        s.prefetch_versions(found)
+        here: dict[str, list[str]] = {}
+        for f in found:
+            here.setdefault(_family_key(f), []).append(f)
+        old, usable, templates = [], [], []
+        for f in found:
+            why = s.against(f)
+            if len(here[_family_key(f)]) > 1 and (newest := s.newest(f)[0]) != f:
+                why = why + [f"{'an older' if newest else 'one of the'} version{'' if newest else 's'} of "
+                             f"{s.family(f)} (see below)"]
+            elif why and len(s.members(f)) > 1 and (newer := s.newest(f))[0] not in (None, f):
+                why = why + [f"a newer version exists outside {_readable(d)}: {newer[0]} ({newer[1]})"]
+            if why:
+                old.append(f"  - {f}: {'; '.join(why)}")
+            elif template_name(f):
+                templates.append(f)
+            else:
+                usable.append(f)
+        groups = []                                         # each document with several versions here, once
+        for group in here.values():
+            if len(group) > 1:
+                newest, how = s.newest(group[0])
+                groups += [f"  - {s.family(group[0])} ({len(group)} files): {', '.join(group)}",
+                           f"      newest: {newest} ({how})" if newest else f"      newest: cannot be told - {how}"]
+        if old or groups:
+            parts = [f"{d} was refused and nothing was used: it holds files that look like old copies or several "
+                     f"versions of one spec, and drafting from an outdated one would go unnoticed."]
+            if old:
+                parts += [f"Files that look like old copies ({len(old)}):", *old]
+            if groups:
+                parts += ["Files here that look like versions of one document:", *groups]
+            parts.append("Name the current spec file(s) instead - ask the user which they are.")
+            if usable:
+                parts += [f"Nothing flags these {len(usable)} file(s) here"
+                          + (" (of a document with several versions, only its newest is among them)" if groups else "")
+                          + ". If they are the spec, name exactly these:", *(f"  {f}" for f in usable)]
+            else:
+                parts.append("Every file here is flagged: there is none to name without the user choosing.")
+            if templates:
+                parts.append("Left out of that list because their names say they are templates: "
+                             + ", ".join(templates))
+            if unusable:
+                parts.append(unusable)
+            raise Stop("\n".join(parts))
+        if unusable:
+            warnings.append(unusable)
+        kept = 0
+        for f in found:
+            if why := template_name(f):
+                warnings.append(f"{f} was left out: {why}, so it looks like a template, not part of the spec. Name "
+                                f"it on its own if it is part of the spec.")
+                continue
+            kept += 1
+            files.append(root / f)
+            if w := _newer_warning(s, f, f"is in {d}"):
+                warnings.append(w)
+        if not kept:
+            raise Stop(f"the only .md or .rst files in {d} look like templates ({', '.join(found)}) - name one on its "
+                       f"own if it is the spec")
+    return list(dict.fromkeys(files)), list(dict.fromkeys(warnings))
+
+
+def spec_version_report(map_path: Path, root: Path, ignore, src: Path | None = None) -> dict:
+    """Is every spec file the map checks still the current one? For each distinct spec file (the
+    entries' "spec", and the map's "specs" list): a file whose top says it is superseded,
+    deprecated, obsolete or no longer current is a PROBLEM - the map is not ready and nothing may
+    be sent; a newer version of it in the project is a WARNING - the check still runs, and the
+    user is asked. Free: reads files and git's history, sends nothing.
+    A spec file is found as claims_from_map finds it - against `root`, then `src` (the code
+    folder), then the map's folder - so every spec that is checked is also looked at here. Newer
+    versions are looked for in whichever of `root` and `src` holds the spec; for a spec outside
+    both, a warning says that none was looked for."""
+    root = Path(root).resolve()
+    mp = Path(map_path)
+    mp = mp if mp.is_absolute() else root / mp
+    report: dict = {"specs": [], "problems": [], "warnings": []}
+    try:
+        data = json.loads(mp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return report                                       # loading the map reports this itself
+    entries = data.get("entries") if isinstance(data, dict) else data
+    names = [e["spec"] for e in (entries if isinstance(entries, list) else [])
+             if isinstance(e, dict) and isinstance(e.get("spec"), str) and e["spec"]]
+    if isinstance(data, dict) and isinstance(data.get("specs"), list):
+        names += [n for n in data["specs"] if isinstance(n, str) and n]
+    confirmed = {Path(c).as_posix().removeprefix("./") for c in
+                 (data.get("confirmed_current") if isinstance(data, dict) else None) or [] if isinstance(c, str) and c}
+    tops = list(dict.fromkeys([root] + ([Path(src).resolve()] if src is not None else [])))
+    bases = list(dict.fromkeys(tops + [mp.parent.resolve()]))       # claims_from_map's order: cwd, src, map
+    found, seen = [], set()
+    for n in dict.fromkeys(names):
+        f = next((b / n for b in bases if (b / n).is_file()), None)
+        if f is not None and f.resolve() not in seen:       # a missing spec is reported when the map loads
+            real = f.resolve()
+            seen.add(real)                                  # "docs/spec.md" and "./docs/spec.md": one file
+            top = next((t for t in tops if real.is_relative_to(t)), None)
+            found.append((n, real, top, real.relative_to(top).as_posix() if top else None))
+    surveys: dict[Path, SpecSurvey | None] = {}
+    for top in dict.fromkeys(t for _, _, t, _ in found if t is not None):
+        try:
+            surveys[top] = SpecSurvey(top, ignore)
+            surveys[top].prefetch_versions([rel for _, _, t, rel in found if t == top])
+        except Stop as e:
+            surveys[top] = None
+            report["warnings"].append(f"could not look for newer versions of the spec: {e}")
+    for n, real, top, rel in found:
+        shown = rel or n
+        survey = surveys.get(top) if top is not None else None
+        if top is None:
+            report["warnings"].append(f"{shown} is outside the project ({root}), so no newer version of it was "
+                                      f"looked for. Make sure with the user that it is the current spec.")
+        decl = declared_old(_read_head(real))
+        is_confirmed = bool({Path(n).as_posix().removeprefix("./"), shown} & confirmed)
+        item = {"spec": shown, "declares_old": {"line": decl[0], "text": decl[1]} if decl else None,
+                "confirmed_current": is_confirmed, "newer": None, "other_versions": [], "newest_decided_by": ""}
+        if decl and is_confirmed:                           # the user's word beats a heuristic reading of one line
+            report["warnings"].append(
+                f"{shown} line {decl[0]} reads as if the spec were out of date (\"{decl[1]}\"), but the map lists it "
+                f"in confirmed_current: the user confirmed it is the current spec, so it is checked.")
+        elif decl:
+            report["problems"].append(
+                f"{shown} says it is out of date - line {decl[0]}: \"{decl[1]}\". This map checks it, so the code "
+                f"would be compared with an outdated spec. Ask the user which file is the current spec, then draft a "
+                f"new map from that file and review it. If the user says this spec IS current and that line is about "
+                f"something else, add {shown} to the map's top-level \"confirmed_current\" list.")
+        if survey is not None and rel:
+            members = survey.members(rel)
+            if len(members) > 1:
+                newest, how = survey.newest(rel)
+                item.update(other_versions=[m for m in members if m != rel], newest_decided_by=how,
+                            newer=newest if newest not in (None, rel) else None)
+                if w := _newer_warning(survey, rel, "this map checks"):
+                    report["warnings"].append(w)
+        report["specs"].append(item)
+    return report
+
+
+def _entry_line_spans(text: str) -> list[tuple[int, int] | None]:
+    """Where each map entry's "line" value sits in the map file's text: (start, end), or None for an
+    entry without one. The entries are the top-level list, or the top-level object's "entries".
+    The text must be valid JSON already (load_map checked it)."""
+    ws = re.compile(r"[ \t\n\r]*")
+    scalar = re.compile(r"-?(?:\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|Infinity)|true|false|null|NaN")
+
+    def skip(i: int) -> int:
+        return ws.match(text, i).end()
+
+    def value(i: int):
+        i = skip(i)
+        if text[i] in "{[":
+            close, node = ("}", {}) if text[i] == "{" else ("]", [])
+            i = skip(i + 1)
+            while text[i] != close:
+                if close == "}":
+                    key, i = json.decoder.scanstring(text, i + 1)
+                    i = skip(skip(i) + 1)                   # past the colon
+                start = skip(i)
+                child, end = value(start)
+                if close == "}":
+                    node[key] = (start, end, child)
+                else:
+                    node.append((start, end, child))
+                i = skip(end)
+                if text[i] == ",":
+                    i = skip(i + 1)
+            return node, i + 1
+        if text[i] == '"':
+            return None, json.decoder.scanstring(text, i + 1)[1]
+        return None, scalar.match(text, i).end()
+
+    top, _ = value(0)
+    entries = top if isinstance(top, list) else (top.get("entries", (0, 0, None))[2] if isinstance(top, dict) else None)
+    out = []
+    for _, _, node in entries if isinstance(entries, list) else []:
+        hit = node.get("line") if isinstance(node, dict) else None
+        out.append((hit[0], hit[1]) if hit else None)
+    return out
+
+
+def update_map_lines(path: Path, src: Path | None = None) -> tuple[int, list[str]]:
+    """Store the current line of every entry whose sentence has moved in the spec. Only the digits
+    of those "line" values change; every other byte of the file stays as it was. The file is
+    replaced atomically: a crash leaves the old map or the new one, never half of each. Returns
+    (entries changed, notes)."""
+    entries = load_map(path)                                # first: it says so plainly when the file is not a map
+    text = path.read_bytes().decode("utf-8")
+    spans = _entry_line_spans(text)
+    bases = list({b.resolve(): b for b in [Path.cwd(), src or Path.cwd(), path.parent]}.values())
+    indexes: dict[str, tuple] = {}
+    edits, notes = [], []                                   # (entry index, span of its line, new line)
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict) or not isinstance(e.get("spec"), str) or not e["spec"] \
+                or not isinstance(e.get("spec_text"), str) or not e["spec_text"]:
+            continue
+        spec_file = next((b / e["spec"] for b in bases if (b / e["spec"]).is_file()), None)
+        if spec_file is None:
+            notes.append(f"map entry {i + 1}: its spec file {e['spec']!r} was not found, so its line was left as it is")
+            continue
+        if str(spec_file) not in indexes:
+            indexes[str(spec_file)] = _spec_index(spec_file)
+        line = e.get("line", 0)
+        hit = _find_snapshot(indexes[str(spec_file)], _snap(e["spec_text"]), line if isinstance(line, int) else 0)
+        if hit is None:
+            notes.append(f"map entry {i + 1} ({e['spec']}): its spec_text is no longer in the spec, so its line was "
+                         f"left as it is - the spec changed; review the entry")
+            continue
+        if hit == line:
+            continue
+        span = spans[i] if i < len(spans) else None
+        if span is None:
+            notes.append(f"map entry {i + 1} ({e['spec']}) has no \"line\" field, so it was left as it is; its "
+                         f"sentence is at line {hit}")
+            continue
+        edits.append((i, span, hit))
+    if not edits:
+        return 0, notes
+    new = text
+    for _, (a, b), hit in sorted(edits, key=lambda x: x[1][0], reverse=True):
+        new = new[:a] + str(hit) + new[b:]
+    expected = json.loads(json.dumps(entries))              # prove that nothing but those lines changed
+    for i, _, hit in edits:
+        expected[i]["line"] = hit
+    after = json.loads(new)
+    if (after.get("entries") if isinstance(after, dict) else after) != expected:
+        raise Stop(f"could not update the lines in {path} without changing anything else - nothing was written.")
+    target = path.resolve()
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(new.encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, target.stat().st_mode & 0o7777)
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return len(edits), notes
+
 
 # ───────────────────────────────────────────────────────────────── 3. ask Jev
 
@@ -3125,6 +4140,12 @@ installs them; without uv, install them into the Python that runs the tool:
 
 THE USUAL 3 STEPS
 
+  0. Not sure which file is the spec, or does the project keep several
+     versions of it? List the candidates with their last commit dates and
+     anything that marks one as an old copy, then choose:
+
+       {cmd} --find-specs
+
   1. See which spec sentences it can pair with code on its own. It pairs a
      sentence that names something in backticks that exists in the code -
      `MAX_ITEMS`, `GET /api/orders/{{id}}`, `app.orders.max-items` - and lists
@@ -3173,9 +4194,13 @@ def help_epilog() -> str:
 examples (run from the folder of the project you are checking):
   Step 1 - what pairs on its own (no API calls):
       {cmd} --docs docs/spec.md --dry-run
-  Step 2 - draft a map, then check it loads (no API calls):
-      {cmd} --docs docs/ --draft-map spec_map.json
+  Which file is the spec? List the candidates, with dates and signs of old copies (no API calls):
+      {cmd} --find-specs
+  Step 2 - draft a map from the current spec file(s), then check it loads (no API calls):
+      {cmd} --docs docs/spec.md --draft-map spec_map.json
       {cmd} --map spec_map.json --dry-run
+  The spec was edited above some entries - store their new line numbers (nothing else changes):
+      {cmd} --map spec_map.json --update-lines
   Step 3 - the check:
       {cmd} --map spec_map.json
   Try 5 claims first, and see exactly what is sent:
@@ -3262,7 +4287,11 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Your spec: one or more Markdown/.rst files, or folders to search for them. "
                            "A sentence is paired automatically when it names, in backticks, something that "
                            "exists in the code: a function, class, constant, endpoint or setting. "
-                           "Sentences it cannot pair are listed. Example: --docs docs/spec.md")
+                           "Sentences it cannot pair are listed. Example: --docs docs/spec.md. "
+                           "A folder that holds old copies or several versions of a spec (spec-v1.md next to "
+                           "spec-v2.md, an archive/ folder, a file that says it is superseded) is refused: name "
+                           "the current file(s). A named file that looks old gets a WARNING. Not sure which file "
+                           "is the spec? --find-specs lists the candidates.")
     spec.add_argument("--map", metavar="FILE",
                       help="A reviewed map saying which code each requirement is about (JSON). Make it with "
                            "--draft-map; the file explains its own fields. Use this to check every "
@@ -3288,6 +4317,16 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Write a first-draft map to FILE (a suggested code location for every spec sentence, "
                            "plus a _readme explaining the fields) and stop. Needs --docs. Makes no API calls. "
                            "Refuses to overwrite an existing file, so a reviewed map is never lost.")
+    todo.add_argument("--find-specs", action="store_true",
+                      help="List every file in this project that looks like a spec (by its path, title or first heading) "
+                           "with its last commit date and anything that marks it as a possible old copy - a version "
+                           "number or date in its name, a folder such as archive/, a first line that says it is "
+                           "superseded - and, where several look like versions of one document, which is newest. "
+                           "Then stop. Makes no API calls. Use it to choose the file(s) for --docs.")
+    todo.add_argument("--update-lines", action="store_true",
+                      help="With --map: store the current line of every entry whose sentence has moved in the "
+                           "spec. Only those \"line\" values change; every other byte of the file stays as it was, "
+                           "and the file is replaced in one step. Makes no API calls.")
     todo.add_argument("--out", default=None, metavar="FILE",
                       help="Where the check writes its results (an existing file is overwritten). Default: "
                            "drift.json. With --dry-run, writes the plan instead: every claim, its code "
@@ -3402,7 +4441,52 @@ def main() -> None:
         _die(str(e))
 
 
+def _cli_ignore(args) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(([] if args.no_default_ignore else DEFAULT_IGNORE)
+                               + [n.strip("/").removeprefix("./") for n in args.ignore]))
+
+
+def _cli_find_specs(args) -> int:
+    """--find-specs: the candidate spec files, for the user to choose from. Nothing is drafted."""
+    if args.docs or args.map or args.draft_map:
+        raise Stop("--find-specs lists the files that look like specs and stops: leave out --docs, --map and "
+                   "--draft-map.")
+    if Path(args.src).resolve() != Path.cwd().resolve():
+        raise Stop(f"--find-specs lists the files of the folder you run from ({Path.cwd()}), not of --src: cd into "
+                   f"the project and leave out --src.")
+    root = Path.cwd()
+    survey = SpecSurvey(root, _cli_ignore(args))
+    found = spec_candidates(root, (), survey=survey)
+    print("\n".join(candidates_text(found, spec_families(found, survey))))
+    if w := _not_utf8_warning(not_utf8_specs(survey), "that look like specs"):
+        print(f"\nWARNING: {w}")
+    print("\nNothing was drafted. Decide which file(s) are the current spec - never a folder that holds several "
+          "versions - then:\n    " + _cmd() + " --docs <file> [<file> ...] --draft-map spec_map.json")
+    return 0
+
+
+def _cli_update_lines(args) -> int:
+    """--update-lines: store the current line of every map entry whose sentence has moved."""
+    if not args.map:
+        raise Stop("--update-lines needs --map: the map whose line numbers to update.")
+    if args.docs or args.draft_map:
+        raise Stop("--update-lines works on a map only: leave out --docs and --draft-map.")
+    if not Path(args.map).is_file():
+        raise Stop(f"map file not found: {args.map}  (paths are relative to the folder you run from: {Path.cwd()})")
+    n, notes = update_map_lines(Path(args.map), Path(args.src))
+    for note in notes:
+        print(f"  note: {note}")
+    print(f"updated the line of {n} map entr{'y' if n == 1 else 'ies'} in {args.map} whose sentence had moved in the "
+          f"spec; nothing else in the file changed." if n else
+          f"no entry of {args.map} has moved in the spec: nothing was changed.")
+    return 0
+
+
 def run(args, inside_tool_folder: bool) -> int:
+    if getattr(args, "find_specs", False):
+        return _cli_find_specs(args)
+    if getattr(args, "update_lines", False):
+        return _cli_update_lines(args)
     if args.draft_map and not args.docs:
         raise Stop("--draft-map needs the spec to draft from: add --docs docs/spec.md")
     if not args.docs and not args.map:
@@ -3432,6 +4516,12 @@ def run(args, inside_tool_folder: bool) -> int:
                                  + [n.strip("/").removeprefix("./") for n in args.ignore]))
     problems: list[str] = []          # exit 2: the team must fix something
     vendor: list[str] = []            # exit 3: TypeSafe could not be used
+    docs: list[Path] = []
+    doc_warnings: list[str] = []
+    if args.docs:                     # before any code is read: a folder of spec versions is refused at once
+        here = Path.cwd().resolve()
+        files, doc_warnings = expand_docs(here, args.docs, ignore)
+        docs = [Path(os.path.relpath(f, here)) for f in files]
 
     t0 = time.time()
     syms, counts = index_code(src, ignore)
@@ -3455,14 +4545,8 @@ def run(args, inside_tool_folder: bool) -> int:
     if total_syms == 0 and not _MISSING:
         problems.append(f"no code found in {src.resolve()}. Run from the project's folder, or point --src at the code.")
 
-    docs: list[Path] = []
-    for d in args.docs:
-        p = Path(d)
-        if p.is_dir():
-            docs.extend(sorted(f for f in [*p.rglob("*.md"), *p.rglob("*.rst")]
-                               if not any(part in ignore for part in f.relative_to(p).parts)))
-        else:
-            docs.append(p)
+    for w in doc_warnings:
+        print(f"  WARNING: {w}")
 
     if args.draft_map:
         draft_map(docs, syms, Path(args.draft_map))
@@ -3476,6 +4560,15 @@ def run(args, inside_tool_folder: bool) -> int:
         print(f"  {args.map}: {len(claims)} map entries ready to check"
               + (f"; {MAP_COUNTS['excluded']} marked excluded (not requirements, never sent)"
                  if MAP_COUNTS["excluded"] else ""))
+        if MAP_COUNTS.get("moved"):
+            print(f"  note: to store the current line numbers in the map, run:  --map {args.map} --update-lines  "
+                  f"(it changes only the \"line\" fields)")
+        versions = spec_version_report(Path(args.map), Path.cwd(), ignore, src=src)
+        for w in versions["warnings"]:
+            print(f"  WARNING: {w}")
+        problems.extend(versions["problems"])
+        if versions["problems"] and not args.dry_run:
+            raise Stop("the check was refused and nothing was sent: " + " ".join(versions["problems"]))
         if args.strict:
             problems.extend(f"{n} (--strict)" for n in MAP_NOTES)
     else:

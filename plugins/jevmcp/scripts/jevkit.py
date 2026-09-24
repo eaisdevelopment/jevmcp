@@ -81,20 +81,13 @@ class Run:
 
 def estimate_tokens(item: Item) -> int:
     """Input tokens one request will cost: the fixed charge plus the body. Used before anything is
-    sent, so a user can be told the price and a too-large state is caught here, not by an HTTP 400."""
+    sent, so a user can be told the price."""
     body = json.dumps({"state": dd.canonical(item.state), "questions": item.questions}, ensure_ascii=False)
     return FIXED_TOKENS + int(len(body) / CHARS_PER_TOKEN)
 
 
 def estimate_cost(items: list[Item], samples: int = 1) -> float:
     return round(sum(estimate_tokens(i) for i in items) * max(1, samples) * PRICE_PER_TOKEN, 6)
-
-
-MAX_STATE_TOKENS = 30_000       # the API refuses state + longest question above ~32.7k; keep a margin
-
-
-def too_large(item: Item) -> bool:
-    return estimate_tokens(item) > MAX_STATE_TOKENS
 
 
 def screen(items: list[Item], key: str,
