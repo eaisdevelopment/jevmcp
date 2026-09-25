@@ -880,6 +880,29 @@ it — which is what makes a check take seconds and cost fractions of a cent.
 **Who writes it.** `draft_spec_map` (or `--draft-map`) writes it. The user never writes it by
 hand. Every entry must then be reviewed by you and the user before a check is worth running.
 
+**Which sentences, in any language.** A sentence of prose with at least five words becomes an entry;
+headings, code blocks and lines of code do not. Chinese and Japanese have no spaces between words, so
+their characters are counted instead: about one and a half Han characters, two and a half hiragana or
+four katakana make a word. A Chinese, Japanese or Korean sentence that ends with a full stop needs
+only three words. In text with Chinese, Japanese or Korean in it, a sentence ends at 。！？, or at a
+Latin `.`, `!` or `?` followed by a space, but never inside brackets, quotes or a code span, and a
+table row stays one entry with all its cells. When a
+map is checked, a space next to a Chinese or Japanese character does not count, so re-wrapping the
+spec is not a change. Inside a code span that space is part of a literal, and it does count.
+
+**Languages that are not read properly.** English, the other languages written in the Latin alphabet,
+Chinese, Japanese and Korean are read sentence by sentence. Other languages are not:
+
+| Spec written in | What happens |
+|---|---|
+| A Latin-alphabet language whose sentences can start with a capital outside A–Z, such as `Č`, `Ş`, `İ`, `É`, `Ö` or `Ł` (Turkish, Czech, Slovak, Polish, Swedish) | Such a sentence stays joined to the one before it, so two requirements share one entry. |
+| Cyrillic (Russian, Ukrainian, Bulgarian, Serbian, Mongolian), Greek, Arabic, Persian, Hebrew, Hindi and the other Indic scripts (Bengali, Tamil, Sinhala), Georgian, Armenian, Amharic, Burmese | Sentences are not split: each paragraph or list item is one entry. One check then judges several requirements at once, and a drift in one of them can be missed. |
+| Thai, Lao, Khmer, Tibetan | Words are not separated by spaces, so a sentence counts as one word and is dropped as too short; only paragraphs with spaces in them are kept, each as one entry. Most of such a spec is not checked. |
+
+Measured on the 38 translations of the SemVer specification and on Wikipedia text. With a spec in the
+second group, write one requirement per list item: each item is then its own entry. With one in the
+third, add an entry by hand for each requirement, with its sentence as `text`.
+
 ### File shape
 
 ```json

@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "jevmcp",
-  "version": "1.7.2",
-  "description": "Jev tools for coding agents, in one plugin: spec-drift checking, CI failure triage and code audit. A fast model (TypeSafe's Jev) screens - each requirement against its code, each failure of a CI run against the change under test, each of your project's own rules against the code it covers - and the agent investigates only what it flags. More tools are added to this same plugin, so you install once.",
+  "version": "1.7.3",
+  "description": "Jev tools for coding agents, in one plugin: spec-drift checking, CI failure triage and code audit. A fast model (TypeSafe's Jev) screens - each requirement against its code, each failure of a CI run against the change under test, each of your project's own rules against the code it covers - and the agent investigates only what it flags. More tools are added to this same plugin, so you install once. Spec drift reads specs sentence by sentence in English and other Latin-alphabet languages, Chinese, Japanese and Korean; specs in other scripts (Cyrillic, Greek, Arabic, Hebrew, Indic and others) are read a paragraph at a time, and Thai, Lao, Khmer and Tibetan mostly not at all.",
   "author": {
     "name": "Essential AI Solutions Ltd.",
     "url": "https://essentialai.uk"

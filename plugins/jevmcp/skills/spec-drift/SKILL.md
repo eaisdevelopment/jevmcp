@@ -1,6 +1,6 @@
 ---
 name: spec-drift
-description: Check whether a project's code still matches its design spec or requirements document. A fast model (TypeSafe's Jev) screens every requirement in seconds; you investigate only what it flags. A project is set up once with a spec map (spec_map.json), which pairs each requirement sentence with the code that implements it; the draft_spec_map tool writes it, the user never writes it by hand. Use when the user asks whether code matches the spec, design or requirements; after changing code in a project that has a *spec_map.json (before you finish the task); when a spec is edited; before a release; or to set up spec-drift checking for a project. Works with Java/Spring, JavaScript/TypeScript (Node, NestJS, Express, Hono, Fastify, Next.js) and Python (FastAPI, Flask, Django), and with any other language through line ranges.
+description: Check whether a project's code still matches its design spec or requirements document. A fast model (TypeSafe's Jev) screens every requirement in seconds; you investigate only what it flags. A project is set up once with a spec map (spec_map.json), which pairs each requirement sentence with the code that implements it; the draft_spec_map tool writes it, the user never writes it by hand. Use when the user asks whether code matches the spec, design or requirements; after changing code in a project that has a *spec_map.json (before you finish the task); when a spec is edited; before a release; or to set up spec-drift checking for a project. Works with Java/Spring, JavaScript/TypeScript (Node, NestJS, Express, Hono, Fastify, Next.js) and Python (FastAPI, Flask, Django), and with any other language through line ranges. Specs in English and other Latin-alphabet languages, Chinese, Japanese and Korean; other scripts are read a paragraph at a time, Thai, Lao, Khmer and Tibetan mostly not.
 ---
 
 # Spec drift check
@@ -90,6 +90,14 @@ never block the user's task on it.
 2. **See what the tool can read:** `$DD --docs <spec> --dry-run`. It reports the languages,
    routes and config keys it found, and lists the sentences it cannot pair on its own. If it
    says a parser is missing or a language can only be paired by line range, note it.
+   **Check the language the spec is written in.** English and other Latin-alphabet languages,
+   Chinese, Japanese and Korean are read sentence by sentence. Tell the user before drafting if it
+   is written in another script: in Cyrillic, Greek, Arabic, Hebrew, Hindi or another Indic
+   script, Georgian, Armenian, Amharic or Burmese, each paragraph or list item becomes one entry
+   (one requirement per list item works well); in Thai, Lao, Khmer or Tibetan most sentences are
+   dropped as too short, so their requirements need entries added by hand. In Turkish, Czech,
+   Slovak, Polish or Swedish, a sentence starting with a capital like `Č` or `İ` stays joined to
+   the one before it: split such an entry when you review it.
 3. **Draft the map** with `draft_spec_map` or `--draft-map`. It suggests code for every sentence;
    the suggestions are guesses.
 4. **Review every entry. This is the important step, and it is your job.**

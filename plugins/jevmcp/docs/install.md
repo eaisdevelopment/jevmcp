@@ -31,7 +31,7 @@ The validate, preview and draft tools, `--help`, `--dry-run` and `--show-key-sou
 | **A supported client** | Claude Code and OpenAI Codex are both tested. Any other client of the [Agent Plugins](https://agent-plugins.org) 1.0.0 format can load `plugins/jevmcp`. | Section 2–4 |
 | **Python** | `>=3.10`, supplied by `uv` if the system Python is older. | — |
 
-There is **one** plugin, `jevmcp`, version 1.7.2, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
+There is **one** plugin, `jevmcp`, version 1.7.3, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
 
 ---
 

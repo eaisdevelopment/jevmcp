@@ -91,7 +91,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions

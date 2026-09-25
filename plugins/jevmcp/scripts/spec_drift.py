@@ -1894,15 +1894,163 @@ def unindexed_sources(root: Path, ignore: tuple[str, ...]) -> dict[str, int]:
 # ──────────────────────────────────────────────────── 2. pair claims with code
 
 SENT_SPLIT = re.compile(r"(?<=[.!?:])\s+(?=[A-Z`#\-*\d])|\n(?=[-*|#])")
+# Chinese and Japanese are written with no space between words, and end a sentence with 。！？ (．
+# in some technical Japanese) with no space after it; Korean puts spaces between words but its
+# sentences start with no capital letter. Read as English, a whole Japanese sentence was one "word"
+# - too short to keep - and a paragraph was never split.
+# Ranges as code points: a look-alike typed in a range (the ideograph U+8C48 for its compatibility twin
+# U+F900) cannot be seen, and silently takes in other scripts - here, all of Korean.
+_HIRAGANA = "\u3041-\u3096\u309d-\u309f"
+_KATAKANA = "\u30a1-\u30fa\u30fc-\u30ff\u31f0-\u31ff\uff66-\uff9f"                     # plus half-width
+_KANA_MARKS = "\u3099-\u309c\u30a0\u30fb"      # sound marks, ゠ and ・ (Linux・macOS): punctuation, not letters
+_HAN = "\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0003ffff"
+_DENSE = _HIRAGANA + _KATAKANA + _HAN                   # scripts written with no space between words
+_DENSE_LETTER = re.compile(f"[{_DENSE}]")
+_DENSE_ANY = re.compile(f"[{_DENSE}{_KANA_MARKS}\u3000-\u303f\uff01-\uff65]")   # plus CJK punctuation, full-width forms
+_HANGUL = "\uac00-\ud7a3\u1100-\u11ff\u3130-\u318f"
+_CJK_ANY = re.compile(f"[{_DENSE}{_HANGUL}]")
+_CJK_STOP = "。！？．｡"
+_OPEN, _CLOSE = "「『（(【〔［[｛{〈《“‘", "」』）)】〕］]｝}〉》”’"
+# A Latin .!? that ends a sentence in text with CJK in it: where SENT_SPLIT ends one, and before CJK or
+# Korean after a space (…です. 次は, …sentence. 이것은); after a CJK or Korean letter, before anything after a
+# space (…다. kubelet은 - Korean has no capitals).
+# Not with no space after it: ファイル名.拡張子 and 主版本号.次版本号 are names (a missed cut only joins two
+# sentences; a wrong one loses words). Not a ':' - "`Unknown`: 诊断失败" and "(예: 5)" are one sentence.
+_CJK_THEN = re.compile(rf"(?<=[.!?])\s+(?=[A-Z`#\-*\d{_DENSE}{_HANGUL}])"
+                       rf"|(?<=[{_DENSE}{_HANGUL}{re.escape(_CLOSE)}][.!?])\s+(?=\S)"
+                       rf"|\n(?=[-*|#])")
+_ABBREV_END = re.compile(r"(?<![A-Za-z])(?:vs|e\.g|i\.e|eg|ie|cf|viz|approx|incl|fig|eq|ref)\.$", re.I)   # A vs. B
+_WIDE_ALNUM = "0-9A-Za-z\uff10-\uff19\uff21-\uff3a\uff41-\uff5a"         # and their full-width forms
+_NOT_A_STOP = re.compile(f"(?<=[{_WIDE_ALNUM}])．(?=[{_WIDE_ALNUM}])")   # ３．５秒, バージョン２．５, Ｎｏ．１
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)[^\n]+?(?<!`)\1(?!`)")      # `x`, and RST ``x`` as one span each
+_SENTENCE_START = re.compile(rf"(?:^\s*(?:[-*+]|\d+[.)])?|[{_CJK_STOP}.!?:：])\s*$")
+_BRACKET_CLOSE = "）)】〕］]｝}"        # not 》〉: a cited title (《为什么选择 RocketMQ？》一文) is a quote
+# After 」 or ） closing a whole sentence, these say the quote is part of a longer one: 「…。」と表示する
+_QUOTE_GOES_ON = "とのをはがへにやで的、，,:：;；" + _CLOSE + _CJK_STOP
+_WORDS = re.compile(f"[^\\W\\d_{_DENSE}{_HANGUL}]{{3,}}|[{_DENSE}{_HANGUL}]{{3,}}")   # CJK and other letters apart
+_DENSE_SPACE = re.compile(rf"(?<={_DENSE_ANY.pattern})\s+|\s+(?={_DENSE_ANY.pattern})")
+# Characters to a word when a Chinese / Japanese sentence's length is measured: Han carry meaning (1.5),
+# hiragana are particles and endings (2.5), katakana spell long loanwords (ライフサイクルフック, 4). Measured on
+# labelled Kubernetes docs in four languages, so that a sentence is kept or dropped as its English original is.
+HAN_PER_WORD = 1.5
+HIRAGANA_PER_WORD = 2.5
+KATAKANA_PER_WORD = 4
+_HAN_RE, _HIRAGANA_RE, _KATAKANA_RE = (re.compile(f"[{r}]") for r in (_HAN, _HIRAGANA, _KATAKANA))
+# A CJK or Korean sentence that ends with a full stop is a statement at 3 words: 영숫자로 시작한다 is 2 eojeol
+# and a label; `.spec.schedule` 필드는 필수이다. is a rule. (Korean statements end with 다., its labels
+# with no stop.)
+CJK_STOP_MIN = 3
+_ENDS_STOP = re.compile(rf"[。．｡.][{re.escape(_CLOSE)}\"'*_`]*$")      # a statement - not a question (准备好了吗？)
+# Not a word: CJK letters and punctuation (full-width A-Z and 0-9 are words), and ASCII punctuation next to a
+# Chinese / Japanese letter - '运行以下命令:' is as short as '运行以下命令：', '[中文](README_cn.md)' as '[English](…)'.
+_WORD_GAP = re.compile(f"[{_DENSE}{_KANA_MARKS}\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]"
+                       f"|(?<=[{_DENSE}])\\s*[^\\w\\s\\-\u2013\u2014]|[^\\w\\s\\-\u2013\u2014](?=\\s*[{_DENSE}])")   # ' - ', ' — ': a word, as in English
+
+
+def _starts_sentence(text: str, at: int) -> bool:
+    """A sentence starts at `at`: the text before it is only a list marker, or ends with a stop or a colon."""
+    j = at
+    while j and text[j - 1].isspace():
+        j -= 1
+    return bool(_SENTENCE_START.match(text, 0, at) or _SENTENCE_START.search(text, max(0, j - 1), at))
+
+
+def _split_sentences(text: str) -> list[str]:
+    """`text` cut into sentences. With no CJK in it, by SENT_SPLIT exactly as always. With CJK: after
+    each CJK full stop, and where a Latin .!? ends a sentence - never inside brackets, quotes or a
+    `code span` (「…。」と書く is one sentence)."""
+    if not _CJK_ANY.search(text):
+        return SENT_SPLIT.split(text)
+    depth = [0] * (len(text) + 1)
+    in_code = [False] * len(text)
+    for m in _CODE_SPAN.finditer(text):
+        depth[m.start() + 1] += 1
+        depth[m.end() - 1] -= 1
+        in_code[m.start():m.end()] = [True] * (m.end() - m.start())
+    stack: list[tuple[int, str]] = []
+    opener = {}                                     # closing bracket -> where it opened
+    for i, ch in enumerate(text):                   # only a bracket that is closed again counts
+        if in_code[i]:
+            continue
+        if ch in _OPEN:
+            stack.append((i, ch))
+        elif ch in _CLOSE and stack and stack[-1][1] == _OPEN[_CLOSE.index(ch)]:
+            j, _ = stack.pop()
+            depth[j + 1] += 1
+            depth[i] -= 1
+            opener[i] = j
+    level_at, level = [], 0
+    for i in range(len(text)):
+        level += depth[i]
+        level_at.append(level)
+    cuts, start = [], 0
+    for i, ch in enumerate(text):
+        if ch in _CJK_STOP and level_at[i] == 0 and text[i + 1:i + 2] not in _CJK_STOP \
+                and not _NOT_A_STOP.match(text, i) and not (ch in "！？" and text[i + 1:i + 2] in "とっ"):
+            k = i + 1
+            while k < len(text) and (text[k] in _CLOSE or         # a " or ' goes along only if it closes a quote
+                                     text[k] in "\"'" and text.count(text[k], start, i) % 2):
+                k += 1
+            cuts.append(k)
+            start = k
+        elif ch in _BRACKET_CLOSE and i in opener and level_at[i] == 0 and text[i - 1] in _CJK_STOP \
+                and text[i + 1:i + 2] not in _QUOTE_GOES_ON and not (ch == "]" and text[i + 1:i + 2] == "(") \
+                and _starts_sentence(text, opener[i]):
+            cuts.append(i + 1)      # （…。）Next: a whole sentence in brackets. Not after a quote, which is a
+                                    # message in a sentence as often as not: 「保存しました。」などのメッセージ
+    for m in _CJK_THEN.finditer(text):
+        stop = m.start() - 1
+        if stop < 0 or level_at[stop] != 0 or _ABBREV_END.search(text, max(0, stop - 10), stop + 1):
+            continue
+        if text[stop] == "!" and text[stop - 1:stop].isascii() and text[stop - 1:stop].isalpha() \
+                and _DENSE_LETTER.match(text, m.end()):
+            continue                                # SDKMAN! 的 - the ! is part of a name
+        cuts.append(m.end())
+    out, last = [], 0
+    for c in sorted(set(cuts)):
+        out.append(text[last:c])
+        last = c
+    out.append(text[last:])
+    return [s for s in out if s.strip()]
+
+
+def _dense_join(t: str) -> str:
+    """For comparing: no space next to a Chinese / Japanese character, so a spec re-wrapped mid-sentence
+    (要件を\n満たす, 場合は\nHTTP) reads the same as before. Text with no such letter is left as it is."""
+    return _DENSE_SPACE.sub("", t) if _DENSE_LETTER.search(t) else t
+
+
+def _word_count(sent: str) -> float:
+    """Words in a sentence, in any script: spaced words (English, Korean, …) plus Chinese / Japanese
+    characters at HAN_PER_WORD, HIRAGANA_PER_WORD and KATAKANA_PER_WORD to a word."""
+    if not _CJK_ANY.search(sent):
+        return len(sent.split())                    # exactly as before, full-width punctuation or not
+    return (len(_WORD_GAP.sub(" ", sent).split()) + len(_HAN_RE.findall(sent)) / HAN_PER_WORD
+            + len(_HIRAGANA_RE.findall(sent)) / HIRAGANA_PER_WORD + len(_KATAKANA_RE.findall(sent)) / KATAKANA_PER_WORD)
+
+
+def _long_enough(sent: str, min_len: float) -> bool:
+    """`sent` has the words to be a requirement: `min_len`, or CJK_STOP_MIN for a CJK or Korean sentence
+    that ends with a full stop. English is measured exactly as before."""
+    if _CJK_ANY.search(sent) and _ENDS_STOP.search(sent):
+        min_len = min(min_len, CJK_STOP_MIN)
+    return _word_count(sent) >= min_len
 _TABLE_SEP = re.compile(r"^\|?[\s:|-]*-[\s:|-]*\|?$")        # the |---|---| row under a table header
 _LIST_ITEM = re.compile(r"(?:[-*+]|\d+\.)\s")                 # "- ", "* ", "1. "
 # A heading that is a statement ("What is never sent") rather than a label ("The tools"):
 # its list items are fragments that only mean something with it in front.
 _STEM_HEADING = re.compile(r"\b(?:is|are|was|were|do|does|can|will|never|always|must|should|"
                            r"leaves?|goes|happens|stores?|sends?|sent|kept|stored|checked)\b", re.I)
-IDENT = re.compile(r"`([A-Za-z_][\w.\-]{2,})`|\b([A-Z][A-Z0-9_]{3,})\b")
-NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
-ROUTE_RE = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+`?(/[^\s`,;)\]]*)")
+# "## 仕組みは？ {#how-does-it-work}": a translated heading keeps the English original's anchor, which is not
+# the heading. (English headings are read with their anchor, as before, so English maps do not change.)
+_ANCHOR = re.compile(r"\{#[^}]*\}")
+# \b, except that a Chinese, Japanese or Korean character is also an edge: to \b it is a letter, so
+# MAX_SIZEは30日 hid both. (Only those: ÜBERFÄLLIG must not give BERF.)
+_A = rf"(?<![^\W{_DENSE}{_HANGUL}])"
+_Z = rf"(?![^\W{_DENSE}{_HANGUL}])"
+IDENT = re.compile(rf"`([A-Za-z_][\w.\-]{{2,}})`|{_A}([A-Z][A-Z0-9_]{{3,}}){_Z}")
+NUMBER = re.compile(rf"{_A}\d+(?:\.\d+)?{_Z}")
+ROUTE_RE = re.compile(rf"{_A}(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+`?(/[^\s`,;)\]]*)")
 PATH_RE = re.compile(r"`(/[^\s`]*)`")
 
 
@@ -1922,6 +2070,8 @@ class Claim:
 
 
 _BLOCK_START = re.compile(r"\s*(#|[-*+]\s|\d+[.)]\s|[a-z][.)]\s|\||>|```|---+\s*$)")
+# a list item (- , 1. , a) , - [ ] ), a quote, or a definition (: ): its wrapped lines are its own text
+_MARKER = re.compile(r"(?:[-*+]|\d+[.)]|[A-Za-z][.)])\s+(?:\[[ xX]\]\s+)?|>|:\s")
 
 
 def _paragraphs(text: str) -> list[tuple[int, str]]:
@@ -1934,7 +2084,8 @@ def _paragraphs(text: str) -> list[tuple[int, str]]:
     """
     out: list[tuple[int, str]] = []
     in_fence = False
-    for i, line in enumerate(text.split("\n"), 1):
+    lines = text.split("\n")
+    for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if stripped.startswith("```"):
             in_fence = not in_fence
@@ -1948,7 +2099,15 @@ def _paragraphs(text: str) -> list[tuple[int, str]]:
                     and not re.fullmatch(r"-{3,}", prev.strip()))
         quoted = prev.lstrip().startswith(">") and stripped.startswith(">") and stripped != ">"
         if joinable and (quoted or not _BLOCK_START.match(line)):
-            out[-1] = (out[-1][0], prev.rstrip() + " " + stripped.lstrip("> ").strip())
+            head, tail = prev.rstrip(), stripped.lstrip("> ").strip()
+            # a Chinese / Japanese line break is not a space: 要件を\n満たす is 要件を満たす - unless the line
+            # is indented past the text above it, as an RST definition is under its term
+            above = lines[i - 2]
+            glue = "" if (_DENSE_ANY.match(head[-1:]) and _DENSE_ANY.match(tail[:1])
+                          and (_DENSE_LETTER.search(above) or _DENSE_LETTER.search(stripped))
+                          and (_MARKER.match(above.lstrip())
+                               or len(line) - len(line.lstrip()) <= len(above) - len(above.lstrip()))) else " "
+            out[-1] = (out[-1][0], head + glue + tail)
         else:
             out.append((i, line))
     return out
@@ -2057,7 +2216,10 @@ def spec_sentences(doc: Path, min_len: int = 5, code_line: re.Pattern = _CODE_LI
         # item above it, so prefixing the heading there is noise.
         item = bool(_LIST_ITEM.match(stripped)) and not raw[:1].isspace()
         first = True
-        for sent in SENT_SPLIT.split(raw):
+        # a table row with CJK in it stays one claim: a 。 in a cell does not cut off the cells after it
+        # (the default value)
+        table_cjk = stripped.startswith("|") and _CJK_ANY.search(raw)
+        for sent in ([raw] if table_cjk else _split_sentences(raw)):
             sent = sent.strip()
             if _TABLE_SEP.match(sent):
                 in_table = True
@@ -2068,9 +2230,9 @@ def spec_sentences(doc: Path, min_len: int = 5, code_line: re.Pattern = _CODE_LI
                 cells = [c.strip() for c in sent.strip().strip("|").split("|") if c.strip()]
                 sent = " - ".join(cells)
             sent = " ".join(sent.strip(" -*|#>").split())
-            if first and item and _STEM_HEADING.search(heading):
+            if first and item and _STEM_HEADING.search(_ANCHOR.sub("", heading) if _CJK_ANY.search(heading) else heading):
                 sent, first = f"{heading}: {sent}", False
-            if len(sent.split()) >= min_len and (ROUTE_RE.search(sent) or not code_line.search(sent)):
+            if _long_enough(sent, min_len) and (ROUTE_RE.search(sent) or not code_line.search(sent)):
                 yield lineno, sent
 
 
@@ -2310,8 +2472,9 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
         paragraphs = dict(prose_blocks(d))
         for lineno, sent in spec_sentences(d):
             # Every sentence gets an entry - one with no word to match gets no suggestion - so a fresh draft
-            # covers the whole spec. Words in any script: требования, 要件.
-            words = {w.lower() for w in re.findall(r"[^\W\d_]{3,}", sent)} - STOP
+            # covers the whole spec. Words in any script: требования, 要件; a Latin word stays one next to
+            # them (MAX_SIZEは -> max, size).
+            words = {w.lower() for w in _WORDS.findall(sent)} - STOP
             named, _ = _mentions(sent, syms)
             score: dict[int, float] = {}
             for w in words:
@@ -2352,37 +2515,65 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
     return len(entries)
 
 
+_KEPT_SPACE = "\u2423"      # a space inside a `code span` with Chinese / Japanese in it, kept through _dense_join
+
+
 def _norm_text(t: str) -> str:
-    """For comparing spec wording: no markdown emphasis, numbering or spacing differences."""
-    t = re.sub(r"[*_`>]", "", t)
+    """For comparing spec wording: no markdown emphasis, numbering or spacing differences. A space inside a
+    code span with a Chinese / Japanese letter in it is part of a literal (`YYYY年MM月DD日 HH:mm`): it counts,
+    written as _KEPT_SPACE."""
+    t = re.sub(r"[*_>]", "", t)
+    if _DENSE_LETTER.search(t):
+        t = _CODE_SPAN.sub(lambda m: _DENSE_SPACE.sub(_KEPT_SPACE, m.group(0)) if _DENSE_LETTER.search(m.group(0))
+                           else m.group(0), t)
+    t = t.replace("`", "")
     t = re.sub(r"^\s*(?:[-+]|\d+[.)]|[a-z][.)])\s+", "", t)
-    return " ".join(t.split()).lower()
+    return _dense_join(" ".join(t.split())).lower()
 
 
 def _snap(t: str) -> str:
     """A spec_text as written in a map - normalised already, or pasted from the spec with
     markdown and line breaks - in the form the spec is searched in."""
-    return " ".join(n for n in (_norm_text(ln) for ln in str(t).split("\n")) if n)
+    return _dense_join(" ".join(n for n in (_norm_text(ln) for ln in str(t).split("\n")) if n))
 
 
 def _spec_index(doc: Path) -> tuple[str, list[int], list[int]]:
     """The spec as one normalised string, plus where each line starts in it. A snapshot can
-    then span a hard-wrapped paragraph, several paragraphs, or the lines of a code block."""
+    then span a hard-wrapped paragraph, several paragraphs, or the lines of a code block. In a spec
+    with Chinese or Japanese in it no space next to a CJK character counts, in every paragraph."""
+    blocks = [(ln, n) for ln, t in prose_blocks(doc) if (n := _norm_text(t))]
+    dense = any(_DENSE_LETTER.search(n) for _, n in blocks)
     parts, starts, lines, pos = [], [], [], 0
-    for ln, t in prose_blocks(doc):
-        if n := _norm_text(t):
-            parts.append(n); starts.append(pos); lines.append(ln)
-            pos += len(n) + 1
-    return " ".join(parts), starts, lines
+    for ln, n in blocks:
+        if dense:
+            n = _DENSE_SPACE.sub("", n)
+        if parts:
+            glue = "" if dense and (_DENSE_ANY.match(parts[-1][-1]) or _DENSE_ANY.match(n[0])) else " "
+            parts.append(glue); pos += len(glue)
+        parts.append(n); starts.append(pos); lines.append(ln)
+        pos += len(n)
+    return "".join(parts), starts, lines
+
+
+@functools.lru_cache(maxsize=8)
+def _without_kept(text: str) -> tuple[str, list[int]]:
+    """An index with its _KEPT_SPACEs taken out, and where each one was, counted in the shortened text."""
+    marks = [i for i, ch in enumerate(text) if ch == _KEPT_SPACE]
+    return text.replace(_KEPT_SPACE, ""), [p - k for k, p in enumerate(marks)]
 
 
 def _find_snapshot(index: tuple[str, list[int], list[int]], snap: str, near: int = 0) -> int | None:
     """The spec line where `snap` starts (the occurrence closest to line `near`), or None
     if the spec no longer contains it."""
     text, starts, lines = index
+    if _DENSE_ANY.search(snap) and _DENSE_LETTER.search(text):      # read as the index is (_spec_index)
+        snap = _DENSE_SPACE.sub("", snap)
+    marks: list[int] = []
+    if _KEPT_SPACE in text and _KEPT_SPACE not in snap:             # a snapshot from before code-span spaces
+        text, marks = _without_kept(text)                           # counted: compare as it was then
     found, at = [], text.find(snap) if snap else -1
     while at >= 0:
-        found.append(lines[bisect.bisect_right(starts, at) - 1])
+        found.append(lines[bisect.bisect_right(starts, at + bisect.bisect_right(marks, at)) - 1])
         at = text.find(snap, at + 1)
     return min(found, key=lambda ln: abs(ln - near)) if found else None
 
@@ -2568,6 +2759,7 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
     bases = list({b.resolve(): b for b in [Path.cwd(), src or Path.cwd(), path.parent]}.values())
     spec_cache: dict[str, tuple] = {}
     covered: dict[str, set] = {}                            # real path of a spec file -> sentences the map covers
+    on_line: dict[str, dict] = {}                           # real path -> line -> the texts of its entries, in order
     shown: dict[str, str] = {}                              # real path -> the name the map gives it
     out, unreviewed, moved, nosnap = [], 0, 0, 0
     excluded, no_reason, stale_excluded = [], [], []
@@ -2619,6 +2811,7 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
             here = covered.setdefault(str(spec_file.resolve()), set())
             shown.setdefault(str(spec_file.resolve()), os.path.relpath(spec_file))      # the name it was given
             here.add(norm)
+            on_line.setdefault(str(spec_file.resolve()), {}).setdefault(line, []).append(norm)
             if not verbatim and snap:
                 here.add(snap)
         if not refs and not is_excluded:                    # its sentence is in the map: say only what is missing
@@ -2685,8 +2878,17 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
                      f"spec change cannot be ruled out - paste the spec paragraph each one is about into its "
                      f"spec_text")
     for f, texts in covered.items():
-        missing = [(ln, snt) for ln, snt, n in ((ln, snt, _norm_text(snt)) for ln, snt in spec_sentences(Path(f)))
-                   if not any(n in t or t in n for t in texts)]
+        # also covered: a sentence inside its paragraph's entries read together - a map drafted before
+        # CJK splitting cut "…비교한다. 예: 1.0.0 < 2.0.0." at the ':' into two entries
+        flat = ((lambda t: _DENSE_SPACE.sub("", t).replace(_KEPT_SPACE, ""))   # the spec's comparison rule, as in
+                if any(_DENSE_LETTER.search(t) for _, t in prose_blocks(Path(f)))   # _spec_index; a space in a code
+                else (lambda t: t))                 # span is the snapshot's business, not coverage's
+        texts = {flat(t) for t in texts}
+        sents = list(spec_sentences(Path(f)))
+        joined = ({ln: flat(_dense_join(" ".join(ts))) for ln, ts in on_line.get(f, {}).items()}
+                  if any(_CJK_ANY.search(s) for _, s in sents) else {})      # English: exactly as before
+        missing = [(ln, snt) for ln, snt, n in ((ln, snt, flat(_norm_text(snt))) for ln, snt in sents)
+                   if not any(n in t or t in n for t in texts) and n not in joined.get(ln, "")]
         if missing:
             notes.append(f"{len(missing)} sentences in {shown.get(f, os.path.relpath(f))} are not in the map, so NOT "
                          f"checked: lines "
@@ -4115,7 +4317,7 @@ def preflight(c: Claim) -> list[str]:
     if _NEGATIVE_UNIVERSAL.search(c.text):
         out.append("says what the code does NOT do - no excerpt can settle that; exclude it with a "
                    "why, or reword the sentence to name the one place involved")
-    if c.text.rstrip().endswith(":"):
+    if (c.text.rstrip().endswith(":") or c.text.rstrip().endswith("：") and _CJK_ANY.search(c.text)):
         out.append("ends in a colon - a lead-in, not a requirement; exclude it and check the items below it")
     total = sum(len(s.source) for s in dict.fromkeys(c.symbols))
     if total > MAX_CODE_CHARS:

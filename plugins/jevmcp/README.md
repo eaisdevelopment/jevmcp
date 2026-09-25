@@ -196,6 +196,17 @@ runs a code audit after every edit: only when you ask, or before a pull request.
 | Also | OpenAPI files; `.env` templates (never a real `.env`) |
 | Any other language | by line range (`src/main.go:120-160`) or a small whole file |
 
+**Spec languages.** Specs in English, the other languages written in the Latin alphabet, Chinese,
+Japanese and Korean are read sentence by sentence. Other languages are not processed properly:
+
+| Spec written in | What happens |
+|---|---|
+| Turkish, Czech, Slovak, Polish, Swedish and other Latin-alphabet languages whose sentences can start with `Č`, `Ş`, `İ`, `É`, `Ö`, `Ł` | such a sentence stays joined to the one before it |
+| Russian, Ukrainian, Bulgarian, Serbian Cyrillic, Mongolian, Greek, Arabic, Persian, Hebrew, Hindi, Bengali, Tamil, Sinhala, Georgian, Armenian, Amharic, Burmese | sentences are not split: each paragraph or list item is one entry, so a drift in one of its requirements can be missed |
+| Thai, Lao, Khmer, Tibetan | a sentence with no spaces counts as one word and is dropped; most of the spec is not checked |
+
+Workarounds and the measurements are in [docs/tools.md](docs/tools.md#the-spec-map).
+
 ## What is sent, and what never is
 
 Three tools send data to `api.typesafe.ai`, each a different kind, and the agent asks for your

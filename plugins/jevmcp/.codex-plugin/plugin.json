@@ -1,6 +1,6 @@
 {
   "name": "jevmcp",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "mcpServers": {
     "jevmcp": {
       "command": "uv",

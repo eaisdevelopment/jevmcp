@@ -1,5 +1,89 @@
 # Changelog
 
+## 1.7.3 — 2026-09-25
+
+**Chinese, Japanese and Korean specs are read sentence by sentence.** 1.7.2 read them as if they were
+English. A Japanese or Chinese sentence has no spaces, so it counted as one word and the five-word
+minimum dropped it; a paragraph was never split at 。！？; Korean, which has spaces but no capital
+letters, was never split at all. On real specs with their code, a Japanese spec (YaneuraOu) gave 49
+map entries and now gives 199, a Chinese one (brpc) 14 and now 149, and a Korean one (smtm) 93
+paragraph-sized entries and now 97 sentences. Now:
+
+- **A sentence ends where a reader ends it.** At 。！？, and at a Latin `.`, `!` or `?` followed by a
+  space (`…です. 次は`, `…다. kubelet은`) - never inside brackets, quotes or a code span, never after a
+  colon (`(예: 5)`, `` `Unknown`: 诊断失败 ``), never in a name (`SDKMAN!`, `e.g.`, `A vs. B`), a decimal
+  (`３．５秒`) or a dotted name with no space (`主版本号.次版本号.修订号`, `ファイル名.拡張子`). A bracket that
+  holds a whole sentence ends one (`（…。）次の文`); a quote, which is as often a message inside a sentence
+  (`「保存しました。」などのメッセージ`), does not. A table row stays one entry with all its cells: a `。` in a
+  description cell no longer cuts off the default value after it. A hard-wrapped Chinese or Japanese line
+  joins with no space, and a wrapped list item or definition joins with its own text.
+- **Length is measured for each script.** About one and a half Han characters, two and a half hiragana
+  or four katakana make a word; punctuation next to them is not a word (`运行以下命令:` is as short as
+  `运行以下命令：`); a Chinese, Japanese or Korean sentence that ends with a full stop needs three words
+  instead of five. Short rules such as `必须以字母数字开头` and `` `.spec.schedule` 필드는 필수이다. `` are kept;
+  katakana labels (`ライフサイクルフック`), link-only lines and questions (`准备好了吗？`) are dropped, as their
+  English originals are.
+- **Code names next to CJK text are found.** `MAX_SIZEは30日` names `MAX_SIZE` and 30; before, the
+  Japanese character hid both.
+- **Re-wrapping a CJK spec is not a change.** When a map is checked, a space next to a Chinese or
+  Japanese character does not count, decided once for the whole spec file, so moving a line break next to
+  a Latin word or a number (`場合は` / `HTTPステータス`) no longer reports the entry as changed. Inside a code
+  span the space is part of a literal and does count: `` `YYYY年MM月DD日 HH:mm` `` becoming
+  `` `YYYY年MM月DD日HH:mm` `` is reported. A drafted `spec_text` writes such a space as `␣`.
+- **Maps drafted by 1.7.2 keep working.** Their entries still match the spec, including their
+  `spec_text`. Sentences 1.7.2 never extracted are now reported as not in the map, so a strict check of an
+  existing Chinese or Japanese map lists them: decide each one, as the skill says. A sentence that 1.7.2
+  cut in two at a colon, with both halves decided, counts as covered.
+- **Everything else is read exactly as before.** Text with no Chinese, Japanese or Korean letter - with
+  full-width punctuation, `・`, accented capitals (`ÜBERFÄLLIG`) or any other script - gives the same
+  sentences, the same names, the same payload and the same map results as 1.7.2.
+- **A lead-in ending in the full-width colon `：`** is flagged as likely `??`, as one ending in `:` is.
+- **The languages that are still not read properly are named** - in `docs/tools.md`, both READMEs, the
+  plugin description and the skill, which now tells the user before drafting. Specs in Cyrillic
+  (Russian, Ukrainian, Bulgarian, Serbian, Mongolian), Greek, Arabic, Persian, Hebrew, Hindi and the other
+  Indic scripts, Georgian, Armenian, Amharic and Burmese are not split into sentences: each paragraph or
+  list item is one entry. Thai, Lao, Khmer and Tibetan write no spaces between words, so most of their
+  sentences are dropped as too short. In Turkish, Czech, Slovak, Polish or Swedish a sentence that starts
+  with a capital outside A-Z (`Č`, `İ`) stays joined to the one before it. This is how 1.7.2 read them
+  too; it was measured on the 38 translations of the SemVer specification (sentences kept against the
+  English original: 0.34-0.72 for the first group, 0.86-0.95 for Turkish, Czech, Slovak, Slovenian and Swedish) and on Wikipedia text (a
+  lone Thai, Lao or Tibetan sentence is never kept, a Khmer one 23% of the time). The docs give the
+  workarounds: one requirement per list item, or entries added by hand.
+
+**How it was tested.**
+- **Blind labels.** Native-level readers labelled the sentences of 440 real paragraphs in English,
+  Japanese, Chinese and Korean, with no access to the tool. The splitter was tuned on the Kubernetes set
+  (280 paragraphs) and then scored once on the held-out set (160 paragraphs from Vue, ShardingSphere,
+  RocketMQ and the Rust RFC translations; the expectations were written down first):
+
+  | held-out | sentences found, 1.7.2 → now | of the tool's, right | statements kept | fragments dropped |
+  |---|---|---|---|---|
+  | Japanese | 0.19 → 0.93 | 0.38 → 0.94 | 15/102 → 102/102 | 21/21 → 18/21 |
+  | Chinese | 0.28 → 0.93 | 0.49 → 0.95 | 38/82 → 81/82 | 17/20 → 13/20 |
+  | Korean | 0.53 → 1.00 | 0.64 → 0.96 | 37/39 → 39/39 | 8/14 → 8/14 |
+
+  Every pass bar was met except one: "at least as good as 1.7.2 on every number" fails on fragments
+  dropped for Japanese and Chinese, because 1.7.2 dropped nearly every sentence. The fragments kept are
+  images, links, front matter and label lines, which the review excludes; English keeps the same kinds.
+- **Nothing else changed.** 3,265 documents and 918,107 lines with no CJK letter (spec repositories in
+  many languages, Kubernetes, Vue, RocketMQ, ShardingSphere and brpc English docs) give identical
+  sentences, names and index; 2,472 map validations and line updates on English specs, before and after
+  edits, give identical results.
+- **Maps on CJK specs.** On 1,079 Chinese, Japanese and Korean documents (65,615 drafted entries):
+  1,047 re-wraps reported nothing; 1,079 CJK edits and 1,026 edits to a Latin word or number inside CJK
+  text were all reported, each on the right entry.
+- **Three adversarial review rounds**, each finding re-run by a skeptic: 43 findings, 30 confirmed and
+  fixed, 13 refuted.
+- **A live check** of 19 hand-paired Korean requirements from smtm ($0.0020): 5 ok, 12 review, 1 DRIFT,
+  1 ??. The DRIFT came from a pairing that left out the code passing the value in; the known rename in
+  that spec (`LlmOperator`, now `SystemOperator`) came back ??, which is reported as not a pass.
+- **4 real Claude Code sessions** on the installed plugin, each asked to set up spec-drift checking for
+  a real project: ginza (Japanese spec, Python), smtm (Korean, Python), DataX mysqlreader (Chinese spec
+  and a Chinese prompt, Java) and a Russian spec. Each agent passed exactly the spec named and drafted
+  whole-sentence entries (46, 97 and 100); the Chinese session answered in Chinese; the Russian session
+  told the user that Russian is read a paragraph at a time and suggested one requirement per list item.
+- **363 tests** (335 in 1.7.2).
+
 ## 1.7.2 — 2026-09-24
 
 **What you name is what is checked.** 1.7.1 second-guessed the spec you named. A folder that held
