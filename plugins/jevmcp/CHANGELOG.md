@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.4 — 2026-09-26
+
+**Documentation only: three published errors corrected.** No code changed; every tool behaves exactly
+as in 1.7.3.
+
+- **1.7.0, CI triage.** Of the 27 change-caused held-out runs that CHANGE did not catch, 26 went to
+  review and 1 came back `??`. The entry said all 27 went to review.
+- **1.7.3, blind labels.** The Chinese, Japanese and Korean gold labels were written by an AI agent told
+  to read as a native-level reader, with no access to the tool. The entry said native-level readers
+  wrote them.
+- **The Java project's cost figures** (3 s and $0.0013 after editing two files, 11 s and $0.006 for a
+  full check) were measured on 2026-09-22, before 1.6.0, when each claim was asked once. The README,
+  `docs/tools.md` and both how-to pages now say so: since 1.6.0 a claim the first answer does not
+  settle is asked up to twice more, so a first check costs more.
+
+Both CHANGELOG entries and their release notes keep the corrected sentence with a dated note of what
+it used to say.
+
+Also: the repository's front page now says what each result label means, what a check costs, how well
+each tool did on real repositories, what Jev and the service cannot do, the known gaps, and how
+releases are tested.
+
 ## 1.7.3 — 2026-09-25
 
 **Chinese, Japanese and Korean specs are read sentence by sentence.** 1.7.2 read them as if they were
