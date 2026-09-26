@@ -57,8 +57,8 @@ Measured on real projects:
 
 | What | Time | Cost |
 |---|---|---|
-| Spec drift, check after editing two files (a real Java project, 131 requirements; measured before 1.6.0, one answer per claim) | 3 s | $0.0013 |
-| Spec drift, full check of the same project (same caveat: since 1.6.0 an unsettled claim is asked up to three times, which takes and costs more) | 11 s | $0.006 |
+| Spec drift, check after editing two files (a real Java project, 131 requirements; measured before 1.6.0, when each claim was asked once) | 3 s | $0.0013 |
+| Spec drift, full check of the same project (same caveat: since 1.6.0 a claim the first answer does not settle is asked up to twice more, so a first check costs more) | 11 s | $0.006 |
 | Spec drift, repeating a full check of unchanged code (jevmcp's own docs as of 1.6.0, 180 claims; answers are cached) | 0.3 s (32 s uncached) | $0.0000 ($0.0207 uncached) |
 | CI triage, per failure | | about $0.0002 |
 | Code audit, Django (1,535 rule/code checks) | | $0.09 |
@@ -279,7 +279,7 @@ key into an issue or pull request.
 - **Nothing else changes by accident.** The 1.7.3 change for Chinese, Japanese and Korean was run
   over 3,265 other documents and 2,472 map checks on English specs; every result stayed identical.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (562 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (563 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **363 automated tests.**

@@ -15,9 +15,11 @@ Three tool families, each with its own skill, all on one MCP server:
 
 - **Spec drift** — does the code still match the project's design spec or requirements
   document? Your agent checks after it changes something, and before a release. On a real Java
-  project (131 requirements): a check after editing two files took 3 seconds and cost $0.0013; a
-  full check took 11 seconds and cost $0.006. Tools: `check_spec_drift`, `validate_spec_map`,
-  `preview_spec_check`, `draft_spec_map`; skill `spec-drift`.
+  project (131 requirements), measured before 1.6.0, when each claim was asked once: a check after
+  editing two files took 3 seconds and cost $0.0013; a full check took 11 seconds and cost $0.006.
+  Since 1.6.0 a claim the first answer does not settle is asked up to twice more, so a first check
+  costs more; a repeat on unchanged code is answered from the cache. Tools: `check_spec_drift`,
+  `validate_spec_map`, `preview_spec_check`, `draft_spec_map`; skill `spec-drift`.
 - **CI failure triage** — what actually broke in a failed CI run? Jev reads each distinct
   failure with the change under test and says whether the change caused it; "not the change" is
   never decided for you. Reads a GitHub Actions run of your project with your own `gh` login, or

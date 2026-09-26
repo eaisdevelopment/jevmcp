@@ -134,6 +134,9 @@ mode 0600, and the folder is deleted when the server stops. Read it when you nee
 exact code a verdict was based on; do not copy it into the repository.
 
 **Cost and duration.** Charged on input tokens only, at $0.042 per million; output is free.
+These runs were measured on 2026-09-22, before 1.6.0, when each claim was asked once. Since 1.6.0 a
+claim the first answer does not settle is asked up to twice more, so a first check costs more; a
+repeat on unchanged code is answered from the cache.
 Measured runs:
 
 | Run | Claims | Time | Cost |

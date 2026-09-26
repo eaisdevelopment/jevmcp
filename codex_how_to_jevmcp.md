@@ -975,7 +975,7 @@ against `codex-cli 0.156.1`, for CI triage and `codex exec`.
   `validate_spec_map` passed, the agent **stopped for consent**, and with consent found all 4
   planted drifts with no false alarms. ~25k tokens per session.
 - **The key never appeared in any transcript** (0 occurrences across four session logs).
-- **On a real project** (131 mapped claims, ~12 s, $0.006): 4 DRIFT, 104 review, 21 `??`, 2 ok.
+- **On a real project** (131 mapped claims, ~12 s, $0.006, before 1.6.0 with one answer per claim): 4 DRIFT, 104 review, 21 `??`, 2 ok.
   The repository was not modified.
 - **CI triage (2026-09-24, 0.156.1, the installed 1.7.0):** `preview_ci_triage` read a failed
   GitHub run through the server's `gh` and returned its preview; `triage_ci_failure` then needed

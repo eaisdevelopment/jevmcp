@@ -51,8 +51,9 @@ paragraph-sized entries and now 97 sentences. Now:
   workarounds: one requirement per list item, or entries added by hand.
 
 **How it was tested.**
-- **Blind labels.** Native-level readers labelled the sentences of 440 real paragraphs in English,
-  Japanese, Chinese and Korean, with no access to the tool. The splitter was tuned on the Kubernetes set
+- **Blind labels.** An AI agent, told to read as a native-level reader and given no access to the tool,
+  labelled the sentences of 440 real paragraphs in English, Japanese, Chinese and Korean. (Corrected on
+  2026-09-26: this said the labels came from native-level readers.) The splitter was tuned on the Kubernetes set
   (280 paragraphs) and then scored once on the held-out set (160 paragraphs from Vue, ShardingSphere,
   RocketMQ and the Rust RFC translations; the expectations were written down first):
 
@@ -249,7 +250,8 @@ key again, blind. Of the 73 keys, 71 were confirmed and 2 disputed; the disputed
 
 Results on the 52 held-out runs (8 repositories, 33 caused by the change):
 - **CHANGE was right 6 times out of 6, with 0 false alarms.** CHANGE fires on 6 of the 33
-  change-caused runs; the other 27 go to review, where the agent decides.
+  change-caused runs; of the other 27, 26 go to review, where the agent decides, and 1 came back ??.
+  (Corrected on 2026-09-26: this said all 27 went to review.)
 - **The lean pointed the right way on 43 of 47 runs** (86–98%). Always blaming the change would be
   right on 33 of 52.
 - **P(caused by the change) ranks change-caused failures above the rest with AUC 0.98** (0.94–1.0).

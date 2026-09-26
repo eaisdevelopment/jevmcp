@@ -916,7 +916,7 @@ against Claude Code 2.1.281, for the CI-triage and code-audit families.
   `validate_spec_map` passed, the agent **stopped and asked for consent**, and with consent the
   check found all 4 planted drifts with no false alarms. Cost: $0.93 to set up, $0.88 to check.
 - **The key never appeared in any transcript** (0 occurrences across four session logs).
-- **On a real project** (131 mapped claims, ~12 s, $0.006): 3 DRIFT, 105 review, 21 `??`, 2 ok.
+- **On a real project** (131 mapped claims, ~12 s, $0.006, before 1.6.0 with one answer per claim): 3 DRIFT, 105 review, 21 `??`, 2 ok.
   The repository was not modified — working tree and map checksum identical before and after.
 - **CI triage and code audit, end to end** (2026-09-24, headless sessions, the installed 1.7.0): a
   CI triage (`preview_ci_triage`, then `triage_ci_failure` with the preview's snapshot; the CHANGE
