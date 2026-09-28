@@ -33,7 +33,7 @@ The validate, preview and draft tools, `--help`, `--dry-run` and `--show-key-sou
 | **Python** | `>=3.10`, supplied by `uv` if the system Python is older. | — |
 | **Operating system** | Linux, macOS or Windows. On all three, the repository's `smoke` CI job starts the server exactly as a client does on every change to the plugin, from an empty uv cache, runs the seven free tools and checks that the three that send refuse without a key. The three that send have been run with a real key on Linux only. The `$(ls … \| sort -V \| tail -1)` commands below are for bash or zsh; on Windows, give the full path of the script instead. | — |
 
-There is **one** plugin, `jevmcp`, version 1.7.5, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
+There is **one** plugin, `jevmcp`, version 1.7.6, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
 
 ---
 
@@ -124,14 +124,14 @@ The user runs this **in their own terminal**, not through an agent:
 # Codex
 uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
 
-# Claude Code (only needed if they would rather not use the plugin's own key prompt)
+# Claude Code (only needed if they would rather not use the plugin's optional key field in /plugin)
 uv run --quiet --script "$(ls -d ~/.claude/plugins/cache/jev/jevmcp/*/scripts/jevmcp_server.py | sort -V | tail -1)" --set-key
 
 # A clone of this repository
 uv run --quiet --script plugins/jevmcp/scripts/jevmcp_server.py --set-key
 ```
 
-The `$(ls … | sort -V | tail -1)` part picks the newest installed version, so the command keeps working after an update. It is bash or zsh; on Windows, give the full path of `scripts\jevmcp_server.py` in the plugin's folder under `.codex\plugins\cache\jev\jevmcp\` in your user folder.
+The `$(ls … | sort -V | tail -1)` part picks the newest installed version, so the command keeps working after an update. It is bash or zsh; on Windows, give the full path of `scripts\jevmcp_server.py` in the newest version folder under `.codex\plugins\cache\jev\jevmcp\` (Codex) or `.claude\plugins\cache\jev\jevmcp\` (Claude Code) in your user folder.
 
 What it does:
 

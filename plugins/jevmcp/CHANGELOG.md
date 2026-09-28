@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.7.6 — 2026-09-28
+
+**Documentation only.** No code changed; every tool behaves exactly as in 1.7.5.
+
+- `docs/install.md`: on Windows, the `--set-key` command needs the full path of the script, and the note
+  now gives the folder for both clients (`.codex\plugins\cache\jev\jevmcp\` for Codex,
+  `.claude\plugins\cache\jev\jevmcp\` for Claude Code). It named only the Codex folder, under a block
+  that also gives the Claude Code command. A comment there still called Claude Code's key field a
+  "prompt".
+
+Found by a fourth review round on the whole 1.7.5 change, which found nothing else. 1.7.6 was
+released only after a further review round on this change found nothing.
+
 ## 1.7.5 — 2026-09-28
 
 **The server works on Windows, the free tools work without a key, and a missing git is explained.**
