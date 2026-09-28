@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.7.5 — 2026-09-28
+
+**The server works on Windows, the free tools work without a key, and a missing git is explained.**
+Found by installing 1.7.4 from GitHub into an empty environment and calling every tool, and then by
+starting the server on Linux, macOS and Windows in CI.
+
+- **Windows: the server no longer freezes.** Every `git` and `gh` command the tools run inherited the
+  server's standard input, which is the MCP connection itself. On Windows the first tool that ran git
+  (drafting a rule map, a routine check, CI triage) never returned. Child processes now get an empty
+  input, and a test keeps it that way.
+- **Windows: a `git.exe` or `gh.exe` inside a project is never run.** Windows looks for a program in the
+  current folder before PATH, and tools run with the project as the current folder. git and gh are now
+  looked up in the absolute PATH folders only, never in the current folder, and run by the path found
+  (a link such as snap's `gh` keeps its own name).
+- **A new CI job starts the server on Linux, macOS and Windows** on every change, exactly as a client
+  does and from an empty uv cache, runs the seven free tools, and checks that the three that send
+  refuse without a key. The three that send have been run with a real key on Linux only; the docs say
+  so.
+- **Claude Code: the seven free tools work without a key.** The key option was marked required, and
+  Claude Code then does not start the plugin's server at all until a key is set, so the free tools
+  were missing too. It is now optional: the `/plugin` screen still shows the field; left empty, the
+  free tools work and the three that send say that no key is set. Set the key any time with
+  `/plugin configure jevmcp@jev` (the docs and the no-key message said `/plugin manage`).
+- **An unfilled placeholder is not a key.** A `TYPESAFE_API_KEY` that still reads
+  `${user_config.typesafe_api_key}` is treated as no key: it is never sent, and it no longer hides a
+  key stored with `--set-key`.
+- **git is a stated requirement, and its absence is explained.** Without git on the server's PATH, a
+  routine check, a code audit, and CI triage with `base` or a run URL failed with
+  `FileNotFoundError: No such file or directory (git)`. They now say that git is missing and what to
+  do instead (name the files for a spec check; triage a saved log without `base`). The spec list no longer calls a
+  committed spec "not committed" when git cannot be run: its last commit is reported as unknown, and
+  `committed` is null.
+- **A code audit of a git project without git reads no code.** Without git, which files git ignores (a
+  local `.env`, build output, credentials) cannot be told, and 1.7.4 then read every file on disk.
+  Every code-audit tool now stops there and says so; a folder that is not a git repository is read as
+  before. PRIVACY.md says both.
+- **uv 0.4.19 or newer is stated.** An older uv stops with `error: unexpected argument '--script'
+  found`, and neither client shows that message; the troubleshooting table in `docs/install.md` now
+  lists what each client shows instead.
+- **Smaller fixes.**
+  - A CI log whose `##[group]Run` header is never closed (a hand-saved or cut log) no longer reads as
+    "the step printed nothing". The 73 real runs of the CI scoring corpus are read exactly as before.
+  - `draft_spec_map` no longer ends with a command-line hint that had no program name.
+  - The server makes its private folder again if something deletes it while it runs, such as a temp
+    cleaner, and never reuses a folder someone else put back at the old path (a link, another user's
+    folder, or a folder with other permissions).
+
+**How it was tested.**
+- **390 tests** (363 in 1.7.4), including every missing-git path, the placeholder key, the unclosed
+  log group, a git planted in the current folder, a private folder put back by someone else, and a
+  check that no child process can read the server's input.
+- **The new CI job** passed on Linux, macOS and Windows.
+- **A clean-room install** of the candidate into an empty environment: Claude Code starts the server
+  with no key set, the seven free tools work, the three that send refuse and name
+  `/plugin configure jevmcp@jev`, a placeholder key falls through to the stored key, and every
+  missing-git path gives its message.
+- **Three adversarial review rounds** (code, docs, safety, and the clean-room run), each finding
+  re-checked by a skeptic, the later rounds on the earlier rounds' fixes: 31 findings, 25 confirmed and
+  fixed (2 of them the same problem found twice), 6 refuted. The last round found no code defect.
+
 ## 1.7.4 — 2026-09-26
 
 **Documentation only: three published errors corrected.** No code changed; every tool behaves exactly

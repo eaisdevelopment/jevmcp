@@ -60,8 +60,8 @@ never block the user's task on it.
   real check in a project, tell the user that and get a yes, unless they have already said so
   in this conversation or the project's CLAUDE.md or AGENTS.md records it. The dry-run and
   `preview_spec_check` send nothing and need no consent.
-- **The key.** The MCP server gets it from the plugin's settings (Claude Code asks for it when
-  the plugin is enabled), from `TYPESAFE_API_KEY` in the environment that starts the agent, or
+- **The key.** The MCP server gets it from the plugin's settings (in Claude Code, the optional
+  *TypeSafe API key* field in `/plugin`, set any time with `/plugin configure jevmcp@jev`), from `TYPESAFE_API_KEY` in the environment that starts the agent, or
   from the file the user stored with `jevmcp_server.py --set-key`; never from the project's own
   `.env`. If it is missing, the tool error names the one command the user runs in their own
   terminal — pass that on, and never run it yourself or ask for the key in chat. The command line uses `--key-file` if given, otherwise

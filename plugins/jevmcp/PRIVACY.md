@@ -120,7 +120,10 @@ A code audit sends one request per reviewed rule and unit of code. Each request 
 Which code can be sent:
 
 - only files git tracks or would commit, so files git ignores — build output, a local `.env`,
-  credentials — are left out;
+  credentials — are left out. In a git repository where git is not installed, which files git
+  ignores cannot be told, so no code is read at all. In a folder that is not a git repository there
+  is nothing to ignore: every code file outside the skipped folders (`node_modules`, `.venv`,
+  `build` and the like) can be read, and secret files are still skipped;
 - only code files that a reviewed rule's `scope` matches, and by default only the units that the
   change under test touches;
 - symbolic links, files over 1.5 MB and secret files (`.env` and `.env.*`, key and certificate

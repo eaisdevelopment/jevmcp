@@ -25,13 +25,15 @@ The validate, preview and draft tools, `--help`, `--dry-run` and `--show-key-sou
 
 | Requirement | Detail | Check it |
 |---|---|---|
-| **`uv`** on `PATH` | The MCP server and the command-line checker are single PEP 723 scripts: their dependencies (tree-sitter, tree-sitter-java, tree-sitter-javascript, tree-sitter-typescript, PyYAML) are declared inline and installed by `uv` into **uv's own cache** on first start. Nothing is installed into the user's project or into a virtualenv you have to manage. | `uv --version` |
+| **`uv` 0.4.19 or newer** on `PATH` | The MCP server and the command-line checker are single PEP 723 scripts: their dependencies (tree-sitter, tree-sitter-java, tree-sitter-javascript, tree-sitter-typescript, PyYAML) are declared inline and installed by `uv` into **uv's own cache** on first start. Nothing is installed into the user's project or into a virtualenv you have to manage. The plugin starts its server with `uv run --script`, which uv added in 0.4.19. | `uv --version` |
+| **`git`** on `PATH` | The marketplace install already needs it. The tools use it to find the changed files for a routine check (`check_spec_drift`, `preview_spec_check`, `check_code_rules` and `preview_code_audit` without `files`), the change under test for CI triage with `base`, this project's GitHub remote for CI triage of a run URL, which files git ignores, and the last commit of each spec. Without it a routine check and CI triage with `base` or a run URL stop with a message that says so: name the files to check, or triage a saved log without `base`. No code-audit tool works in a git project without git: which files git ignores cannot be told, so nothing is read. The spec list shows each spec's last commit as unknown. | `git --version` |
 | **A TypeSafe API key** | One key serves every tool in the plugin. Get one at <https://console.typesafe.ai>. Needed only by the three tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`); the other seven work without it. | Section 5 |
 | **The GitHub CLI, `gh`** (optional) | Only to triage a GitHub Actions run by its URL: the server reads the run with the user's own `gh` login. A CI log saved as a file needs no `gh`. | `gh auth status` |
 | **A supported client** | Claude Code and OpenAI Codex are both tested. Any other client of the [Agent Plugins](https://agent-plugins.org) 1.0.0 format can load `plugins/jevmcp`. | Section 2–4 |
 | **Python** | `>=3.10`, supplied by `uv` if the system Python is older. | — |
+| **Operating system** | Linux, macOS or Windows. On all three, the repository's `smoke` CI job starts the server exactly as a client does on every change to the plugin, from an empty uv cache, runs the seven free tools and checks that the three that send refuse without a key. The three that send have been run with a real key on Linux only. The `$(ls … \| sort -V \| tail -1)` commands below are for bash or zsh; on Windows, give the full path of the script instead. | — |
 
-There is **one** plugin, `jevmcp`, version 1.7.4, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
+There is **one** plugin, `jevmcp`, version 1.7.5, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
 
 ---
 
@@ -44,17 +46,17 @@ Two commands, typed in a Claude Code session:
 /plugin install jevmcp@jev
 ```
 
-When the plugin is enabled, Claude Code **asks for the TypeSafe API key itself**. That prompt comes from a `userConfig` field declared in the plugin manifest (`typesafe_api_key`, `sensitive: true`, `required: true`), so:
+When you install or enable the plugin in the interactive `/plugin` screen, Claude Code **shows a field for the TypeSafe API key itself**. The field comes from a `userConfig` option declared in the plugin manifest (`typesafe_api_key`, `sensitive: true`, `required: false`). It is optional: left empty, the server still starts, the seven free tools work, and the three that send say that no key is set. So:
 
 - the key is kept out of every settings file — macOS Keychain, or `~/.claude/.credentials.json` elsewhere;
 - it is never shown to the model;
 - Claude Code passes it to the server as the `TYPESAFE_API_KEY` environment variable, because `.mcp.json` declares `"TYPESAFE_API_KEY": "${user_config.typesafe_api_key}"`.
 
-To change the key later: `/plugin manage`, open **jevmcp**, set *TypeSafe API key*.
+To set or change the key later: `/plugin configure jevmcp@jev`.
 
-**Do not** use `claude plugin install --config typesafe_api_key=...`. That leaves the key in the shell history. Use the prompt.
+**Do not** use `claude plugin install --config typesafe_api_key=...`. That leaves the key in the shell history. Use the field in `/plugin`.
 
-The same two steps from a terminal are `claude plugin marketplace add eaisdevelopment/jevmcp` and `claude plugin install jevmcp@jev`, but the key prompt is part of enabling the plugin in a session.
+The same two steps from a terminal are `claude plugin marketplace add eaisdevelopment/jevmcp` and `claude plugin install jevmcp@jev`. `claude plugin install` never asks for the key; set it afterwards in a session with `/plugin configure jevmcp@jev`.
 
 After the install, restart Claude Code if it says *Restart to apply changes* — the MCP server is only started when the session starts.
 
@@ -129,7 +131,7 @@ uv run --quiet --script "$(ls -d ~/.claude/plugins/cache/jev/jevmcp/*/scripts/je
 uv run --quiet --script plugins/jevmcp/scripts/jevmcp_server.py --set-key
 ```
 
-The `$(ls … | sort -V | tail -1)` part picks the newest installed version, so the command keeps working after an update.
+The `$(ls … | sort -V | tail -1)` part picks the newest installed version, so the command keeps working after an update. It is bash or zsh; on Windows, give the full path of `scripts\jevmcp_server.py` in the plugin's folder under `.codex\plugins\cache\jev\jevmcp\` in your user folder.
 
 What it does:
 
@@ -251,7 +253,7 @@ The stored key is **not** touched by an update: `~/.config/jevmcp/typesafe.env` 
 | Claude Code | `claude plugin uninstall jevmcp@jev`, then `claude plugin marketplace remove jev` if you also want the marketplace gone. |
 | Codex | `codex plugin remove jevmcp@jev`, then `codex plugin marketplace remove jev`. |
 
-Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp/typesafe.env` themselves. Claude Code's copy lives in its credential store; remove it with `/plugin manage` before uninstalling, or leave it.
+Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp/typesafe.env` themselves. Claude Code's copy lives in its credential store; clear it with `/plugin configure jevmcp@jev` before uninstalling, or leave it.
 
 `spec_map.json` and `rule_map.json` belong to the project and are committed with the code. Uninstalling the plugin does not touch them, and they should not be deleted — they are the reviewed work, not a cache.
 
@@ -261,7 +263,9 @@ Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| A tool that sends fails with *No TypeSafe API key is set for this server, so nothing was sent.* | The server found no key in any of the four sources. | The error already names the fix. Claude Code: `/plugin manage` → jevmcp → *TypeSafe API key*. Any other client: the user runs `--set-key` in their own terminal (section 5). **Do not ask for the key in chat and do not run `--set-key` yourself.** The validate, preview and draft tools still work meanwhile. |
+| Claude Code: *Failed to connect — CONNECTION_CLOSED: Connection closed*. Codex: *handshaking with MCP server failed: connection closed: initialize response*. | `uv` is older than 0.4.19: it stops with `error: unexpected argument '--script' found` before the server starts, and neither client shows uv's own message. | Upgrade uv (`uv self update`, or your package manager) and check `uv --version`, then restart the agent. |
+| A tool fails with *git is not installed, or not on the PATH this tool was started with* | The tool needed git (changed files, `base`, the project's GitHub remote) and the server could not run it. | Install git, or make sure the PATH the client starts the server with contains it. Meanwhile name the files for a spec check (`files`), or triage a saved log without `base`; a code audit of a git repository needs git. |
+| A tool that sends fails with *No TypeSafe API key is set for this server, so nothing was sent.* | The server found no key in any of the four sources. | The error already names the fix. Claude Code: `/plugin configure jevmcp@jev` → *TypeSafe API key*. Any other client: the user runs `--set-key` in their own terminal (section 5). **Do not ask for the key in chat and do not run `--set-key` yourself.** The validate, preview and draft tools still work meanwhile. |
 | Server fails to start; the log mentions `uv` | `uv` is not on the `PATH` the client gives the server. Clients pass a minimal environment (Codex: `HOME`, `LANG`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, plus declared `env_vars`). | Install `uv` (<https://docs.astral.sh/uv/>) and make sure it is on the `PATH` of the shell that launches the client — not only inside an interactive shell profile that a GUI launch never reads. |
 | The very first start times out | `uv` is downloading and building the tree-sitter wheels. This happens once; afterwards uv's cold start is short. Codex allows 120 s and its `config.toml` cannot change a plugin server's start-up timeout. | Run once, outside the agent: `uv run --script ~/.codex/plugins/cache/jev/jevmcp/<version>/scripts/jevmcp_server.py --help`. That fills uv's cache. Then start the client again. |
 | *Restart to apply changes* | Claude Code re-reads plugins and starts MCP servers at session start. Installing, updating, enabling or changing the key mid-session does not reach a running server. | Restart Claude Code. If the key was the thing that changed, this is required — the server reads it once, at start-up. |

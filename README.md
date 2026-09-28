@@ -7,7 +7,7 @@ screens everything in seconds, at a fraction of a cent per item; the agent spend
 only on what the fast model flags. Jev is a classifier from TypeSafe (<https://typesafe.ai>), not a chat model: it picks one of the
 answers it is offered and gives a probability for each.
 
-Current release: **1.7.4** (2026-09-26) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
+Current release: **1.7.5** (2026-09-28) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
 
 ## One plugin, installed once
 
@@ -173,6 +173,8 @@ Some limits are choices, and can change when the evidence does:
   or Korean style guide, because it knows no rule words such as 必须, べき or 해야; and the free check
   that flags sentences about what code never does knows English words only.
 - Codex: the code-audit tools, and a CI triage sent from a Codex session, have not been verified.
+- On macOS and Windows, CI tests the server and the seven free tools on every change to the plugin; the three
+  tools that send have been run with a real key on Linux only.
 - Cursor is not supported (it does not expand `${PLUGIN_ROOT}`). VS Code, GitHub Copilot and Kiro
   may load the portable plugin, but none has been tested end to end.
 
@@ -215,8 +217,8 @@ sentence. With it, the fast model gets one requirement and the few lines that en
 
 ## Install
 
-You need [`uv`](https://docs.astral.sh/uv/) and a TypeSafe API key
-(<https://console.typesafe.ai>).
+You need [`uv`](https://docs.astral.sh/uv/) 0.4.19 or newer and `git`, and, for the three tools that
+send data, a TypeSafe API key (<https://console.typesafe.ai>). It runs on Linux, macOS and Windows.
 
 **Claude Code**
 
@@ -225,7 +227,9 @@ You need [`uv`](https://docs.astral.sh/uv/) and a TypeSafe API key
 /plugin install jevmcp@jev
 ```
 
-Claude Code asks for the API key when the plugin is enabled and keeps it in its credential store.
+When you install or enable the plugin in the interactive `/plugin` screen, Claude Code shows a
+*TypeSafe API key* field. It is optional: leave it empty to use only the free tools, and set or
+change it any time with `/plugin configure jevmcp@jev`. Claude Code keeps it in its credential store.
 
 **OpenAI Codex**
 
@@ -241,7 +245,9 @@ uv run --quiet --script "$(ls -d ~/.codex/plugins/cache/jev/jevmcp/*/scripts/jev
 ```
 
 It asks for the key without showing it, writes `~/.config/jevmcp/typesafe.env` (readable only by
-you), and survives plugin updates. No file for you to create by hand.
+you), and survives plugin updates. No file for you to create by hand. That command is for bash or
+zsh; on Windows, give the full path of `scripts\jevmcp_server.py` in the plugin's folder under
+`.codex\plugins\cache\jev\jevmcp\` in your user folder.
 
 **Other Agent Plugins clients**: `plugins/jevmcp` is a portable Agent Plugins 1.0.0 package
 (`plugin.json`, `mcp.json`, `skills/`). See the [plugin's README](plugins/jevmcp) for how it gets
@@ -279,10 +285,13 @@ key into an issue or pull request.
 - **Nothing else changes by accident.** The 1.7.3 change for Chinese, Japanese and Korean was run
   over 3,265 other documents and 2,472 map checks on English specs; every result stayed identical.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (563 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (565 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
-- **363 automated tests.**
+- **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
+  on Linux, macOS and Windows, from an empty uv cache, runs the seven free tools and checks that the
+  three that send refuse without a key.
+- **390 automated tests.**
 
 ## Repository layout
 

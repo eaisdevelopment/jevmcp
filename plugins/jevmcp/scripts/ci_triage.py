@@ -293,12 +293,21 @@ def _job_name(header: str, known: dict) -> str:
     return _JOB_META.sub("", header).strip()
 
 
+def _step_line(cur: Step, line: str) -> None:
+    """One line of a step's output; an exit-code error line marks the step as the one that failed."""
+    cur.lines.append(line)
+    e = _EXIT.search(line)
+    if e and ("##[error]" in line or "error" in line.lower()):
+        cur.failed, cur.exit_code = True, int(e.group(1))
+
+
 def _split_steps(job: str, raw_lines: list[str], failed_names: list[str]) -> list[Step]:
     # Structure first, from lightly cleaned lines (no timestamps or colour codes); only the FAILED
     # steps' lines get the full, expensive cleaning below - a 2.6 MB log took 55 s cleaned whole.
     steps: list[Step] = []
     cur = Step(job=job, name="(setup)", lines=[])
     in_command = False
+    echoed: list[str] = []                     # lines of the open Run group, in case it is never closed
     for raw in raw_lines:
         line = _TS.sub("", _ANSI.sub("", raw[:4_000]).lstrip("\ufeff")).rstrip()
         m = _GROUP_RUN.match(line)
@@ -306,16 +315,24 @@ def _split_steps(job: str, raw_lines: list[str], failed_names: list[str]) -> lis
             if cur.lines or cur.name != "(setup)":
                 steps.append(cur)
             cur = Step(job=job, name=m.group(1).strip()[:160], lines=[])
-            in_command = True                  # the script the step runs, echoed until ##[endgroup]
+            in_command, echoed = True, []      # the script the step runs, echoed until ##[endgroup]
             continue
         if in_command:
             if line.startswith("##[endgroup]"):
                 in_command = False
-            continue
-        cur.lines.append(line)
-        e = _EXIT.search(line)
-        if e and ("##[error]" in line or "error" in line.lower()):
-            cur.failed, cur.exit_code = True, int(e.group(1))
+                continue
+            if not line.startswith("##[error]"):
+                echoed.append(line)
+                continue
+            # An error before the group was closed: the log never separated the script from its
+            # output (a hand-saved or cut log), so what followed the header is the step's output.
+            in_command = False
+            for ln in echoed:
+                _step_line(cur, ln)
+        _step_line(cur, line)
+    if in_command:                             # the log ended inside the group: same as above
+        for ln in echoed:
+            _step_line(cur, ln)
     steps.append(cur)
     if not any(s.failed for s in steps):
         marked = [s for s in steps if any("##[error]" in ln for ln in s.lines)]
@@ -562,7 +579,7 @@ GH = os.environ.get("JEVMCP_GH")        # tests point this at a fake; None = fin
 
 
 def _gh_exe() -> str:
-    exe = GH or shutil.which("gh")
+    exe = GH or dd.trusted_exe("gh")
     if not exe:
         raise Stop("GitHub runs are read with the GitHub CLI, and `gh` is not installed. Install it "
                    "(https://cli.github.com) and run `gh auth login` in your own terminal - or save the failed "
@@ -589,7 +606,8 @@ def gh_api(path: str, accept: str | None = None, cache_dir: str | None = None, t
         env["XDG_CACHE_HOME"] = cache_dir
     try:
         if tail is None:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, errors="replace")
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, errors="replace",
+                                 stdin=subprocess.DEVNULL)
             code, stdout, stderr = out.returncode, out.stdout, out.stderr
         else:
             code, stdout, stderr = _run_keeping_tail(cmd, env, timeout, tail)
@@ -612,7 +630,7 @@ def _run_keeping_tail(cmd: list[str], env: dict, timeout: int, tail: int) -> tup
     memory stays under 2 x `tail` + 1 MiB however much it prints. Killed after `timeout` seconds."""
     timed_out = threading.Event()
     with tempfile.TemporaryFile() as err:          # a file, not a pipe: a full stderr pipe would stall gh
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, env=env)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, env=env, stdin=subprocess.DEVNULL)
 
         def kill() -> None:
             if proc.poll() is None:
@@ -661,10 +679,14 @@ def _q(value: str) -> str:
 def project_repos(root: Path) -> set[str]:
     """owner/name of every GitHub remote of the project (https and ssh forms)."""
     try:
-        out = subprocess.run(["git", "-C", str(root), "remote", "-v"], capture_output=True, text=True,
-                             timeout=10).stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        out = subprocess.run(dd.git_argv("-C", str(root), "remote", "-v"), capture_output=True, text=True,
+                             timeout=10, stdin=subprocess.DEVNULL).stdout
+    except subprocess.TimeoutExpired:
         return set()
+    except FileNotFoundError:
+        raise Stop(f"{dd.GIT_MISSING}, so which GitHub repository this project belongs to cannot be checked, and "
+                   f"no run was read. Install git, or save the failed job's log in the project and pass it as "
+                   f"logs.") from None
     repos = set()
     for line in out.splitlines():
         parts = line.split()
@@ -859,9 +881,13 @@ def safe_file(p: Path, root: Path | None, inbox: Path | None = None) -> Path:
 def resolve_base(root: Path, base: str) -> str:
     """The commit a git ref names, safely: never passed to git where it could read as an option."""
     try:
-        out = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "--end-of-options",
-                              f"{base}^{{commit}}"], capture_output=True, text=True, timeout=15)
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        out = subprocess.run(dd.git_argv("-C", str(root), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                                         f"{base}^{{commit}}"), capture_output=True, text=True, timeout=15,
+                             stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        raise Stop(f"{dd.GIT_MISSING}, so the change under test cannot be read against {base!r}. Install git, "
+                   f"or triage without base.") from None
+    except subprocess.TimeoutExpired as e:
         raise Stop(f"git could not resolve {base!r}: {e}")
     sha = out.stdout.strip()
     if out.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
@@ -873,11 +899,11 @@ def git_diff(root: Path, base: str) -> str:
     """The change under test: HEAD against its merge base with `base`."""
     sha = resolve_base(root, base)
     try:
-        mb = subprocess.run(["git", "-C", str(root), "merge-base", sha, "HEAD"], capture_output=True, text=True,
-                            timeout=30, check=True).stdout.strip()
-        return subprocess.run(["git", "-C", str(root), "diff", "--no-color", "--no-ext-diff", "--end-of-options",
-                               f"{mb}..HEAD"], capture_output=True, text=True, timeout=60, check=True,
-                              errors="replace").stdout
+        mb = subprocess.run(dd.git_argv("-C", str(root), "merge-base", sha, "HEAD"), capture_output=True, text=True,
+                            timeout=30, check=True, stdin=subprocess.DEVNULL).stdout.strip()
+        return subprocess.run(dd.git_argv("-C", str(root), "diff", "--no-color", "--no-ext-diff", "--end-of-options",
+                                          f"{mb}..HEAD"), capture_output=True, text=True, timeout=60, check=True,
+                              errors="replace", stdin=subprocess.DEVNULL).stdout
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         raise Stop(f"could not diff against {base!r}: {getattr(e, 'stderr', '') or e}".strip()[:300])
 

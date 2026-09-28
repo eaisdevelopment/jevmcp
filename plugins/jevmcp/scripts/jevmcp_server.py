@@ -63,6 +63,7 @@ import re
 import shutil
 import secrets
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -91,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -146,7 +147,8 @@ _SPEC_CANDIDATE_OUT = {
         "title": {"type": ["string", "null"],
                   "description": "its title: front matter title, a Title: header field, else its first heading"},
         "last_commit": {"type": ["string", "null"], "description": "date of the last commit that changed it"},
-        "committed": {"type": "boolean"},
+        "committed": {"type": ["boolean", "null"],
+                      "description": "whether git tracks it; null when git cannot be run in this git project"},
         "last_commit_not_found": {"type": ["string", "null"],
                                   "description": "why last_commit is null although git tracks the file (git log "
                                                  "stopped before it got there): its last commit is unknown, which "
@@ -776,12 +778,34 @@ def _plugin_data_dir() -> Path | None:
     return None
 
 
+def _dir_id(d: Path) -> tuple[int, int, int]:
+    st = os.lstat(d)
+    return st.st_dev, st.st_ino, st.st_mode
+
+
+def _own_private_dir(d: Path | None, ident: tuple[int, int, int] | None) -> bool:
+    """Whether d is still the folder this process made: a real folder, not a link, with the device,
+    inode and mode it had when made, and - where there are owners - still this user's. A folder put
+    back at the old path can get the old inode number back (ext4 hands it out again at once), so the
+    mode is compared too; it is compared with the mode recorded, not with 0700, because some temp
+    file systems report fixed modes."""
+    if d is None or ident is None:
+        return False
+    try:
+        st = os.lstat(d)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or (st.st_dev, st.st_ino, st.st_mode) != ident:
+        return False
+    return not hasattr(os, "getuid") or st.st_uid == os.getuid()
+
+
 def _stored_key_file() -> str | None:
     """Where the key is stored when the client cannot hold it: the plugin's data folder (clients
     that provide one) or ~/.config/jevmcp/typesafe.env, written by `--set-key`. Agent Plugins
     forbids secrets in a server's env, and Codex has no prompt of its own. Used only when
     TYPESAFE_API_KEY is not already in the environment (Claude Code puts it there itself)."""
-    if os.environ.get("TYPESAFE_API_KEY"):
+    if dd.env_key():
         return None
     folder = _plugin_data_dir()
     if folder and (folder / KEY_FILE_NAME).is_file():
@@ -814,7 +838,7 @@ def show_key_source(key_file: str | None = None) -> int:
     folder = _plugin_data_dir()
     places = [("--key-file", key_file, bool(key_file) and Path(key_file).expanduser().is_file()),
               ("TYPESAFE_API_KEY in the environment (Claude Code sets it from the plugin's settings)",
-               "set" if os.environ.get("TYPESAFE_API_KEY") else "not set", bool(os.environ.get("TYPESAFE_API_KEY"))),
+               "set" if dd.env_key() else "not set", bool(dd.env_key())),
               ("the plugin's data folder", str(folder / KEY_FILE_NAME) if folder else "no PLUGIN_DATA here",
                bool(folder) and (folder / KEY_FILE_NAME).is_file()),
               ("--set-key storage", str(CONFIG_KEY_FILE), CONFIG_KEY_FILE.is_file())]
@@ -871,6 +895,8 @@ class Server:
         self._last_progress = 0.0
         self._results_dir: Path | None = None
         self._inbox: Path | None = None
+        self._results_id: tuple[int, int, int] | None = None   # (device, inode, mode) of the folders made
+        self._inbox_id: tuple[int, int, int] | None = None
         self.snapshots: dict[str, tuple[Path, Path]] = {}   # preview id -> (project, snapshot file)
         self.closed = False                       # the client closed our input: shutting down
 
@@ -942,8 +968,13 @@ class Server:
 
     def private(self, sub: str | None = None) -> Path:
         """This process's private folder (0700), or a 0700 folder inside it."""
-        if self._results_dir is None:
+        if not _own_private_dir(self._results_dir, self._results_id):
+            # made on first use, and again if something removed it while the server runs (a temp
+            # cleaner, or a user tidying /tmp): the next result must still have a private home. A
+            # folder someone else put back at the old path is never reused, nor what it holds.
             self._results_dir = Path(tempfile.mkdtemp(prefix="jevmcp-"))
+            self._results_id = _dir_id(self._results_dir)
+            self.snapshots.clear()
         if sub is None:
             return self._results_dir
         d = self._results_dir / sub
@@ -953,8 +984,9 @@ class Server:
     def inbox(self) -> Path:
         """A private folder (0700, beside the results folder) where the agent saves log files from
         another CI for triage. Unlike the shared temp folder, nobody else can plant a file in it."""
-        if self._inbox is None or not self._inbox.is_dir():
+        if not _own_private_dir(self._inbox, self._inbox_id):
             self._inbox = Path(tempfile.mkdtemp(prefix="jevmcp-inbox-"))
+            self._inbox_id = _dir_id(self._inbox)
         return self._inbox
 
     def cleanup(self) -> None:
@@ -963,6 +995,7 @@ class Server:
             if d is not None:
                 shutil.rmtree(d, ignore_errors=True)
         self._results_dir = self._inbox = None
+        self._results_id = self._inbox_id = None
         self.snapshots.clear()
 
     def use_project(self, project: str | None) -> None:
@@ -1132,7 +1165,7 @@ class Server:
                 "No TypeSafe API key is set for this server, so nothing was sent. NEVER ask the user for the key in "
                 "chat and never put it in a command you run. Tell the user to store it once, whichever fits their "
                 "client:\n"
-                "  - Claude Code: run /plugin manage, open jevmcp and set 'TypeSafe API key' (kept in Claude Code's "
+                "  - Claude Code: run /plugin configure jevmcp@jev and set 'TypeSafe API key' (kept in Claude Code's "
                 "credential store).\n"
                 f"  - Codex or any other client: in their OWN terminal (not through you), run\n"
                 f"      uv run --quiet --script {Path(__file__).resolve()} --set-key\n"
@@ -1277,7 +1310,7 @@ class Server:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             entries = dd.draft_map(rel_specs, syms, Path(rel_out),
-                                   named_specs=[dd.named_path(self.root, d) for d in docs])
+                                   named_specs=[dd.named_path(self.root, d) for d in docs], cli=False)
         step = (f"Nothing is checked until the entries are reviewed. Then validate_spec_map (map: {out}) must report "
                 f"OK before check_spec_drift.")
         text = f"{self.last_index}\n{buf.getvalue().strip()}"

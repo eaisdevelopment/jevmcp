@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "jevmcp",
   "displayName": "jevmcp",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "Jev tools for coding agents, in one plugin: spec-drift checking, CI failure triage and code audit. A fast model (TypeSafe's Jev) screens - each requirement against its code, each failure of a CI run against the change under test, each of your project's own rules against the code it covers - and the agent investigates only what it flags. More tools are added to this same plugin, so you install once. Spec drift reads specs sentence by sentence in English and other Latin-alphabet languages, Chinese, Japanese and Korean; specs in other scripts (Cyrillic, Greek, Arabic, Hebrew, Indic and others) are read a paragraph at a time, and Thai, Lao, Khmer and Tibetan mostly not at all.",
   "author": {
     "name": "Essential AI Solutions Ltd.",
@@ -29,9 +29,9 @@
     "typesafe_api_key": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "Asked for when you enable the plugin - there is no file to create. Used only by the jevmcp MCP server to call api.typesafe.ai. Claude Code keeps it out of settings files (macOS Keychain, or ~/.claude/.credentials.json elsewhere) and never shows it to the model. Change it later with /plugin manage. Get a key at https://console.typesafe.ai",
+      "description": "Optional: only the three tools that send data to api.typesafe.ai (check_spec_drift, triage_ci_failure, check_code_rules) need it; the draft, validate and preview tools work without it. Leave it empty and set it later with /plugin configure jevmcp@jev. Claude Code keeps it out of settings files (macOS Keychain, or ~/.claude/.credentials.json elsewhere) and never shows it to the model. Get a key at https://console.typesafe.ai",
       "sensitive": true,
-      "required": true
+      "required": false
     }
   }
 }

@@ -2449,7 +2449,8 @@ MAP_README = [
 ]
 
 
-def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs: list[str] | None = None) -> int:
+def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs: list[str] | None = None,
+              cli: bool = True) -> int:
     """Suggest a code location for every spec sentence, for a human to review. The map's "specs"
     records `named_specs` - the files and folders as the user named them (default: `docs`), so a folder
     stays the source: a file added to it later is reported as not in the map.
@@ -2510,8 +2511,8 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
              if guessed else ""))
     print(f"  {sum(1 for e in entries if not e['code'])} have no suggestion")
     print(f"\nNext: open {out}; its \"_readme\" explains every field. Fix each \"code\" and set \"status\" to\n"
-          f"\"reviewed\"; for sentences that are not requirements set \"status\" to \"excluded\" with a \"why\".\n"
-          f"Then check it loads:  --map {out} --dry-run --strict")
+          f"\"reviewed\"; for sentences that are not requirements set \"status\" to \"excluded\" with a \"why\"."
+          + (f"\nThen check it loads:  spec_drift.py --map {out} --dry-run --strict" if cli else ""))
     return len(entries)
 
 
@@ -3199,8 +3200,69 @@ def _suggests_spec(rel: str, title: str | None) -> bool:
     return bool(words & _SPEC_WORDS)
 
 
+def env_key() -> str:
+    """TYPESAFE_API_KEY from the environment - or '' when it is unset, empty, or a client's placeholder
+    that was never filled in (`${user_config.typesafe_api_key}`): such a string is not a key, and it
+    must neither be sent nor hide a key stored elsewhere."""
+    v = os.environ.get("TYPESAFE_API_KEY", "").strip()
+    return "" if v.startswith("${") or "user_config." in v else v
+
+
+GIT_MISSING = "git is not installed, or not on the PATH this tool was started with"
+
+
+def trusted_exe(name: str) -> str | None:
+    """Absolute path of a program in an absolute PATH folder - never one in the current (project)
+    folder. On Windows a bare program name is looked up in the current folder before PATH, so a
+    git.exe or gh.exe committed to a project would run in place of the real one; the tools therefore
+    run the path this returns. PATH is walked here rather than with shutil.which, which searches the
+    current folder first on Windows before Python 3.12. The path is kept as found, not resolved: a
+    link such as snap's /snap/bin/gh chooses what to run by the name it is started under."""
+    try:
+        cwd = os.path.realpath(os.getcwd())
+    except OSError:                              # the current folder was removed: nothing can be in it
+        cwd = None
+    exts = [""]
+    if os.name == "nt" and not os.path.splitext(name)[1]:
+        exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e]
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if not folder or not os.path.isabs(folder) or (cwd and os.path.realpath(folder) == cwd):
+            continue
+        for ext in exts:
+            exe = os.path.join(folder, name + ext)
+            if os.path.isfile(exe) and os.access(exe, os.X_OK):
+                return exe
+    return None
+
+
+def git_argv(*args: str) -> list[str]:
+    """A git command line with git's absolute path. Raises FileNotFoundError, as running a missing
+    program would, when git cannot be found."""
+    exe = trusted_exe("git")
+    if exe is None:
+        raise FileNotFoundError(2, "No such file or directory", "git")
+    return [exe, *args]
+
+
+def _git_missing() -> bool:
+    return trusted_exe("git") is None
+
+
+def need_git(then: str) -> None:
+    """Stop with a message the user can act on, not a bare FileNotFoundError, when git cannot be run."""
+    if _git_missing():
+        raise Stop(f"{GIT_MISSING}, so {then}")
+
+
+def _in_git_worktree(root: Path) -> bool:
+    """Whether root is inside a git working tree, told without running git (for when git is missing)."""
+    root = Path(root).resolve()
+    return any((p / ".git").exists() for p in (root, *root.parents))
+
+
 def _git_list(root: Path, extra: list[str]) -> list[str]:
-    r = _subprocess.run(["git", "-C", str(root), "ls-files", "-z", *extra], capture_output=True, timeout=60)
+    r = _subprocess.run(git_argv("-C", str(root), "ls-files", "-z", *extra), capture_output=True, timeout=60,
+                        stdin=_subprocess.DEVNULL)
     if r.returncode != 0:
         err = r.stderr.decode(errors="replace")
         if "not a git repository" in err:
@@ -3247,10 +3309,10 @@ def _last_commits(root: Path, paths: list[str], timeout: float = 60) -> tuple[di
     want, found = set(paths), {}
     if not want:
         return found, None
-    cmd = ["git", "-C", str(root), "-c", "core.quotepath=off", "log", "-z", "--relative", "--no-renames",
-           "--format=%x01%ct", "--name-only", "--", *(f":(literal){p}" for p in sorted(want))]
     try:
-        proc = _subprocess.Popen(cmd, stdout=_subprocess.PIPE, stderr=_subprocess.DEVNULL)
+        cmd = git_argv("-C", str(root), "-c", "core.quotepath=off", "log", "-z", "--relative", "--no-renames",
+                       "--format=%x01%ct", "--name-only", "--", *(f":(literal){p}" for p in sorted(want)))
+        proc = _subprocess.Popen(cmd, stdout=_subprocess.PIPE, stderr=_subprocess.DEVNULL, stdin=_subprocess.DEVNULL)
     except OSError as e:
         return found, f"git log could not be run ({e})"
     stopped = _threading.Event()
@@ -3326,6 +3388,10 @@ class SpecSurvey:
         self._commits: dict[str, int] = {}
         self._unknown: dict[str, str] = {}      # committed file -> why its last commit was not found
         self._asked: set[str] = set()
+        if not self.is_git and _git_missing() and _in_git_worktree(self.root):
+            # A git project without git: its files may well be committed, so their last commits are
+            # unknown - never "not committed" - and a file time (the clone's) says nothing either.
+            self._unknown.update({f: f"{GIT_MISSING}, so it cannot be read" for f in self.docs})
 
     def head(self, rel: str) -> list[str]:
         if rel not in self._heads:
@@ -3473,7 +3539,9 @@ def spec_candidates(root: Path, ignore, survey: SpecSurvey | None = None) -> lis
         decl = s.declared(f)
         # s.against, not s.reasons: a version number or a date in the name of the newest version, or of
         # a document that has no other version, is not a sign of age (proposals/2019-07-17-Webhooks.md).
-        out.append({"path": f, "title": s.title(f), "last_commit": s.commit_date(f), "committed": f in s.tracked,
+        # committed: None when git cannot be run in a git project - whether git tracks the file is unknown
+        committed = None if (not s.is_git and f in s._unknown) else f in s.tracked
+        out.append({"path": f, "title": s.title(f), "last_commit": s.commit_date(f), "committed": committed,
                     "last_commit_not_found": s.commit_unknown(f),
                     "looks_historical": s.against(f), "self_declared": decl[1] if decl else None,
                     "family": s.family(f), "family_size": len(members), "newest_in_family": newest,
@@ -3585,8 +3653,13 @@ def _named_folder_docs(root: Path, rel: str, ignore, also_named=()) -> tuple[lis
         listed = tracked | set(_git_list(root, ["-o", "--exclude-standard"]))
         if not listed:                                      # an enclosing repository ignores this project
             tracked, listed = set(), None
-    except (LookupError, FileNotFoundError):
+    except LookupError:
         tracked, listed = set(), None                       # not a git project
+    except FileNotFoundError:
+        tracked, listed = set(), None                       # no git at all
+        if _in_git_worktree(root):
+            notes.append(f"{GIT_MISSING}, so which files in {_readable(rel)} git tracks or ignores is not known: "
+                         f"every .md and .rst file on disk there was used, except in skipped folders.")
     except _subprocess.TimeoutExpired:
         tracked, listed = set(), None
         notes.append(f"git took more than 60 s to list this project's files, so which files in {_readable(rel)} "
@@ -4639,7 +4712,7 @@ def _load_key(key_file: str | None = None, dotenv: bool = True) -> str:
             if m := re.match(r"\s*(?:export\s+)?TYPESAFE_API_KEY\s*=\s*(.+)", line):
                 return m.group(1).strip().strip('"').strip("'")
         raise Stop(f"{key_file} has no TYPESAFE_API_KEY=... line.")
-    key = os.environ.get("TYPESAFE_API_KEY")
+    key = env_key()
     env = Path.cwd() / ".env"
     if not key and dotenv and env.is_file():
         for line in env.read_text(errors="replace").splitlines():
@@ -4658,12 +4731,14 @@ def _changed_files(given: list[str], src: Path) -> set[str]:
     import subprocess
     if given:
         return {str(Path(f).resolve()) for f in given}
+    need_git("the changed files cannot be found: name the files to check, or check the whole map.")
     out = set()
-    for cmd in (["git", "diff", "--name-only", "HEAD"], ["git", "ls-files", "--others", "--exclude-standard"]):
-        r = subprocess.run(cmd, cwd=src, capture_output=True, text=True)
+    for cmd in (git_argv("diff", "--name-only", "HEAD"), git_argv("ls-files", "--others", "--exclude-standard")):
+        r = subprocess.run(cmd, cwd=src, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             raise Stop(f"--changed with no files needs a git repository at {src.resolve()}: {r.stderr.strip()[:120]}")
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=src, capture_output=True, text=True).stdout.strip()
+        top = subprocess.run(git_argv("rev-parse", "--show-toplevel"), cwd=src, capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL).stdout.strip()
         out |= {str((Path(top) / f).resolve()) for f in r.stdout.split()}
     return out
 
@@ -4690,6 +4765,8 @@ def safe_path() -> None:
     """Drop empty and relative PATH entries: with '.' on PATH a `git` or `gh` planted in the project
     folder would run instead of the real one."""
     os.environ["PATH"] = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep) if p and os.path.isabs(p))
+    if os.name == "nt":                         # Windows also searches the current folder before PATH
+        os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
 
 
 def main() -> None:

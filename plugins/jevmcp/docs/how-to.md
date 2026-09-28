@@ -510,7 +510,7 @@ was sent.` Say, in one message:
 
 > jevmcp's checks need a TypeSafe API key, which only you can set — I never see it.
 >
-> - **Claude Code:** run `/plugin manage`, open jevmcp, and set "TypeSafe API key". Claude Code
+> - **Claude Code:** run `/plugin configure jevmcp@jev` and set "TypeSafe API key". Claude Code
 >   keeps it in its credential store, out of settings files. Restart when it asks.
 > - **Codex or another client:** in your own terminal, run
 >   `uv run --quiet --script <plugin>/scripts/jevmcp_server.py --set-key` — it asks for the key

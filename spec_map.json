@@ -262,7 +262,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 152,
+   "line": 155,
    "text": "What is never sent: Your API key to anyone but TypeSafe.",
    "code": null,
    "status": "excluded",
@@ -271,7 +271,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 152,
+   "line": 155,
    "text": "It is never placed in the model's context, a tool's arguments or a tool's results.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.check_spec_drift",
@@ -282,7 +282,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 152,
+   "line": 155,
    "text": "In Claude Code it is kept out of settings files (macOS Keychain, or `~/.claude/.credentials.json` elsewhere) and passed only to the jevmcp server process.",
    "code": null,
    "status": "excluded",
@@ -291,7 +291,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 152,
+   "line": 155,
    "text": "In Codex it comes from your environment (`TYPESAFE_API_KEY`), which Codex's own shell tool can also see.",
    "code": null,
    "status": "excluded",
@@ -300,7 +300,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 152,
+   "line": 155,
    "text": "The MCP server never reads a key from the project it checks.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.api_key",
@@ -366,7 +366,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 180,
+   "line": 183,
    "text": "What is stored locally: Command line: the results, including the exact code sent, in `drift.json` in the folder you run it from (or `--out FILE`); `--dry-run --out FILE` writes the plan of what would be sent.",
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:build_parser",
@@ -419,7 +419,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 193,
+   "line": 196,
    "text": "What is stored locally: The Python dependencies, in uv's cache.",
    "code": null,
    "status": "excluded",
@@ -688,17 +688,38 @@
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
    "line": 122,
-   "text": "only files git tracks or would commit, so files git ignores — build output, a local `.env`, credentials — are left out;",
+   "text": "only files git tracks or would commit, so files git ignores — build output, a local `.env`, credentials — are left out.",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:tracked_files",
     "plugins/jevmcp/scripts/code_audit.py:collect_units"
    ],
    "status": "reviewed",
-   "spec_text": "only files git tracks or would commit, so files git ignores — build output, a local .env, credentials — are left out;"
+   "spec_text": "only files git tracks or would commit, so files git ignores — build output, a local `.env`, credentials — are left out."
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 124,
+   "line": 122,
+   "text": "In a git repository where git is not installed, which files git ignores cannot be told, so no code is read at all.",
+   "code": [
+    "plugins/jevmcp/scripts/code_audit.py:tracked_files"
+   ],
+   "status": "reviewed",
+   "spec_text": "In a git repository where git is not installed, which files git ignores cannot be told, so no code is read at all."
+  },
+  {
+   "spec": "plugins/jevmcp/PRIVACY.md",
+   "line": 122,
+   "text": "In a folder that is not a git repository there is nothing to ignore: every code file outside the skipped folders (`node_modules`, `.venv`, `build` and the like) can be read, and secret files are still skipped;",
+   "code": [
+    "plugins/jevmcp/scripts/code_audit.py:tracked_files",
+    "plugins/jevmcp/scripts/code_audit.py:_secretish"
+   ],
+   "status": "reviewed",
+   "spec_text": "In a folder that is not a git repository there is nothing to ignore: every code file outside the skipped folders (`node_modules`, `.venv`, `build` and the like) can be read, and secret files are still skipped;"
+  },
+  {
+   "spec": "plugins/jevmcp/PRIVACY.md",
+   "line": 127,
    "text": "only code files that a reviewed rule's `scope` matches, and by default only the units that the change under test touches;",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:in_scope_files",
@@ -710,7 +731,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 126,
+   "line": 129,
    "text": "symbolic links, files over 1.5 MB and secret files (`.env` and `.env.*`, key and certificate files, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`) are skipped.",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:collect_units",
@@ -721,7 +742,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 129,
+   "line": 132,
    "text": "The code is cleaned before it is sent:",
    "code": null,
    "status": "excluded",
@@ -730,7 +751,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 131,
+   "line": 134,
    "text": "comments and docstrings are removed, in the languages listed under spec drift, and line numbers are kept; other files, such as shell, Ruby, PHP or SQL, are sent as written;",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:file_text",
@@ -741,7 +762,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 133,
+   "line": 136,
    "text": "secret-looking values are redacted, as for spec drift;",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:unit_text"
@@ -751,7 +772,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 134,
+   "line": 137,
    "text": "a rule about comments or docstrings (`keep_comments` in the rule map) is the one exception: its units are sent with their comments, in requests of their own, with links replaced by `<url>` and email addresses by `<email>`.",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:unit_text",
@@ -762,7 +783,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 134,
+   "line": 137,
    "text": "Every other rule's request gets the unit without comments.",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:collect_units"
@@ -772,7 +793,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 138,
+   "line": 141,
    "text": "`preview_code_audit` reports, before anything is sent, how many units and files would go, the bytes of code, and their share of every file git tracks.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_code_audit"
@@ -782,7 +803,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 138,
+   "line": 141,
    "text": "The MCP server refuses an audit of more than 400 requests (its default cap), or of every unit (`all: true`), until the count is confirmed; the command line refuses more than `--max-requests` (500 by default).",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.check_code_rules",
@@ -794,7 +815,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 145,
+   "line": 148,
    "text": "What is never sent: Files named `.env` or `.env.*` (templates such as `.env.example` are read as configuration), key and certificate files (`.pem`, `.key`, `.p12`, `.jks`, `.pfx`, `id_rsa`...), and anything outside your project folder — a map entry pointing at one is refused.",
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:_SECRET_FILE",
@@ -808,7 +829,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 145,
+   "line": 148,
    "text": "The one exception to \"outside the project\" is a CI log you save in the server's private inbox for a triage.",
    "code": [
     "plugins/jevmcp/scripts/ci_triage.py:safe_file",
@@ -819,7 +840,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 149,
+   "line": 152,
    "text": "What is never sent: For spec drift, code that no requirement in the map points at.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:build_state",
    "status": "reviewed",
@@ -827,7 +848,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 150,
+   "line": 153,
    "text": "What is never sent: The commit message, the pull request's title and its description, as anything jevmcp adds itself (a log line that prints one is sent like any other log line).",
    "code": null,
    "status": "excluded",
@@ -836,7 +857,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 160,
+   "line": 163,
    "text": "`preview_spec_check` (MCP) or `--dry-run --show-payload` (command line) prints exactly what a check would send, and sends nothing.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_spec_check",
@@ -847,7 +868,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 160,
+   "line": 163,
    "text": "`preview_ci_triage` shows the exact state of each failure and returns a snapshot id; `triage_ci_failure` with that snapshot sends exactly what was shown.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_ci_triage",
@@ -859,7 +880,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 160,
+   "line": 163,
    "text": "`preview_code_audit` shows the exact states of the first three requests, and `code_audit.py --dry-run --show-payload` prints all of them.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_code_audit",
@@ -870,7 +891,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 166,
+   "line": 169,
    "text": "The skills ask for your consent before the first send of each kind of data in a project, and ask again for each kind.",
    "code": null,
    "status": "excluded",
@@ -879,7 +900,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 166,
+   "line": 169,
    "text": "For CI logs and for source code, only you can give that consent, in the conversation: a file in the repository never counts as your consent.",
    "code": null,
    "status": "excluded",
@@ -888,7 +909,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 172,
+   "line": 175,
    "text": "What is stored locally: MCP server: the results of the last run per family and project, including exactly what was sent, in a private temporary folder of the server process (readable only by you), removed when the server stops.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.results_file",
@@ -899,7 +920,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 175,
+   "line": 178,
    "text": "What is stored locally: MCP server, CI triage: each preview's snapshot (the failures and the change as they were read, before the change is cut and cleaned) and the states it showed, and `gh`'s cache folder, in the same private folder, removed when the server stops.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.preview_ci_triage",
@@ -912,7 +933,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 178,
+   "line": 181,
    "text": "What is stored locally: MCP server, CI triage: the inbox, a private folder (mode 0700) for log files you save for a triage, removed with everything in it when the server stops.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.inbox",
@@ -923,7 +944,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 182,
+   "line": 185,
    "text": "What is stored locally: Command line, CI triage: the results, including log excerpts, in `triage.json` in the folder you run it from (or `--out FILE`); `--dry-run --out FILE` writes the states that would be sent.",
    "code": [
     "plugins/jevmcp/scripts/ci_triage.py:main"
@@ -933,7 +954,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 182,
+   "line": 185,
    "text": "`gh`'s cache folder is a temporary folder that is removed once the run has been read.",
    "code": [
     "plugins/jevmcp/scripts/ci_triage.py:main"
@@ -943,7 +964,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 185,
+   "line": 188,
    "text": "What is stored locally: Command line, code audit: the results in `audit.json` in the folder you run it from (or `--out FILE`).",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:main"
@@ -953,7 +974,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 187,
+   "line": 190,
    "text": "What is stored locally: The spec map and the rule map you create, in your project — you decide whether to commit them.",
    "code": [
     "plugins/jevmcp/scripts/jevmcp_server.py:Server.draft_spec_map",
@@ -964,7 +985,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 188,
+   "line": 191,
    "text": "Delete the file to clear it, or pass `--no-cache` to ignore it.",
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:build_parser",
@@ -977,7 +998,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 188,
+   "line": 191,
    "text": "What is stored locally: Answers from earlier runs of all three families, in `~/.cache/jevmcp/verdicts.json` (`$XDG_CACHE_HOME` is respected), so a request that has not changed is not paid for twice.",
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:CACHE_FILE",
@@ -989,7 +1010,7 @@
   },
   {
    "spec": "plugins/jevmcp/PRIVACY.md",
-   "line": 188,
+   "line": 191,
    "text": "It holds a SHA-256 digest of each request and the model's answers - never your code, your logs or your spec text, never your API key.",
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:_cache_key",
@@ -2690,10 +2711,10 @@
   {
    "spec": "plugins/jevmcp/docs/tools.md",
    "line": 381,
-   "text": "Each has `path`, `title` (the front matter's title, a `Title:` header field, else its first heading, or null), `last_commit` (date, or null when not committed or not found), `committed`, `last_commit_not_found` (why `last_commit` is null for a committed file - `git log` was stopped after 60 s before it got there - or null), `looks_historical` (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version), `self_declared` (the line at its top that says it is out of date, or null), `family` (the document it is a version of), `family_size`, `newest_in_family` (null when it cannot be told) and `newest_decided_by`.",
+   "text": "Each has `path`, `title` (the front matter's title, a `Title:` header field, else its first heading, or null), `last_commit` (date, or null when not committed or not found), `committed` (null when git cannot be run in a git project), `last_commit_not_found` (why `last_commit` is null for a committed file - `git log` was stopped after 60 s before it got there, or git is not installed - or null), `looks_historical` (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version), `self_declared` (the line at its top that says it is out of date, or null), `family` (the document it is a version of), `family_size`, `newest_in_family` (null when it cannot be told) and `newest_decided_by`.",
    "code": "plugins/jevmcp/scripts/spec_drift.py:spec_candidates",
    "status": "reviewed",
-   "spec_text": "| candidates | array of objects | without docs: every file that looks like a spec, with the hints. each has path, title (the front matter's title, a title: header field, else its first heading, or null), lastcommit (date, or null when not committed or not found), committed, lastcommitnotfound (why lastcommit is null for a committed file - git log was stopped after 60 s before it got there - or null), lookshistorical (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version), selfdeclared (the line at its top that says it is out of date, or null), family (the document it is a version of), familysize, newestinfamily (null when it cannot be told) and newestdecidedby. |"
+   "spec_text": "| `candidates` | array of objects | Without `docs`: every file that looks like a spec, with the hints. Each has `path`, `title` (the front matter's title, a `Title:` header field, else its first heading, or null), `last_commit` (date, or null when not committed or not found), `committed` (null when git cannot be run in a git project), `last_commit_not_found` (why `last_commit` is null for a committed file - `git log` was stopped after 60 s before it got there, or git is not installed - or null), `looks_historical` (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version), `self_declared` (the line at its top that says it is out of date, or null), `family` (the document it is a version of), `family_size`, `newest_in_family` (null when it cannot be told) and `newest_decided_by`. |"
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",
@@ -2704,7 +2725,7 @@
     "plugins/jevmcp/scripts/spec_drift.py:spec_candidates"
    ],
    "status": "reviewed",
-   "spec_text": "| candidates | array of objects | without docs: every file that looks like a spec, with the hints. each has path, title (the front matter's title, a title: header field, else its first heading, or null), lastcommit (date, or null when not committed or not found), committed, lastcommitnotfound (why lastcommit is null for a committed file - git log was stopped after 60 s before it got there - or null), lookshistorical (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version), selfdeclared (the line at its top that says it is out of date, or null), family (the document it is a version of), familysize, newestinfamily (null when it cannot be told) and newestdecidedby. |"
+   "spec_text": "| `candidates` | array of objects | Without `docs`: every file that looks like a spec, with the hints. Each has `path`, `title` (the front matter's title, a `Title:` header field, else its first heading, or null), `last_commit` (date, or null when not committed or not found), `committed` (null when git cannot be run in a git project), `last_commit_not_found` (why `last_commit` is null for a committed file - `git log` was stopped after 60 s before it got there, or git is not installed - or null), `looks_historical` (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version), `self_declared` (the line at its top that says it is out of date, or null), `family` (the document it is a version of), `family_size`, `newest_in_family` (null when it cannot be told) and `newest_decided_by`. |"
   },
   {
    "spec": "plugins/jevmcp/docs/tools.md",

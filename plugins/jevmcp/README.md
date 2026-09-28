@@ -36,10 +36,22 @@ the skills ask for your consent before the first send of each kind of data in a 
 
 ## Requirements
 
-- [`uv`](https://docs.astral.sh/uv/) on your PATH. The first run installs the Python dependencies
-  (tree-sitter, PyYAML) into uv's cache; nothing is installed into your project.
-- A TypeSafe API key — get one at <https://console.typesafe.ai>. One key serves every tool in
-  the plugin.
+- [`uv`](https://docs.astral.sh/uv/) 0.4.19 or newer on your PATH (an older uv stops with
+  `unexpected argument '--script'`). The first run installs the Python dependencies (tree-sitter,
+  PyYAML), and a Python if yours is older than 3.10, into uv's cache; nothing is installed into
+  your project.
+- `git` on your PATH. The marketplace install already needs it. The tools use it to find the
+  changed files for a routine check, which files git ignores (without it no code-audit tool works
+  in a git project), the change under test for CI triage with `base`, this project's GitHub remote
+  to triage a run by its URL, and the last commit of each spec. Without it, name the files for a
+  spec check, and triage a saved log without `base`.
+- A TypeSafe API key — get one at <https://console.typesafe.ai> — for the three tools that send
+  data. The draft, validate and preview tools work without it. One key serves every tool in the
+  plugin.
+- Linux, macOS or Windows. On all three, CI starts the server from an empty uv cache on every
+  change to the plugin, runs the seven free tools and checks that the three that send refuse without a key. The
+  three that send have been run with a real key on Linux only. The key command for Codex below is
+  for bash or zsh; on Windows, give the full path of `jevmcp_server.py` instead.
 - Optional: the GitHub CLI, [`gh`](https://cli.github.com), logged in — only to triage a GitHub
   Actions run by its URL. A CI log saved as a file needs nothing extra.
 
@@ -52,10 +64,12 @@ the skills ask for your consent before the first send of each kind of data in a 
 /plugin install jevmcp@jev
 ```
 
-Claude Code asks for your TypeSafe API key when the plugin is enabled and keeps it out of every
-settings file (in the macOS Keychain, or `~/.claude/.credentials.json` on other systems). To change
-it later: `/plugin manage`. Enter it at that prompt rather than with `claude plugin install
---config`, which would leave it in your shell history.
+When you install or enable the plugin in the interactive `/plugin` screen, Claude Code shows a
+*TypeSafe API key* field. It is optional: leave it empty to use only the free tools, and set or
+change it any time with `/plugin configure jevmcp@jev`. Claude Code keeps it out of every settings file (in the macOS
+Keychain, or `~/.claude/.credentials.json` on other systems). `claude plugin install` from a shell
+never asks; enter the key in `/plugin configure` rather than with `claude plugin install --config`,
+which would leave it in your shell history.
 
 **OpenAI Codex**
 

@@ -17,7 +17,7 @@ approval, as designed. Where something was not verified, it says so.
 |---|---|---|---|
 | Install | `/plugin marketplace add eaisdevelopment/jevmcp` then `/plugin install jevmcp@jev` | `codex plugin marketplace add eaisdevelopment/jevmcp` then `codex plugin add jevmcp@jev` | the client's own way of loading `plugins/jevmcp` |
 | Manifests it reads | `.claude-plugin/marketplace.json`, `plugins/jevmcp/.claude-plugin/plugin.json`, `plugins/jevmcp/.mcp.json` | `.agents/plugins/marketplace.json`, `plugins/jevmcp/plugin.json`, `plugins/jevmcp/mcp.json`, `.codex-plugin/plugin.json` (overlay) | `plugins/jevmcp/plugin.json`, `plugins/jevmcp/mcp.json`, `skills/` |
-| API key | asked for when the plugin is enabled; kept in the client's credential store | no prompt: `--set-key` once, or an exported `TYPESAFE_API_KEY` | `TYPESAFE_API_KEY` in the environment, or a key file (`--set-key`) |
+| API key | an optional field in `/plugin` (install or enable) or `/plugin configure jevmcp@jev`; kept in the client's credential store | no prompt: `--set-key` once, or an exported `TYPESAFE_API_KEY` | `TYPESAFE_API_KEY` in the environment, or a key file (`--set-key`) |
 | Tool names | `mcp__plugin_jevmcp_jevmcp__<tool>` | `<tool>` on server `jevmcp` of plugin `jevmcp@jev` | the client's own scheme, over server `jevmcp` |
 | Skills | `jevmcp:spec-drift`, `jevmcp:ci-triage`, `jevmcp:code-audit` | listed in the session's skill catalogue | depends on the client's skill support |
 | Must a call pass `project`? | no (but see the boundary rule below) | **yes, always**, absolute path | yes, unless the client starts the server in the project |
@@ -66,7 +66,7 @@ at the repository root, `plugins/jevmcp/.claude-plugin/plugin.json`, and
 why both sets of files exist.
 
 Installed copies live at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.claude/plugins/cache/jev/jevmcp/1.7.4/`. Older versions stay beside the new one.
+`~/.claude/plugins/cache/jev/jevmcp/1.7.5/`. Older versions stay beside the new one.
 
 Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 **"Restart to apply changes"** — the MCP server process is only replaced on restart.
@@ -74,16 +74,20 @@ Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 ### Where the key comes from
 
 `plugins/jevmcp/.claude-plugin/plugin.json` declares one `userConfig` entry, `typesafe_api_key`
-(`"sensitive": true`, `"required": true`), so Claude Code asks for the key when the plugin is
-enabled and keeps it out of every settings file — macOS Keychain, otherwise
-`~/.claude/.credentials.json`. `plugins/jevmcp/.mcp.json` then passes it to the server as an
+(`"sensitive": true`, `"required": false`), so the interactive `/plugin` screen shows a field for
+the key when the plugin is installed or enabled, and Claude Code keeps it out of every settings file
+— macOS Keychain, otherwise `~/.claude/.credentials.json`. The field is optional: with `"required":
+true` Claude Code would not start the server at all until a key was set, so the seven free tools
+would be missing too. Left empty, the server gets `TYPESAFE_API_KEY=""`, the free tools work, and
+the three that send say that no key is set. `plugins/jevmcp/.mcp.json` then passes it to the server as an
 environment variable:
 
 ```json
 "env": { "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}" }
 ```
 
-Change it later with `/plugin manage`. Do not use `claude plugin install --config ...`: the key
+Set or change it later with `/plugin configure jevmcp@jev`. `claude plugin install` from a shell never
+asks for it. Do not use `claude plugin install --config ...`: the key
 would end up in the shell history. Never ask the user for the key in chat, and never run
 `--set-key` on their behalf — it refuses to run anywhere but a real terminal.
 
@@ -211,7 +215,7 @@ Codex merges an overlay entry only when it is a complete server definition; the 
 `mcp.json` still decides the command (checked with `codex mcp list --json`).
 
 Installed copies live at `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.codex/plugins/cache/jev/jevmcp/1.7.4/`. `~/.codex/config.toml` gains
+`~/.codex/plugins/cache/jev/jevmcp/1.7.5/`. `~/.codex/config.toml` gains
 `[plugins."jevmcp@jev"] enabled = true` (and a `[marketplaces.jev]` entry).
 
 Update with `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`.
@@ -397,7 +401,7 @@ that is the one difference. `ci_triage.py` and `code_audit.py` never read a `.en
 
 | | Version |
 |---|---|
-| jevmcp plugin | 1.7.4 |
+| jevmcp plugin | 1.7.5 |
 | Claude Code | 2.1.278 (the `claude` CLI on the machine used for the final check reports 2.1.280; nothing here is known to have changed); 2.1.281 for the CI-triage and code-audit sessions of 2026-09-24; 2.1.282 for the Chinese, Japanese, Korean and Russian spec sessions of 2026-09-25 |
 | OpenAI Codex | `codex-cli 0.155.1`; `codex-cli 0.156.1` for the CI-triage and `codex exec` checks of 2026-09-24 |
 | uv | 0.11.16 |

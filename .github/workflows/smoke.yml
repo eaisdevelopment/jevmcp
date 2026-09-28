@@ -1,0 +1,34 @@
+# Starts the plugin's MCP server exactly as a client does (uv run --quiet --script), on Linux,
+# macOS and Windows, from an empty uv cache and with no API key, and checks that it answers MCP,
+# that all seven free tools work, and that the three tools that send data refuse without a key.
+# Free and offline apart from PyPI: nothing is sent to TypeSafe.
+name: smoke
+
+on:
+  push:
+    paths: ["plugins/jevmcp/**", ".github/smoke/**", ".github/workflows/smoke.yml"]
+  pull_request:
+    paths: ["plugins/jevmcp/**", ".github/smoke/**", ".github/workflows/smoke.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server-starts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false        # every run starts from an empty uv cache, as a new user does
+
+      - name: Start the server and call every tool
+        run: uv run --no-project --quiet python -u .github/smoke/mcp_smoke.py

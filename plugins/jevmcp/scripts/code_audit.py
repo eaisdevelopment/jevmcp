@@ -73,8 +73,9 @@ def tracked_files(root: Path) -> list[str]:
     """Files git would commit (tracked + untracked-not-ignored), relative. Ignored local files - build
     output, a developer's .env, credentials - are never candidates for an audit."""
     try:
-        out = subprocess.run(["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"],
-                             capture_output=True, timeout=60, check=True).stdout.decode(errors="replace")
+        out = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"),
+                             capture_output=True, timeout=60, check=True,
+                             stdin=subprocess.DEVNULL).stdout.decode(errors="replace")
         return [p for p in out.split("\0") if p]
     except subprocess.CalledProcessError as e:
         # Only a folder that is not a git repository falls back to every file. In a repository git
@@ -85,7 +86,11 @@ def tracked_files(root: Path) -> list[str]:
     except subprocess.TimeoutExpired:
         raise Stop("git took more than 60 s to list this project's files, so none was read.") from None
     except FileNotFoundError:
-        pass                                  # no git at all: nothing can say which files it ignores
+        # No git at all. In a git repository that would take ignored files too (a local .env, build
+        # output, credentials), so nothing is read; a folder outside git has nothing to ignore.
+        if dd._in_git_worktree(root):
+            raise Stop(f"{dd.GIT_MISSING}, so which files git ignores (a local .env, build output, credentials) "
+                       f"cannot be told apart, and no code was read. Install git.") from None
     return [str(p.relative_to(root)) for p in dd._discover(root, tuple(dd.DEFAULT_IGNORE))]
 
 
@@ -362,21 +367,24 @@ def _secretish(f: str) -> bool:
 def changed_lines(root: Path, base: str | None) -> dict[str, set[int]]:
     """Lines the change under test adds or modifies, per file: against `base` (its merge base with
     HEAD), or the uncommitted changes when no base is given."""
+    # (in a git repository without git, tracked_files has already stopped: this is a folder outside git)
+    dd.need_git("the changed lines cannot be found: name the files to audit, or audit every unit.")
     if base:
-        sha = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "--end-of-options",
-                              f"{base}^{{commit}}"], capture_output=True, text=True, timeout=15).stdout.strip()
+        sha = subprocess.run(dd.git_argv("-C", str(root), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                                         f"{base}^{{commit}}"), capture_output=True, text=True, timeout=15,
+                             stdin=subprocess.DEVNULL).stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
             raise Stop(f"{base!r} is not a commit in this repository.")
-        mb = subprocess.run(["git", "-C", str(root), "merge-base", sha, "HEAD"], capture_output=True, text=True,
-                            timeout=30).stdout.strip()
+        mb = subprocess.run(dd.git_argv("-C", str(root), "merge-base", sha, "HEAD"), capture_output=True, text=True,
+                            timeout=30, stdin=subprocess.DEVNULL).stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{40,64}", mb):
             raise Stop(f"{base!r} and HEAD have no common commit, so there is no change to audit against it.")
         args = ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--end-of-options", mb]
     else:
         # --no-ext-diff: with an external diff tool set (difftastic's diff.external) git prints no hunks
         args = ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "HEAD"]
-    out = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=60,
-                         errors="replace").stdout
+    out = subprocess.run(dd.git_argv("-C", str(root), *args), capture_output=True, text=True, timeout=60,
+                         errors="replace", stdin=subprocess.DEVNULL).stdout
     lines: dict[str, set[int]] = {}
     cur = None
     for ln in out.splitlines():
@@ -389,8 +397,9 @@ def changed_lines(root: Path, base: str | None) -> dict[str, set[int]]:
                 lines.setdefault(cur, set()).update(range(a, a + max(n, 1)))
     # A new file the change adds but has not committed yet is in no diff; every line of it is changed.
     try:
-        new = subprocess.run(["git", "-C", str(root), "ls-files", "-o", "--exclude-standard", "-z"],
-                             capture_output=True, timeout=60, check=True).stdout.decode(errors="replace")
+        new = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-o", "--exclude-standard", "-z"),
+                             capture_output=True, timeout=60, check=True,
+                             stdin=subprocess.DEVNULL).stdout.decode(errors="replace")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         new = ""
     for f in filter(None, new.split("\0")):
