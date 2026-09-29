@@ -66,7 +66,7 @@ at the repository root, `plugins/jevmcp/.claude-plugin/plugin.json`, and
 why both sets of files exist.
 
 Installed copies live at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.claude/plugins/cache/jev/jevmcp/1.7.6/`. Older versions stay beside the new one.
+`~/.claude/plugins/cache/jev/jevmcp/1.7.7/`. Older versions stay beside the new one.
 
 Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 **"Restart to apply changes"** — the MCP server process is only replaced on restart.
@@ -215,7 +215,7 @@ Codex merges an overlay entry only when it is a complete server definition; the 
 `mcp.json` still decides the command (checked with `codex mcp list --json`).
 
 Installed copies live at `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.codex/plugins/cache/jev/jevmcp/1.7.6/`. `~/.codex/config.toml` gains
+`~/.codex/plugins/cache/jev/jevmcp/1.7.7/`. `~/.codex/config.toml` gains
 `[plugins."jevmcp@jev"] enabled = true` (and a `[marketplaces.jev]` entry).
 
 Update with `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`.
@@ -323,7 +323,9 @@ MCP server is started outside the sandbox.
 
 Codex also passes the server a minimal environment — `HOME`, `LANG`, `LOGNAME`, `PATH`, `SHELL`,
 `TERM`, `USER`, plus the variables the plugin declares (`TYPESAFE_API_KEY`) — along with
-`PLUGIN_ROOT` and `PLUGIN_DATA`.
+`PLUGIN_ROOT` and `PLUGIN_DATA`. Any other variable exported in the user's shell does not reach
+it, so `JEVMCP_NO_UTF8_RESTART`, which turns off the restart in Python's UTF-8 mode on Linux (see
+[tools.md](tools.md#the-command-line)), reaches only the command lines under Codex, not the server.
 
 ### CI triage and code audit in Codex
 
@@ -401,7 +403,7 @@ that is the one difference. `ci_triage.py` and `code_audit.py` never read a `.en
 
 | | Version |
 |---|---|
-| jevmcp plugin | 1.7.6 |
+| jevmcp plugin | 1.7.7 |
 | Claude Code | 2.1.278 (the `claude` CLI on the machine used for the final check reports 2.1.280; nothing here is known to have changed); 2.1.281 for the CI-triage and code-audit sessions of 2026-09-24; 2.1.282 for the Chinese, Japanese, Korean and Russian spec sessions of 2026-09-25 |
 | OpenAI Codex | `codex-cli 0.155.1`; `codex-cli 0.156.1` for the CI-triage and `codex exec` checks of 2026-09-24 |
 | uv | 0.11.16 |

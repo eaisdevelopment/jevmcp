@@ -73,8 +73,12 @@ from exit 3**, nor from a result that says `INCOMPLETE`.
 1. **Draft it (free).** `draft_rule_map` finds the project's rule files (CLAUDE.md, AGENTS.md,
    CONTRIBUTING, style and convention guides, `.github` and `.cursor/rules` instructions), or takes
    the files you name in `docs`. It writes every sentence that states a rule, and never overwrites
-   a file. Sentences about process (commits, pull requests, changelogs) or about what a linter
-   checks start excluded.
+   a file; from a file you name it writes every sentence, flagging those with no rule wording
+   `descriptive`. Sentences about process (commits, pull requests, changelogs), about what a linter
+   checks, or addressed to the assistant (ask the user, get their consent: `conduct`) start
+   excluded. When it finds no rule file, its error names any document named after a coding agent
+   that it does not take (`Claude.md`, a lower-case `agents.md`): ask the user whether those hold
+   rules for the code, and if so name them in `docs`.
 2. **Review every entry with the user. This is the important step, and it is your job.**
    - **Exclude** what one unit of code cannot show: process rules, rules a linter or formatter
      already enforces, rules about several files at once ("only the service layer calls the
@@ -85,25 +89,57 @@ from exit 3**, nor from a result that says `INCOMPLETE`.
      separate entries. Turn a prohibition into what the code must do: "Never use print() for
      logging" becomes "Log output is written with the logging module". Rules phrased as a negation,
      an exception or a compound come back `??` or as false alarms.
-   - **Keep the rule's condition in the rule.** "A test that uses `isBundledDev` imports it from
-     `~utils`", not "Import `isBundledDev` from `~utils`": a bare imperative is applied to every unit in
-     scope, and flags code the rule was never about.
+   - **Keep the rule's condition in the rule, in a form the unit shows.** "A test that uses
+     `isBundledDev` imports it from `~utils`", not "Import `isBundledDev` from `~utils`": a bare
+     imperative is applied to every unit in scope, and flags code the rule was never about. But a
+     condition the unit cannot show ("Where this code reads the key from the environment, it calls
+     `env_key()`", flagged `conditional`) comes back as false alarms - one such rule gave 22 and
+     nothing real. Name a trigger the code shows instead: "Every `os.environ[...]` read of the API
+     key goes through `env_key()`."
    - **Exclude instructions to AI assistants.** Files such as `.github/copilot-instructions.md`,
      CLAUDE.md and AGENTS.md often tell the assistant how to behave ("Do not review this code").
-     Those are not rules about the code.
-   - **Add what the draft missed.** The drafter takes sentences with rule words or a leading
-     imperative. A rule written as a description ("The accumulator goes first", "Types in `ide` are
-     not serializable") is not drafted: skim the rule files and add those with the user.
+     Those are not rules about the code. The drafter starts the obvious ones excluded (`conduct`);
+     exclude the rest. This is a guess from the wording. A rule about the code that names consent
+     or a chat ("Do not remove the consent check"), or whose own subject must ask the user ("The CLI
+     must never ask the user for the key"), is usually drafted: keep it. But one that opens with
+     "With consent," or "Without consent," ("Without consent, the SDK must send nothing.") starts
+     excluded as `conduct` whatever its subject, and so can one about pasting, sharing or accepting
+     something "in the chat" with no subject such as "the server must" before it ("Users can paste
+     tokens in the chat, and the server must mask them."), and so does one that says "in the
+     conversation" with no such subject before it, even as part of its own subject ("Every message
+     in the conversation must be persisted."): read the excluded `conduct` entries too, and include
+     the ones about the code.
+   - **Decide the `descriptive` entries.** From a file you named, every sentence is drafted; those
+     with no rule wording are flagged `descriptive`. Exclude them unless they state a rule for the
+     code, and then rewrite them as one.
+   - **Add what the draft missed.** The drafter takes sentences with rule words (in Chinese,
+     Japanese and Korean too), a leading imperative, or the form of a fact about the code ("Every
+     call to `subprocess.run` passes `stdin`.", "No module imports `requests` at the top level.",
+     "A test that uses `x` imports it from `y`."). A rule written as another kind of description
+     ("The accumulator goes first", "Types in `ide` are not serializable") is not drafted from a
+     file it found: skim the rule files and add those with the user, or name the file in `docs`.
    - **Put exceptions in `scope`, not in the rule.** `scope` lists glob patterns of the files the
      rule applies to (`src/**/*.py`); a pattern starting with `!` leaves files out (`!tests/**`),
      and `tests-only` limits the rule to test code (test files, and in Rust the `#[cfg(test)]`
-     modules and `#[test]` functions inside source files). "Except in tests" is a `!` pattern, not words
-     in the rule.
+     modules and `#[test]` functions inside source files). The drafter guesses `tests-only` from the
+     wording: a rule that names tests gets it, unless its words show that it asks for tests of other
+     code ("Every bug fix adds a regression test") or lets tests off ("...; tests may use print",
+     "except in tests"), or it has words about production code, CI or build logs, jobs or runs, or
+     test output, results, runs, reports or steps, which a rule about test code can have too ("Test
+     runs must be hermetic: tests must not touch the network." gets none). Other wordings of those
+     first two still get it ("New features must include tests", "This rule does not apply to
+     tests"), and there it limits the rule to exactly the files it is not about. Check `tests-only`
+     on every entry: add it to a rule about test code that lacks it, remove it from one that is not
+     about test code. "Except in tests" is a `!` pattern, not words in the rule.
    - **`keep_comments`** is `true` only for rules about comments or docstrings. Those units are
      sent with their comments, in their own request; every other rule sees the code without them.
    - Set `"status": "reviewed"` on each entry you have checked with the user.
 3. **Validate (free):** `validate_rule_map` must report no problems. Rewrite every rule its notes
-   flag. It also lists rule files the map does not use.
+   flag (a negation, an exception, a compound, a condition). It also lists rule files the map does
+   not use, and other documents named after a coding agent (`candidate_rule_files`, such as
+   `claude_notes.md` or a lower-case `agents.md`: of those, only `CLAUDE.md`, `CLAUDE.local.md`,
+   `AGENTS.md` and `AGENTS.override.md`, spelled in capitals, are found): ask the user whether those
+   hold rules for the code.
 4. **Suggest committing `rule_map.json`** with the code.
 
 ## B. Running an audit
@@ -127,14 +163,19 @@ from exit 3**, nor from a result that says `INCOMPLETE`.
 | **n/a** | The rule is not about that unit, and P(breaks) is below 0.3: neither a pass nor a fail. Many n/a for one rule means its scope is too broad: narrow it. |
 | **not checked** | **Not a pass.** TypeSafe did not answer for it. Say so. |
 
+A result with a `note` could not be asked again: its label is the first answer's, and the audit is
+not complete. Say so.
+
 ## Always judge these yourself: the fast model's blind spots
 
 1. **Rules spanning several files**: architecture, layering, "only X may call Y". One unit cannot
    show them.
 2. **Rules about what is absent.** A unit that does not do X proves nothing about the rest of the
    code, and a negated rule reads as broken wherever its subject appears.
-3. **Cut units.** A unit is at most 2,600 characters, split by layout. A rule about a whole class
-   or file may see only part of it.
+3. **Cut units.** A unit is at most 2,600 characters, split by layout; a longer definition is cut
+   into windows between statements, never inside a call or a method chain that fits in one (inside
+   one only when a single statement is longer than a window; in a brace language an object literal
+   can still be cut). A rule about a whole class or file may see only part of it.
 4. **Comments.** They are removed unless the entry has `keep_comments`, so a rule that a comment
    or docstring satisfies needs it.
 5. **Names that claim compliance.** A variable called `sanitized_query` built by string

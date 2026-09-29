@@ -7,7 +7,7 @@ screens everything in seconds, at a fraction of a cent per item; the agent spend
 only on what the fast model flags. Jev is a classifier from TypeSafe (<https://typesafe.ai>), not a chat model: it picks one of the
 answers it is offered and gives a probability for each.
 
-Current release: **1.7.6** (2026-09-28) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
+Current release: **1.7.7** (2026-10-01) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
 
 ## One plugin, installed once
 
@@ -39,9 +39,10 @@ Every result gets a label, and your agent acts on the label:
   problem — the spec and the code disagree, the change under test caused the failure, or the code
   breaks a rule. The agent investigates each one.
 - **review**: Jev leans one way but is not sure. In CI triage this also covers every failure Jev
-  blames on something other than the change. The agent reads these from the most likely down,
-  within a budget the skill sets.
-- **??**: Jev cannot tell from what it was sent. It is never a pass.
+  blames on something other than the change. The agent reads these from the most likely down (in
+  spec drift, grouped by the code they are about) and says how far it got.
+- **??**: Jev cannot tell from what it was sent. It is never a pass, and such items often hold
+  real problems.
 - **ok** (spec drift and code audit; CI triage never clears a failure): Jev is sure there is no
   problem. The agent spot-checks a couple.
 - **n/a** (code audit): the rule is not about that code. **not checked** (CI triage): TypeSafe did
@@ -83,14 +84,16 @@ set: most of its numbers come from one Java project, the same one its decision r
 Where we changed a threshold or fixed a bug after seeing a held-out result, the bullet says so. Full
 tables for CI triage, code audit and CJK reading are in the [CHANGELOG](plugins/jevmcp/CHANGELOG.md).
 
-- **CI triage** (52 held-out failed runs from 8 open-source repositories): **CHANGE** was right
-  6 times out of 6, with 0 false alarms. It fires on only 6 of the 33 failures the change caused;
-  of the other 27, 26 go to review and 1 came back `??`, and the agent decides both. The lean pointed the right way on 43 of 47
-  runs. The first held-out run was invalid (the log parser read none of those logs' job headers);
-  only the parser was fixed, and the held-out set was run again. On the tuning runs: without the
-  change under test, or with only the last 25 lines of the log, every failure came back `??` (14 of
-  14), so it says it cannot tell rather than guessing; and the same question asked 20 times gave
-  the same verdict every time, on 15 of 15 failures.
+- **CI triage** (52 held-out failed runs from 8 open-source repositories, measured again on a 1.7.7
+  candidate; the release's last fix changes what is sent for one of them, a run the change caused):
+  **CHANGE** was right 8 times out of 8, with 0 false alarms. It fires on only 8 of the 33
+  failures the change caused; of the other 25, 24 go to review and 1 came back `??`, and the agent
+  decides both. The lean pointed the right way on 45 of 50 runs. When the held-out set was first
+  scored, for 1.7.0, the first run was invalid (the log parser read none of those logs' job
+  headers); only the parser was fixed, and the held-out set was run again. On the tuning runs, as
+  measured for 1.7.0: without the change under test, or with only the last 25 lines of the log,
+  every failure came back `??` (14 of 14), so it says it cannot tell rather than guessing; and the
+  same question asked 20 times gave the same verdict every time, on 15 of 15 failures.
 - **Code audit** (91 held-out rule/code pairs from 6 repositories): **BREAKS** was right 13 times
   out of 13, and never fired on the 44 compliant pairs. It misses some violations: the list the
   agent reads (every BREAKS, plus the `review` items most likely to break a rule) held 35 of the 47
@@ -136,8 +139,9 @@ Some limits come from the model and the service:
   why an unsettled claim is asked again.
 - **In spec drift, some things the agent must judge itself,** because the model is known to get
   them wrong: settings hard-coded in the code, the behaviour of a library or framework, arithmetic
-  on variables, and logic spread across several files. A claim about what the code never does
-  cannot be settled by any excerpt of code.
+  on variables, and logic spread across several files. A claim about what the code never does is
+  seldom settled by one excerpt of code, yet such claims often hold real problems: the agent keeps
+  them, pairs them with the code that enforces them, and checks them itself.
 - **It is advisory, not a gate.** As of 21 September 2026 TypeSafe published no uptime commitment,
   and in the 90 days before that date the service was down for 194 minutes in total (about 3
   hours). Do not make a Jev check a mandatory merge gate. Never read a run that could not reach
@@ -169,9 +173,14 @@ Some limits are choices, and can change when the evidence does:
   "no code found" (exit code 2) in a project that has only such languages, such as C or C++, even
   when every requirement is paired by line range.
 - Chinese, Japanese and Korean beyond reading the spec: the list of likely spec files does not
-  recognise their spec names (仕様, 要件, 需求, 명세); code audit finds no rules in a Chinese, Japanese
-  or Korean style guide, because it knows no rule words such as 必须, べき or 해야; and the free check
-  that flags sentences about what code never does knows English words only.
+  recognise their spec names (仕様, 要件, 需求, 명세); code audit knows only some of their rule words
+  (必须, 禁止, 必ず, しなければ, 해야, 금지 and a few more, but not べき) and none in other languages, so
+  name such a rule file in `docs` and every sentence of it is drafted; and the free check that flags
+  sentences about what code never does knows English words only.
+- CI triage: a job stopped at its time limit often leans "environment", because the fixed question's
+  environment option names a cancelled or timed-out job. The facts now say how long the step ran,
+  how long it was silent and where the same step passed, and the skill tells the agent to look for
+  a hang; the question itself stays as it was measured until it is measured on a set of hangs.
 - Codex: the code-audit tools, and a CI triage sent from a Codex session, have not been verified.
 - On macOS and Windows, CI tests the server and the seven free tools on every change to the plugin; the three
   tools that send have been run with a real key on Linux only.
@@ -284,14 +293,19 @@ key into an issue or pull request.
   refuted.
 - **Nothing else changes by accident.** The 1.7.3 change for Chinese, Japanese and Korean was run
   over 3,265 other documents and 2,472 map checks on English specs; every result stayed identical.
+- **jevmcp on its own code.** Before 1.7.7, all three tools were run on jevmcp itself with the
+  released 1.7.6, and every finding was checked by reading the code. That found what 1.7.7 fixes:
+  Windows text encoding, gaps in secret redaction, a re-ask that could pass an item, CI facts taken
+  from runs made after the failure, and 37 doc sentences that the code contradicted or that said
+  more than the code does (the CHANGELOG has the list).
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (565 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (734 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
   on Linux, macOS and Windows, from an empty uv cache, runs the seven free tools and checks that the
   three that send refuse without a key.
-- **390 automated tests.**
+- **1,115 automated tests.**
 
 ## Repository layout
 

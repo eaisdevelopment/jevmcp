@@ -12,8 +12,8 @@ them, and it is the part that was measured (spec drift 1.6.0, 115 graded claims)
 
 - every item is asked once;
 - an item the single-answer gate does NOT settle is asked `samples - 1` more times, and is decided
-  only if every answer agrees and none is below a floor - so re-asking can only move an item OUT of
-  `review`, never quietly into it;
+  only if every answer came back, agrees and none is below a floor - so re-asking can only move an
+  item OUT of `review`, never quietly into it, and a failed re-ask is never a pass;
 - answers are cached as a LIST per exact request, so an unchanged item costs nothing the second time
   and the agreement gate never sees one answer three times.
 
@@ -47,7 +47,9 @@ class Item:
 
 @dataclass
 class Screened:
-    """The outcome for one item. `answers` holds every independent answer used, first one first."""
+    """The outcome for one item. `answers` holds the independent answers its action was decided on, first
+    one first: every one that came back, or only the first when asking again failed. `note` says why an
+    item that was asked again keeps its first answer's action."""
     item: Item
     action: str | None = None
     confidence: float = 0.0
@@ -56,6 +58,7 @@ class Screened:
     error: str | None = None
     request_id: str | None = None
     upstream_ms: str | None = None
+    note: str | None = None
 
     @property
     def first(self) -> dict:
@@ -103,31 +106,47 @@ def screen(items: list[Item], key: str,
     stands). Actions in `settled` are final after one answer and are never asked again.
 
     Once `cancelled()` returns true nothing further is sent. A rejected key stops the run (a
-    problem); exhausted credits stop it too (a vendor failure). Neither is ever reported as a pass:
-    items that were not checked carry `error`, and `Run.complete` is False."""
+    problem); exhausted credits stop it too (a vendor failure). After either, no new request starts
+    (those already in flight finish). Neither is ever reported as a pass:
+    items that were not checked carry `error`, and `Run.complete` is False. An item whose asking
+    again failed keeps its first answer's action with a `note`, and the failure is in `vendor`. An
+    answer that cannot be read (a part missing or of the wrong type, a choice that was not offered:
+    dd.unreadable_answer) is an API error for its item in either pass, never a crash of the run or a
+    pass, and it is never kept in the cache or replayed from it, so it is asked again."""
     run = Run(results=[Screened(item=i) for i in items])
     store = dd.load_cache() if use_cache else {}
     keys = [dd._cache_key(i.state, i.questions) for i in items]
     cache_lock, done_lock, done, replayed = threading.Lock(), threading.Lock(), [0], [0]
+    unreadable: set[str] = set()              # cache keys of answers that could not be read: never kept
 
     def answer_n(k: int, n: int) -> dict:
+        """The n-th answer for item k: replayed from the cache, unless it cannot be read (an earlier
+        version kept it) - then it is dropped with the ones after it and asked for again (dd.ask checks
+        every reply the same way, so classify never sees an answer it cannot read)."""
         with cache_lock:
             have = store.get(keys[k], [])
             if n < len(have):
-                replayed[0] += 1
-                return {"answers": have[n], "usage": {"input_tokens": 0}, "_cached": True}
+                if dd.unreadable_answer(have[n], items[k].questions) is None:
+                    replayed[0] += 1
+                    return {"answers": have[n], "usage": {"input_tokens": 0}, "_cached": True}
+                store[keys[k]] = have[:n]
         got = dd.ask(items[k].state, items[k].questions, key, cancelled=cancelled)
         if use_cache and "answers" in got:
             with cache_lock:
                 store.setdefault(keys[k], []).append(got["answers"])
         return got
 
+    stopped = threading.Event()               # a rejected key or credits used up: send nothing more
+
     def first(k: int) -> dict:
         if cancelled and cancelled():
             return {"_error": "cancelled before it was sent"}
+        if stopped.is_set():
+            return {"_error": "not sent: the run stopped early", "_halted": True}
         try:
             return answer_n(k, 0)
         except dd.Stop as e:
+            stopped.set()
             return {"_stop": e}
         finally:
             if on_answer:
@@ -139,17 +158,25 @@ def screen(items: list[Item], key: str,
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
         got = list(pool.map(first, range(len(items))))
     try:
-        for r, ans in zip(run.results, got):
+        for k, (r, ans) in enumerate(zip(run.results, got)):
             if "_stop" in ans:
                 raise ans["_stop"]
-            if "_error" in ans:
-                r.error = ans["_error"][:200]
-                run.vendor.append(f"{r.item.name} was not checked - API error: {ans['_error'][:120]}")
+            if ans.get("_halted"):             # not sent after a Stop, which is reported below
+                continue
+            error = ans.get("_error") or (None if isinstance(ans.get("answers"), dict) else "the reply held no answers")
+            if error is None:
+                try:
+                    r.action, r.confidence, r.why = classify(ans["answers"])
+                except (KeyError, TypeError, AttributeError, ValueError) as e:     # an answer missing a part
+                    r.action, error = None, f"the reply could not be read ({type(e).__name__}: {e})"
+                    unreadable.add(keys[k])
+            run.tokens += dd._input_tokens(ans)
+            if error is not None:
+                r.error = error[:200]
+                run.vendor.append(f"{r.item.name} was not checked - API error: {error[:120]}")
                 continue
             r.answers = [ans["answers"]]
-            r.action, r.confidence, r.why = classify(ans["answers"])
             r.request_id, r.upstream_ms = ans.get("_request_id"), ans.get("_upstream_ms")
-            run.tokens += ans.get("usage", {}).get("input_tokens", 0)
     except dd.VendorStop as e:
         run.vendor.append(f"the run stopped early: {e}")
     except dd.Stop as e:
@@ -158,29 +185,39 @@ def screen(items: list[Item], key: str,
         if r.action is None and r.error is None:
             r.error = "not checked: the run stopped early"
 
+    # An item is decided by agreement only when every one of its `samples` answers came back. When
+    # asking again fails, it keeps its first answer's action and why, `note` says so, and the run is
+    # not complete (dd.ask_again: nothing more is sent after a cancellation or a Stop).
     undecided = [k for k, r in enumerate(run.results) if r.action is not None and r.action not in settled]
     if samples > 1 and undecided and not run.problems and not run.vendor and not (cancelled and cancelled()):
-        def again(k: int) -> list[dict]:
-            return [answer_n(k, n) for n in range(1, samples)]
-        try:
-            with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-                more = list(pool.map(again, undecided))
-        except dd.VendorStop as e:
-            run.vendor.append(f"re-asking stopped early: {e}")
-            more = []
-        except dd.Stop as e:
-            run.problems.append(f"re-asking stopped early: {e}")
-            more = []
+        more, halted = dd.ask_again(answer_n, undecided, samples, jobs, cancelled)
+        vendor, problems = dd.reask_failures(more, halted)
+        run.vendor += vendor
+        run.problems += problems
         for k, extra in zip(undecided, more):
             r = run.results[k]
-            good = [m["answers"] for m in extra if "_error" not in m and "answers" in m]
-            run.tokens += sum(m.get("usage", {}).get("input_tokens", 0) for m in extra if "_error" not in m)
+            good = [m["answers"] for m in extra if "_error" not in m]
+            run.tokens += sum(dd._input_tokens(m) for m in extra)
+            if failed := next((m for m in extra if "_error" in m), None):
+                r.note = dd.reask_note(failed["_error"])
+                if not failed.get("_halted"):
+                    run.vendor.append(f"{r.item.name} could not be asked again - API error: "
+                                      f"{failed['_error'][:120]} (it keeps its first answer's label)")
+                continue
+            try:
+                decided = classify_samples([*r.answers, *good])
+            except (KeyError, TypeError, AttributeError, ValueError) as e:   # a wrong-typed part: confidence null
+                error = f"the reply could not be read ({type(e).__name__}: {e})"
+                r.note = dd.reask_note(error)
+                run.vendor.append(f"{r.item.name} could not be asked again - API error: {error[:120]} "
+                                  f"(it keeps its first answer's label)")
+                unreadable.add(keys[k])
+                continue
             r.answers.extend(good)
-            decided = classify_samples(r.answers)
             if decided:
                 r.action, r.confidence, r.why = decided
     if use_cache:
-        dd.save_cache(store)
+        dd.save_cache(store, drop=unreadable)
     run.replayed = replayed[0]
     return run
 

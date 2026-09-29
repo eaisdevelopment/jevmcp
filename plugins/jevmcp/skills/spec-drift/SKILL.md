@@ -110,13 +110,16 @@ never block the user's task on it.
      · `src/app.ts:120-160` (a line range, any language) · `src/config.py` (a small whole file)
      · or a list of several.
    - It is not a requirement (thesis, rationale, history, comparisons, glossary, examples,
-     lead-ins, backlog): set `"status": "excluded"` and say why in `"why"`. A backlog or rationale
-     sentence that constrains today's code *is* a requirement.
+     introductions that state nothing themselves, backlog): set `"status": "excluded"` and say why
+     in `"why"`. A backlog or rationale sentence that constrains today's code *is* a requirement.
    - Tables, byte layouts and config examples inside code blocks are skipped by the drafter: add
      those entries by hand, with the requirement written out in `text` and the block's lines
      pasted into `spec_text`.
-   - A sentence about what the code **never** does cannot be settled by pairing (blind spot 5):
-     exclude it with a `why` that says how you checked it, or reword the spec.
+   - A sentence about what the code **never** does, or a lead-in that ends in a colon, is seldom
+     settled by one excerpt (blind spot 5), but **keep it**: on jevmcp's own documentation such
+     sentences held 18 of the 28 real problems a full check found. Reword it to name the one place
+     involved, or pair it with the code that enforces it (for a lead-in, what it introduces; its
+     items are checked on their own). `validate_spec_map`'s `likely_unverifiable` names them.
    - For a long spec, work section by section. If the user wants it done thoroughly, offer a
      second pass that tries to refute each exclusion; it finds real requirements hidden in
      rationale and backlog.
@@ -136,9 +139,12 @@ never block the user's task on it.
 | Label | Your job |
 |---|---|
 | **DRIFT** | Investigate every one. Read the claim and the code that was sent, then the real code around it. Decide which side is wrong: the history of the code (`git log -p`, `git blame`) usually shows whether the change was deliberate (the spec is stale) or accidental (a bug). |
-| **review** | Sorted by P(drifted). Investigate from 0.3 up; skim below that. |
-| **??** | **Not a pass.** The code shown cannot settle the claim. Fix the map entry (add the implementation, the constant, the caller), then check that file again. The result's `map_health.entries_to_fix` says why each one could not be settled and, where the sentence's own words suggest one, what to pair it with instead. |
+| **review** | From P(drifted) 0.3 up, the report groups these by the code each claim pairs with: open each place once and read its claims against it, most likely place first. Below 0.3, skim. |
+| **??** | **Not a pass**, and such claims often hold real problems. The code shown cannot settle the claim. Fix the map entry (add the implementation, the constant, the caller), then check that file again. The result's `map_health.entries_to_fix` says why each one could not be settled and, where the sentence's own words suggest one, what to pair it with instead; the report counts them by reason. |
 | **ok** | Spot-check two, plus any whose `value_mismatch` is 0.5 or more. |
+
+A result with a `note` could not be asked again: its label is the first answer's, and the check is
+not complete. Say so.
 
 ## Always judge these yourself: the fast model's blind spots
 
@@ -149,11 +155,12 @@ never block the user's task on it.
 3. **Arithmetic on variables** (`avg / 2`). The tool works out literal expressions only.
 4. **Anything spanning several files**: module dependencies, who calls what, "only X does Y".
 5. **A claim about what the code does NOT do** - "never", "only", "no telemetry", "to nobody but".
-   No excerpt can settle it: code that does not do X proves nothing, and the one place that does
-   X reads as a refutation. Pairing "sends no telemetry" with the single function that makes a
-   request returned a confident DRIFT against correct code. Exclude such a sentence with a `why`
-   recording how you verified it by hand, or reword the spec into a positive claim about the one
-   place involved ("the only request the tool makes is the check itself").
+   One excerpt rarely settles it: code that does not do X proves nothing, and the one place that
+   does X reads as a refutation. Pairing "sends no telemetry" with the single function that makes
+   a request returned a confident DRIFT against correct code. Keep such a sentence - these claims
+   often hold real problems - and reword it into a positive claim about the one place involved
+   ("the only request the tool makes is the check itself"), or pair it with the code that enforces
+   it. Whatever its label, check it by hand.
 
 A low P(drifted) on one of these is not a pass.
 
@@ -164,12 +171,21 @@ items in the repository. Do not start workflows or sub-agents, search outside th
 or build and run code to prove a finding unless the user asks for a deep review; say what you
 would verify and how instead.
 
-**A big spec flags a lot.** A full check on a few hundred sentences can return dozens of
-`review` items; opening every one takes longer than the user is waiting for. In one pass do:
-every **DRIFT**; the highest-P **review** items until they stop being informative (about ten is
-usually plenty); and the **??** items that matter for what the user is doing, since those are
-map problems to fix. Give counts for the rest and say plainly how many you did not open, so the
-user can ask for another pass. One reply beats twenty minutes of silence.
+**A big spec flags a lot.** A full check on a few hundred sentences can return a hundred or more
+`review` items from P(drifted) 0.3 up; opening every one takes longer than the user is waiting
+for. The report is a reading plan: every **DRIFT**, then those `review` items in groups, one group
+per place in the code (`to_read` and `review_groups` in the result), most likely place first. A
+group is read by opening that code once. In one pass do: every **DRIFT**; then group by group from
+the top, as far as the user's time allows; and the **??** items that matter for what the user is
+doing, since those are map problems to fix and often hide real ones. On jevmcp's own
+documentation, the ten highest-P `review` items held 2 of the 28 real problems; the rest were
+spread across the list, so do not stop at a fixed number. Say exactly how far you got - "read N of
+G groups / K of R claims" - and give counts for the rest, so the user can ask for another pass. The
+groups and claims the reply does not show are in the results file; when `review_groups` itself is
+cut, the text says "lists the first K of N places", and `to_read.groups` still counts them all. When
+TypeSafe rejected the key, or no claim was answered, the reply is an error with no structured fields:
+when it leaves places out, its text names a file that lists every place instead. Credits running out
+part way give a normal reply that is not complete. One reply beats twenty minutes of silence.
 
 ## Keeping the map honest
 
@@ -199,8 +215,9 @@ user can ask for another pass. One reply beats twenty minutes of silence.
 ## How to report back
 
 A short table: claim (spec file:line) · label · P(drifted) · what you found · which side to fix
-(spec / code / ask the owner). Then your recommendation. If an earlier drift report exists in
-the project, say which findings are new and which are already known.
+(spec / code / ask the owner). Then how far you read ("read N of G groups / K of R claims"), and
+your recommendation. Say plainly whether every claim was checked. If an earlier drift report exists
+in the project, say which findings are new and which are already known.
 
 **Never:** send code without consent, print or ask for the key, treat `??` as a pass, overwrite
 a reviewed map, change the checker's questions or thresholds, commit without asking, block the

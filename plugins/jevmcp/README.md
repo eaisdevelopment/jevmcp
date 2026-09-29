@@ -50,8 +50,16 @@ the skills ask for your consent before the first send of each kind of data in a 
   plugin.
 - Linux, macOS or Windows. On all three, CI starts the server from an empty uv cache on every
   change to the plugin, runs the seven free tools and checks that the three that send refuse without a key. The
-  three that send have been run with a real key on Linux only. The key command for Codex below is
-  for bash or zsh; on Windows, give the full path of `jevmcp_server.py` instead.
+  three that send have been run with a real key on Linux only. Every file is read and written as
+  UTF-8, and a CI log or rule file that Windows PowerShell 5.1 saved as UTF-16 is read too, so
+  specs, rules and logs in any language work on Windows too; so do non-ASCII file names on Linux
+  under a locale whose file names are not UTF-8 (an 8-bit one, or C with Python's UTF-8 mode off),
+  where the tools start themselves again in Python's UTF-8 mode. Under an 8-bit locale, a file
+  whose name was saved in that locale's own encoding is then not found: rename it in UTF-8, or set
+  `JEVMCP_NO_UTF8_RESTART=1` to turn the restart off (in Claude Code, in the shell that starts it;
+  Codex does not pass it to the server, so there it reaches only the command lines). The key
+  command for Codex below
+  is for bash or zsh; on Windows, give the full path of `jevmcp_server.py` instead.
 - Optional: the GitHub CLI, [`gh`](https://cli.github.com), logged in — only to triage a GitHub
   Actions run by its URL. A CI log saved as a file needs nothing extra.
 
@@ -163,7 +171,7 @@ that enforce it, never the whole repository. After this, a check is one sentence
 **Code audit works the same way, with `rule_map.json`.** Ask *"Set up a code audit for this
 project"*: `draft_rule_map` collects the rules from your own rule files, and the agent reviews
 them with you — it rewrites each into one plain condition, says which files it covers, and leaves
-out rules about process or that a linter already checks. Only the rules you approve are ever sent.
+out rules about process, rules a linter already checks, and instructions to the assistant itself. Only the rules you approve are ever sent.
 
 **CI triage needs no set-up.** Give the agent a failed run's URL, or a CI log.
 
@@ -233,15 +241,16 @@ consent before the first send of each kind in a project:
   sent as written), **secret-looking values redacted** and **paths relative to your project**;
   and three fixed questions.
 - **CI triage**, per distinct failure: facts about the run, the failed step's error lines and the
-  end of its output, and an excerpt of the change under test — log lines cleaned of timestamps,
-  home folders, email addresses and secret-looking values; secret files and comment-only lines
-  left out of the change. Never the commit message or the pull request's text.
+  end of its output, and an excerpt of the change under test — log lines cleaned of GitHub's line
+  timestamps, workspace paths, home folders, email addresses and secret-looking values; secret
+  files and comment-only lines left out of the change. Never the commit message or the pull request's text.
 - **Code audit**, per rule and unit of code: the rule you approved and the unit, with comments
   removed (except for rules about comments) and secret-looking values redacted. Only files git
   tracks or would commit, never ignored ones.
 
-A `.env` file, key files, and anything outside the project (apart from CI logs you save in the
-server's private inbox) are refused, never sent. Each sending
+A `.env` file, key and credentials files (`.netrc`, `.npmrc`, `kubeconfig`, Terraform state, ...),
+and anything outside the project (apart from CI logs you save in the server's private inbox) are
+refused, never sent. Each sending
 tool has a free preview — `preview_spec_check`, `preview_ci_triage`, `preview_code_audit` (or
 `--dry-run --show-payload`) — that shows exactly what would be sent, without sending it.
 [PRIVACY.md](PRIVACY.md) has the details, including exactly which values are redacted.

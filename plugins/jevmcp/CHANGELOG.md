@@ -1,5 +1,493 @@
 # Changelog
 
+## 1.7.7 — 2026-10-01
+
+**Found by running jevmcp on its own code.** Every tool of 1.7.6 was run on jevmcp itself: a full
+spec-drift check of its own tool reference and privacy notes (565 claims: DRIFT 3, review 349, ?? 119,
+ok 94), a triage of its only failed CI run and of four staged failures with known causes, and a code audit
+with the rules in its repository and with six engineering rules written for the test. Every flagged item
+was judged by an AI agent reading the code, and every "this is wrong" verdict was re-checked by a second
+agent told to refute it. TypeSafe spend for all of it: about $0.21. This release fixes what that found.
+
+**Windows, and text in any language.** In 1.7.6, 23 reads and writes of text files, two `os.fdopen`
+calls and several `git` calls used the system's code page, which is cp1252 on Windows. Under it,
+`draft_rule_map` on a rule with Cyrillic or Chinese text failed with `UnicodeEncodeError` and left an
+empty `rule_map.json` behind, so the next draft said the map already existed, while a rule with a
+typographic quote, a dash or an accent was written in cp1252; a UTF-8 rule map made on Linux or macOS
+failed to load; source code and git diffs with non-ASCII text were sent garbled; and the three command
+lines crashed printing to a pipe. Now every file the tools read or write, and every `git` and `gh`
+output, is UTF-8; each command line prints UTF-8 whatever the console's code page and never crashes on
+the text it prints (a console set to another code page may show non-ASCII text garbled; only part of a
+file name that is not UTF-8 becomes `?`); a key file, or the `.env` that `spec_drift.py` reads, is read
+when saved as UTF-8 with a byte-order mark or as UTF-16 (Notepad's "Unicode", `>` in Windows PowerShell
+5.1), where 1.7.6 said it held no key, and so is a rule file saved as UTF-16, from which 1.7.6 drafted no
+rule, and a CI log or JUnit report saved as UTF-16, which 1.7.6 misread; a map that is not UTF-8 is
+refused with a message that says so; a rule file whose name is not UTF-8, which a map cannot record, is
+refused when named, and left out with a warning when found or inside a named folder, in a git
+repository too (1.7.6 recorded it there under a name no file has); in a project folder whose name is
+not UTF-8, the results and previews come back, under a file name with `_` for what is not UTF-8 (1.7.6
+failed with `UnicodeEncodeError`, the three tools that send only after sending); and a map write that
+fails leaves no file behind, from the tools and the command lines alike. Where the system's file names
+are not UTF-8 (on Linux, the C locale with Python's UTF-8 mode off, or an 8-bit locale), Python names
+files in the locale's encoding while git, the maps and the arguments name them in UTF-8, so a file with a
+non-ASCII name (`订单.py`, `docs/спец.md`, `ci/журнал.log`) was not found, left out of an audit without a
+word, misnamed or failed the tool. There the server and the three command lines now start themselves
+again once, in Python's UTF-8 mode, with the same command line, Python's own options included, before
+they read anything, and such a file is read under its own name; macOS, Windows and a Python already in UTF-8 mode are left as they are. The cost is under an
+8-bit locale: a file whose name was saved in that locale's own encoding (`café.py` under Latin-1 or
+cp1252) is then not found, or fails the tool. Rename such a file in UTF-8, or turn the restart off,
+which brings the old problem back for names in UTF-8: `JEVMCP_NO_UTF8_RESTART=1` in the environment
+the server or the command line starts with (for the server, the shell that starts Claude Code; Codex
+passes its server only a minimal environment, so under Codex it reaches only the command lines), or
+`python -X utf8=0` for a command line started with `python`.
+The Linux, macOS and Windows smoke job now uses Cyrillic, Chinese and typographic quotes and a CI log
+named in Cyrillic. It runs a second time in the C locale on Linux and macOS: on macOS that run checks,
+as the Windows run does in cp1252, that every file is read and written as UTF-8; on Linux the server
+restarts itself there, so that run checks the restart.
+
+**Upgrading on Windows.** A rule map that 1.7.6 or earlier drafted on Windows with a typographic quote, a
+dash or an accent in it is in that system's code page (cp1252 on Western European Windows), which 1.7.7
+does not read. On that system the message names the code page, shows the map's first line that is not
+plain ASCII read in it, from 60 characters before its first such character to 60 after, and, if that is
+as written, gives a one-line `uv run --no-project --quiet python -c "..."` command that converts the
+map to UTF-8, once: through uv, which jevmcp already needs, since a bare `python` is often missing on
+Windows or is the Microsoft Store's stub. The command takes the map's path as its argument, in forward
+slashes, so it also runs in bash, the shell Claude Code uses on Windows; a path a shell would change
+(one with a `"`, a `$` or a backtick) gets the Python statement instead. Then check that its rules read as
+written, and never re-save it from an editor that opened it as UTF-8, which loses every character it
+could not read. A rule map that does not read as text in this system's code page (read on Linux or
+macOS, or written on a Windows with another code page, Cyrillic or Greek) gets no command, since which
+code page it is in cannot be told, and one converted from the wrong one loads with every rule garbled:
+convert it on the system that wrote it, or with its code page named. A spec map is handled the same
+way.
+
+**Secret redaction closes the gaps PRIVACY.md did not admit.** Sent as written in 1.7.6, now redacted (the
+rules for code apply to the units a code audit sends and to the change a CI triage sends too):
+- in code, Go's `password := "..."` and `var password string = "..."`, and a string type declared before
+  the `=` where a declaration or a parameter starts: a type whose name ends in `str` or `string`
+  (`password: str = "..."`, `Optional[str]`, `SecretStr`, `const token: string = "..."`,
+  `let token: &str = "..."`, Kotlin's and Swift's `String`). A value of any other type
+  (`password: HashStrategy = "bcrypt"`), and the next value on a line after a `case` label, an `if`, or
+  a secret word inside a quoted value that no `:` or `=` follows, are not taken for one. A quoted text
+  that ends in a secret word and `:` or `=` (`label="Password:" placeholder="..."`) still has what follows
+  it redacted up to the next quote, as in 1.7.6. Also in code: a value with a string prefix
+  (`b"..."`, `u"..."`, C#'s `@"..."`, `r"..."` unless it holds `\`, `(` or `[`, which make it a
+  pattern, and `f"..."` unless it holds `{`), a C array (`char password[] = "..."`,
+  `char pass[64]`) or a table element whose subscript is a number or an upper-case name
+  (`TokenName[1] = "..."`), and a one-word value holding one quote of the other kind (`"p'ssw0rd"`);
+- in configuration files, a `.properties` key and value separated by spaces (`db.password hunter2`), every
+  line of a YAML block value (`password: |`) or of a `.properties` value continued with a backslash, a
+  value that starts with `|` or `>` but is not a YAML block header (`password=>Xk9q`, `token: |abc`),
+  and a quoted key (`"password": ...`). A line that continues a `.properties` value is read as a setting
+  of its own only in the `key=value` or `key: value` form, so `password=...` on the next line of a JDBC
+  URL is still redacted, as in 1.7.6, a placeholder's default there too, while words there (`password to
+  continue`) are not taken for a setting (one that continues a key, after `db.\`, is read in every
+  form), and a line with nothing to redact is sent exactly as written;
+- a default written into a placeholder (`${DB_PASSWORD:hunter2}`, `${DB_PASSWORD:-hunter2}`, and the
+  shell's and Docker Compose's `${DB_PASSWORD-hunter2}` and `${DB_PASSWORD=hunter2}` after an upper-case
+  name, though not in a JavaScript template string, where `${A-B}` is code), after an editor variable's
+  name too (Log4j2's `${env:DB_PASSWORD:-hunter2}`, the Serverless Framework's
+  `${env:DB_PASSWORD, 'hunter2'}`), and text glued to one (`${PREFIX}hunter2`), from four characters, as
+  for a quoted value, in configuration files and in a quoted secret value in code. `${DB_PASSWORD}`
+  itself, GitHub Actions expressions (`${{ ... }}`), an editor variable's name (`${env:TOKEN}`) and the
+  message of `${1:?message}` are kept, as before, and so is a path in or after a placeholder that names
+  a folder or a file (`${WORK_DIR}/token.json`, `${KEY_FILE:-/etc/app/key.pem}`);
+- a spec-map entry pointing at `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `*.env` (`prod.env`),
+  `kubeconfig`, a Terraform state or variable file, `credentials*.json` or a service-account JSON file is
+  refused, as CI triage already refused all of them but `*.env` and code audit never read them. A
+  spec map and a code audit refuse them whatever the case of the name (`.ENV`, `ID_RSA`,
+  `server.PEM`), since on a disk that ignores case (macOS's default) `.ENV` opens `.env`; CI triage
+  matches the names in lower case, as 1.7.6 did. CI triage
+  now leaves `*.env` files out of the change it sends too (1.7.6 sent a `prod.env` hunk, its secret-looking
+  values redacted). Python stub files (`.pyi`) lose their comments and docstrings, as `.py` files do.
+
+What these rules change in what is sent, and that existing spec maps send what they sent otherwise, was
+measured offline over public repositories, the test corpora and the maintainers' own projects: see
+*Measured on this release's code* below.
+
+**An answer that could not be asked again is never a pass.** A claim or rule the first answer does not
+settle is asked up to twice more (a CI failure is asked once). In 1.7.6 a failed extra answer was
+dropped, the remaining answers decided the label, and the run still reported `complete` and exit 0; the
+code audit with jevmcp's own rule found this. Credits running out while asking again gave exit 2 (a setup
+problem) instead of 3. Now an item is decided by agreement only when every answer came back. When asking
+again fails, the item keeps its first answer's label and why, with `samples` 1 (that answer alone
+decided it), gets a `note`, the failure is listed, and the run is not complete (exit 3,
+`complete: false`); and credits running out at any point is exit 3.
+Every reply, in all three tools, is now read once before it is used: each question asked has an answer,
+a choice is one of the options offered, its confidence and probabilities are numbers, and a score is a
+number. A reply without answers, or one that fails this (a confidence of null, a choice that was not
+offered), is an API error for that item, first or asked again: never a pass, never a crash of the run
+(in 1.7.6 a confident spec-drift answer with a choice it was not offered read as `ok`); a token count
+that is missing or is not a number counts 0. Such an answer
+is never kept in the cache of answers, and one an earlier version kept is not replayed: the next run
+asks again. After a cancellation, a rejected key or credits running out, no new request starts;
+requests already in flight finish. In 1.7.6 a rejected key or used-up credits still sent every
+remaining claim, rule or failure once: 40 of 40 in a test that asks four at a time, now at most four.
+
+**Spec drift: the reply is a reading plan, and `??` is read, not excluded.**
+- **The reply is capped.** One full check returned 462,896 characters, about 115,000 tokens, into the
+  agent's context. The reply now lists every DRIFT, then `review` from P(drifted) 0.3 up grouped by the code
+  each claim pairs with (one group is one place to open), then `??` counted by reason, and counts of the
+  rest, cut to fit; everything is in the results file. New structured fields: `flagged_total`,
+  `to_read`, `review_groups`, `unverifiable_by_reason`, `map_health.entries_to_fix_total`. The most
+  likely place is cut to fit what the DRIFT rows leave rather than dropped whole, and `flagged` and its
+  schema say so. The list of places is cut to fit too, never below the places the reply lists with
+  their claims; when it stops short, the text says how far it goes ("lists the first K of N places")
+  and that the rest are only in the results file. What was not checked is listed in the text up to
+  20 lines, and in full in `not_checked`. An error reply (TypeSafe rejected the key, or no claim was
+  answered) has no structured fields, so its text points only at files: one that lists every claim
+  not checked (1.7.6 listed every one in the text) and, when claims were left out, one that lists
+  every place to read; the error replies of `triage_ci_failure` and `check_code_rules` name the
+  results file alone for the rest. Credits running out part way (HTTP 402) give no error reply, in
+  all three tools: the reply keeps its structured fields, with `complete: false` and a line in
+  `not_checked` saying the run, or the re-asking, stopped early.
+- **Each `??` claim gets its own reasons.** `map_health` found a `??` result's claim by its spec line
+  alone, and one line often holds several claims (322 of the 644 claims of jevmcp's own map, as it was
+  measured): each got the reasons and pairing suggestion of the line's last claim, and was counted under
+  that claim's reason. With every claim of that map taken as `??`, 118 were wrong. The MCP tool and the
+  command line now work each out from its own claim, in `map_health`, in the results file and in the
+  count by reason.
+- **The skill no longer says "about ten is usually plenty".** On the self-check, the ten highest-P
+  `review` items held 2 of the 28 real problems; the rest were spread across the list. The agent now reads
+  group by group and says how far it got: "read N of G groups / K of R claims".
+- **Sentences about what the code does not do, and lead-ins, are kept.** `validate_spec_map`, the dry run
+  and the skill told users to exclude them, because they tend to come back `??`. On the self-check, such
+  claims held 18 of the 28 real problems. They are now kept and paired with the code that enforces them.
+- **A partly superseded document is not flagged as old** (`Part of this spec is superseded by ADR-9`,
+  `Section 3 of this spec has been superseded`, `This document has been superseded in part`), as the docs
+  already said. In `This spec is superseded ...` only words that limit the declaration to a part count,
+  so `This spec is superseded by ADR-12, part of the platform set` is still flagged, as in 1.7.6; in
+  `This spec was later (since, eventually) superseded ...` any `part`, `partly`, `mostly` or `largely`
+  later in the sentence keeps it from being flagged, as in 1.7.6.
+- `--changed` stops with a message when git takes more than 60 s, reads file names with spaces or
+  accents correctly, and, run from a folder inside a repository, finds new files where they are (1.7.6
+  looked for them at the top of the repository, so their claims were silently left out).
+
+**CI triage: facts from before the failure, and facts about time.** Thresholds are unchanged; the state
+sent changed (`ci-state-3`), so a preview made by 1.7.6 must be made again.
+- **No facts from the future.** "The same job passed on the default branch" came from the latest run there,
+  which for jevmcp's own failed run was made five hours later and already held the fix; for a scheduled or
+  manual run, the change was diffed against a newer green run, which could state "no code changed". Both now
+  use only runs made before the failed one, a note names that run, and the change is "not known" rather
+  than empty when the green run tested a newer commit. When the default branch's recent runs all tested
+  the failed run's own commit (a nightly run with no new commit), the note says so, rather than that
+  there was no earlier run. Both runs are now the branch's own: GitHub lists a pull request's runs under
+  its head branch's name, so a fork's pull request from its own `main` could be taken for the default
+  branch's record ("likely pre-existing") or for the last green run, whose commit the change was then
+  diffed against. Pull-request runs and forks' runs are skipped, up to 20 runs are read from each list,
+  and when all of them are skipped the note says so and the record, or the change, is not known. And
+  each failure is told how its own job ended there: 1.7.6 decided it for the whole run, so when `lint`
+  had already failed on the default branch, a `test` job that passed there was told it "also failed"
+  and given "likely pre-existing". A job that run did not have is not known, and a failure shared by
+  several jobs (a matrix) reads "also failed" when any of them failed there.
+- **New facts:** how long the failed step ran and its longest silence; that GitHub reports the job as
+  cancelled, or as stopped at its time limit (read from the job's annotations, a new GET request); that the
+  step was still running when the job was cancelled; and the other jobs of the matrix where the same step
+  passed. jevmcp's own Windows hang is now described as a 14 min 50 s step, silent for 14 min 49 s, stopped
+  at the 15-minute limit, that passed in 0-1 s on Linux and macOS. GitHub's record outweighs the log: for
+  a job it reports as failed, neither a time limit printed in the log nor "The operation was canceled" is
+  taken; nor is a time limit printed in the log when the job's annotations were read and name none
+  (GitHub names it there when the limit stopped the job); a time limit is taken only when the job's
+  run fits it (not more than a minute short of it, nor more than ten minutes past it by the end of the
+  failed step), and a job GitHub reports as timed out is still said to have timed out; and in a log
+  only the runner's own `##[error]` line says the step was still running (a .NET program prints the
+  same words). When GitHub reports the job as cancelled but its record of the failed step says the step
+  failed (a later step, `if: always()` or a debug session, ran on until the cancel or the time limit),
+  the facts name the failed step and its exit code and say "GitHub reports the job as cancelled later;
+  its record says this step had already failed.", never that it did not finish, a time limit or a
+  hang; an action that fails with only an `##[error]` line and no exit code keeps its own error
+  line and run time, not the later step's. A step whose start was cut off with the head of a log
+  longer than 25 MB takes its run time from GitHub's record of the step. A line with no timestamp of
+  its own (the rest of a multi-line `with:` input) no longer costs the next line of the same second
+  its time: a step then had no run time, or one that read 0 s for a 15-minute hang.
+- **A name or message the change adds or removes.** When an error line offered to the model contains a
+  name in code (6 characters or more, snake_case, camelCase or dotted) or 12 characters or more of a
+  string's text that the change adds or removes, a fact says so: "Line L4 contains `place_order`, which
+  this change removes in src/orders.py". At most three, taken from the change's redacted lines (never
+  comments or secret files), common names and file names skipped (`json_schema.py:808` is not the name
+  `json_schema`), and never read by the gate. In a staged case with 1.7.7's first facts, a test calling a
+  renamed tool fell from P(change) 0.92 to 0.71 once "None of the files the errors name is edited by this
+  change" was said, and a rewritten message read as "environment" at 0.91, though in both the error lines
+  held words the change wrote.
+- **Better error lines:** the innermost frame of a Python traceback in the project's own code, with its
+  source line; a bare exception name (`KeyboardInterrupt`); `Caused by:` lines. Code under the runner's
+  own `_actions`, `_temp` and `_tool` folders beside the workspace (an action's own script, a Python or
+  Node installed there) is not the project's: its path is kept whole, and it is neither that frame nor
+  one of the files the errors name. `FAILED` counts only in capitals and never inside a file name such
+  as `failed.log`; lower-case "failed" only in the shapes errors take. The runner's post-job cleanup is
+  no longer counted as the failed step's output.
+- **Jobs whose logs were not read are not sent.** 1.7.6 sent a placeholder for each and labelled it,
+  although the note said they were not covered. Now nothing is sent for them, and `jobs_not_checked`
+  names them in the preview, the triage and `triage.json`.
+- **Next steps that fit what is known.** `??` names only the evidence that is really missing: not a JUnit
+  report given with the log, and the failed step's whole output only for the job or file whose own log was
+  cut. There is no `gh run rerun` for a log from a file. "If it fails again, treat it as the change's"
+  became "run the same job on the base commit, with the user's approval". For a lean to the
+  environment or a flaky test whose root error line says a command or a file is missing, when no
+  later attempt of the same commit passed, the next step says a re-run tells nothing, and to check
+  that the job installs the command, or to find what should create the file (the job or the code
+  under test); another line of the step that names a missing file does not count. A command is
+  missing on a shell's `command not found` or `sh: 1: x: not found` (also
+  `/bin/sh: eval: line 9: x: not found`), Windows' `is not recognized as an internal or external
+  command` and PowerShell's `is not recognized as the name of a cmdlet` (`a name` in newer
+  versions, GitHub's default Windows shell among them), which 1.7.6 never offered as an error line, or
+  `executable file not found`; a bare `Not Found` (an HTTP 404, a Docker image, a file missing from
+  Docker's build context) gets the re-run advice. A job stopped at its time limit reads as a likely
+  hang. A lean to the change below the gate says "leans to the change at 0.88 (CHANGE needs 0.905)"
+  instead of showing a P(change) above the gate, and only when the confidence held it back, not the
+  kind of cause. When the two answers disagree (not the change, but a kind of cause that is the
+  change's), `why` and the triage's text say so instead of "leans away from the change". For a GitHub
+  run whose test step names no test, `??` asks for the JUnit report saved as a file with the log, since
+  a run takes no report.
+- **Logs from any CI:** a log with no step markers is named `(whole log)`, not `(setup)`; paths inside the
+  project folder become relative, so the facts can name the project's files; apt's and uv's "Failed to
+  fetch" are install failures (a browser test's `TypeError: Failed to fetch` is not); a log cut at 25 MB
+  says so; the workspace folders of Travis CI, GitLab's shell executor, Buildkite and TeamCity are
+  removed, and GitLab's `/builds/` no longer cuts the middle out of other paths. A log or JUnit report
+  saved as UTF-16 with a byte-order mark (`>` and `Out-File` in Windows PowerShell 5.1) is read as
+  UTF-16; 1.7.6 read a log as UTF-8, losing its steps, its exit code and its non-ASCII text.
+- **Cancelled jobs are named.** On a GitHub run, a job cancelled next to a failed one is now named in a
+  note (1.7.6 said nothing of them there): as cancelled after the failure (fail-fast) when it belongs to
+  the failed job's matrix and ended between 5 seconds before and 5 minutes after a failed job of it,
+  otherwise with how long it ran and no cause, since GitHub also cancels a job that reaches its time
+  limit. So a job of a matrix without fail-fast, stopped at its time limit minutes after another job
+  failed (the shape of jevmcp's own smoke job), is not called fail-fast. On the 73-run corpus, all 100
+  cancelled jobs in a failed job's matrix ended 0-105 s after it.
+- What this changes in the states sent was measured offline on a corpus of 73 real runs: see *Measured
+  on this release's code* below.
+
+**Code audit: setting up a rule map finds the rules.** Which files the drafter reads, which sentences it
+takes and how it flags them are still guesses from names and wording: every entry is reviewed with the
+user before anything is checked.
+- **The rule-file finder takes agent files by their exact names**, capitals included (`CLAUDE.md`,
+  `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`). In 1.7.6 it took any file whose name started with
+  `claude` or `agents`, in any capitals: on jevmcp, a user how-to gave 184 of the 204 drafted sentences,
+  and an SDK's `docs/agents.md`, a page about its `Agent` class, was read as rules. Other rule files are
+  found by a rule word in their own name, as a word of its own (`python-style-guide.md` and
+  `coding-conventions.md`, which 1.7.6 missed, and camel-case names such as `ContributingGuide.md`,
+  `CodeStyle.md` and `JSStyleGuide.md`), never by a word elsewhere in a docs path; an extensionless
+  `CONTRIBUTING` is found. `validate_rule_map` lists other documents named after an agent
+  (`claude_notes.md`, `docs/agents.md`) as `candidate_rule_files`, for the user to name if they hold
+  rules; when `draft_rule_map` finds no rule file at all, its error names them instead (`Claude.md`),
+  while the command line writes a map with no entries.
+- **Rules written as facts are drafted.** "Every call to `subprocess.run` passes `stdin`." — the form the
+  review step asks for — was dropped for having no "must"; sentences of that form are now rules. A file
+  the user names keeps every sentence, list items and lines that look like code included (one with no
+  rule wording is flagged `descriptive`). Some Chinese, Japanese and Korean rule words (必须, 必ず, 해야,
+  ...) count.
+- **Drafted rules read as written.** A numbered list item no longer becomes a fragment "<heading>: 1."
+  plus the item without its heading, and bold and bold-italic marks are taken out of the rule text
+  (`**must not**`, `you ***must not*** delete`, `_**must not**_`, `__*must not*__`), in Chinese,
+  Japanese and Korean text too (`__*...*__` there only with a space on each side): 1.7.6's draft of
+  jevmcp had 24 such fragments and 65 entries with stray `**`. A Python splat inside a sentence
+  (`**kwargs`, `f(**opts)`), at its end too, and a mask of stars (`显示为***，`, `sk-***,`, `"***"`)
+  are not taken for marks. A few shapes can still lose or leave a mark, so the review step reads
+  the text: an item that opens with an italic word keeps one, a splat that opens a sentence
+  (`**kwargs must not be logged`) loses its `**`, and a mask that ends the rule's text with no stop
+  after it (`print as sk-***`) loses its stars, all as in 1.7.6; a mask written between two
+  letters with no space (`用户名***和密码***`) is taken for bold-italic, and a lone two-star mask
+  right after a letter or a digit (`显示为**，`; `12**,`, which 1.7.6 kept) for the closing mark of a
+  bold span. A
+  comment in a reStructuredText code block no longer heads the rules below it, and an RST `#.` list
+  item, which 1.7.6 took for a heading, is read as a numbered item. Spec drift's own sentence reading is
+  unchanged.
+- **New flags:** `conduct`: a rule addressed to the assistant starts excluded ("Never ask the user for the
+  key", "The assistant must get the user's consent before it sends code"), while a rule about the code
+  is usually drafted even when it names the user or consent ("The CLI must never ask the user for the
+  key"; one that opens with "Without consent," starts excluded whatever its subject, and so does one
+  that says "in the conversation" with no subject such as "the server must" before it, even as part
+  of its own subject: "Every message in the conversation must be persisted ...", which 1.7.6
+  drafted);
+  `conditional` ("When X, ...": one such rule gave 22 false flags and nothing real; `validate_rule_map`
+  now suggests a trigger the code shows instead); and `descriptive`. `tests-only` is added to a rule
+  about test code ("Don't add tests that only check a mock"), and no longer to one whose words show that
+  it asks for tests of other code ("Every bug fix adds a regression test") or lets tests off ("except in
+  tests"), nor to one with words about production code, CI or build logs, jobs or runs, or test
+  output, results, runs, reports or steps, which a rule about test code can have too ("Test runs must
+  be hermetic: tests must not touch the network."); other wordings of the first two ("New features
+  must include tests") still get it, and the skill says to check it on every entry, both ways.
+- **A long definition is cut between statements.** A unit longer than 2,600 characters was cut into
+  windows at any line, even inside a call: a `subprocess.run(...)` and a `write_text(...)` whose last
+  arguments fell into the next window were flagged for leaving them out, the only two false flags of the
+  precise engineering rules in the self-check. A window now ends where a statement does (no bracket open,
+  no line continued with a backslash, no method chain going on: `.x`, `?.x`, `->x`); inside a statement
+  only when the window holds no such place, or the statement would not fit in the next one.
+- **The changed scope finds the changed files.** A changed file whose name holds a space, an accent, a
+  quote or a backslash, every changed file when git is set to print other prefixes (`diff.noprefix`,
+  `diff.mnemonicPrefix`), and every changed tracked file of a project that is a folder of its git
+  repository (a package of a monorepo) were silently left out of the audit of the change, as in 1.7.6;
+  each is now audited under its real name. A change outside the project's folder is not audited.
+- `draft_rule_map`'s "from N file(s)" and its `sources` count each rule file read once: `AGENTS.md`
+  linked to `CLAUDE.md` is one file (1.7.6 counted two), and a file git lists that is gone from disk is
+  not counted. `validate_rule_map` no longer lists such a link as a rule file the map does not use.
+- **Existing rule maps send what they sent**, except for the windows of definitions longer than 2,600
+  characters, units where the new secret redaction for code, listed under *Secret redaction* above,
+  applies (a secret declared with a string type or with Go's `:=`, a value with a string prefix such as
+  `b"..."` or C#'s `@"..."`, a C array or a table element with a number or an upper-case subscript
+  (`TokenName[1] = "..."`), a one-word value holding one quote of the other kind, at its end too
+  (`"hunter22'"`), and a default of, or text glued to, a `${...}` placeholder in a quoted secret value,
+  a JavaScript template string's too), and `.pyi` units, which now lose their comments and docstrings as
+  `.py` units do. That, the draft of jevmcp's own rules and the drafter's recall on three projects were
+  measured offline: see *Measured on this release's code* below.
+
+**Documentation.** The self-check found 37 sentences of `PRIVACY.md` and `docs/tools.md` that the code
+contradicted or that said more than the code does: limits and field lists (`not_checked`, `flagged`,
+`root_error`, the preview's `failures` and `questions`), the labels' agreement path, which runners' paths
+are removed, which timestamps are removed, what is read from GitHub, what a map entry may point at, when
+the dry run exits 2, how units are split, and more. Each is now true of the code. jevmcp's own spec map
+pairs 42 more claims with the code that shows them, excludes 3 sentences that state nothing checkable,
+maps every new sentence of this release, and its line ranges point at the code they were reviewed
+against. Every 1.7.7 change is documented in `PRIVACY.md`, `docs/tools.md`, `docs/how-to.md`,
+`docs/install.md` and the three skills.
+
+**Deliberately not changed.**
+- The fixed questions, their options, the thresholds and the model: they are measured. CI triage's
+  "environment" option still names "a job that was cancelled or timed out", so a hang can lean
+  "environment"; the new facts and next steps address it, and the option changes only after it is measured
+  on a set of hangs.
+- Spec drift's sentence reading: existing maps and their `--strict` CI depend on it. Rule drafting was fixed
+  inside code audit only, so a `~~~` fence or an indented code block in a spec is still read as prose (the
+  docs now say so).
+- Improvements that are not bug fixes wait for a later release: a per-rule trigger pre-filter, a ledger of
+  decided items, a pairing-repair tool, aiming the code excerpt by the claim's words, showing edited code
+  before and after, and re-asking only items whose answer could still change.
+- `check_spec_drift` still does not report spec sentences that are not in the map; `validate_spec_map` and
+  the command line do, and the docs now say so.
+- Redaction still removes the text after a quoted label that ends in a secret word and `:` or `=`, up to
+  the next quote (`"Token: " + token + " refreshed"`), as 1.7.6 did: refusing a value that starts with a
+  space or a `+` would send real secrets (`password = " hunter22"`). And a `.properties` value whose `=`
+  is on the line after its key (`db.password\` then `=hunter2`) is sent as written, as in 1.7.6, and
+  so are a triple-quoted string (`"""..."""`) and a value that holds the other kind of quote along
+  with a space (`"it's a secret"`): `PRIVACY.md` lists what is sent as written.
+- In a brace language an object literal spread over lines can still be cut inside when a window ends in
+  it: there `{` also opens a block, inside which statements must be cut.
+
+**How it was tested.**
+- **Every behaviour change has a test**, and the new tests were also run against the 1.7.6 code, where most
+  of them fail, as they should. The encoding tests run the command lines and the server under an ASCII
+  locale, and the server under cp1252 too, started so that the UTF-8 restart does not happen: they
+  test how text is read and written, and other tests run the restart and the switch that turns it off.
+- **Offline comparisons of what is sent**, before and after, for every family (below). Nothing was sent.
+
+**Measured on this release's code.** Offline and with nothing sent, 1.7.6 against 1.7.7:
+- **Secret redaction.** The states sent for jevmcp's own map (565 claims) and for the Java project's
+  earlier map (115 claims) are byte-identical to 1.7.6's. Over 645,278 text files — 19 public
+  repositories (React, Next.js, Vue, Svelte, Angular, Go, Kotlin, Swift, Rust, Ruby and Java code, HTML
+  templates included), the test corpora and the maintainers' own projects — the new rules for code change
+  1,207 lines, 119 of them distinct, each line compared whole. 94 are secrets, development defaults or
+  test fixtures' secrets now redacted (`admin_password: str = "..."`, Go's `password := "testpassword"`,
+  Python's `private_key_pem=b"..."`, a default such as `CHANGE-ME-IN-PRODUCTION`). 25 are not secrets but
+  the value of a name that holds a secret word: written with a type, with Go's `:=` or with a string
+  prefix (`token_type: str = "bearer"`, `password_prompt_absent = b"Enter dashboard password:"`), which
+  1.7.6 already redacted when written without one (`token_type = "bearer"`); text glued to a placeholder
+  in a JavaScript template string (`${AUTH0_ISSUER}oauth/token`); and, on one line of a compiled bundle,
+  the 12 names of a token table set through a numbered subscript (`TokenName[1]="Boolean"`). None is an
+  HTML or JSX attribute, a `case` label or a statement. In 6,591 configuration files, 194 lines change,
+  nearly all of them secrets written as placeholder defaults (the rule for a value that starts with
+  `|` or `>` finds none there). No line is redacted less than in 1.7.6.
+- **Spec drift's reply**, for the real results of the 1.7.6 self-check: 74,328 characters instead of
+  462,896 (-84%); its `review` claims from P(drifted) 0.3 up are 203 claims in 95 places.
+- **CI triage**, on the 73-run corpus: every state changed; the requests went from 107 to 108 (jobs
+  merged only because their outputs ended in the same post-job line are now apart, and two jobs whose logs
+  share apt's first error are now one); all 108 states now say how long the step ran, and 12 name jobs
+  where the same step passed; reading a multi-line `with:` input's lines right gave 11 states the step's
+  run time and corrected it by a second in 3. The fact about the change's own words is in 21 of the 108
+  states: it is said in 16 of the 49 runs the change caused and in 1 of the 24 it did not (answer keys
+  read only to count this, after the rules were written).
+- **Code audit.** On jevmcp, 1.7.6 drafted 204 entries (181 to review) from two files; 1.7.7 drafts 18
+  (7 to review) from `AGENTS.md`, with no fragment and no stray bold mark, the how-to named too. On
+  Django, Vite and rust-analyzer the drafter still finds 95 of the 101 rules their reviewers wrote, with
+  831 entries to read instead of 797. The states of the 126 corpus pairs are byte-identical. On jevmcp's
+  own code with the six engineering rules, 2,988 of 3,522 states are identical to 1.7.6's (498 of 587
+  units keep their lines, and none of them sends anything else); windows that start inside a statement
+  went from 48 to 19, all inside 8 statements longer than a window, and calls split across two units
+  from 1 of 21 to 0.
+- **jevmcp's own spec map** has 919 entries, 734 of them checked claims.
+
+**Measured with TypeSafe on candidates of this release** (about $0.26 in all):
+- **CI triage**, on the 73-run corpus graded as for 1.7.0, with the code before the last review round's
+  fixes: on the held-out runs (52 graded, from 8 repositories), CHANGE was right 8 times out of 8 (1.7.6:
+  6 of 6), with no false alarm and no failure the change caused passed as not the change; the lean
+  pointed the right way on 45 of 50 (1.7.6: 43 of 47). On the dev runs, CHANGE was right 5 of 5 (1.7.6:
+  4 of 4). Those fixes change what is sent for one of the 108 states, measured offline: a held-out run
+  whose change ran `apt` on a Windows runner now offers PowerShell's missing-command line as its error
+  line. It was then review, leaning to the change at P(change) 0.87, and was not sent again. The five
+  runs of jevmcp below send exactly what they sent then. jevmcp's own failed run, the Windows job
+  stopped at its time limit, went from `??` leaning environment at P(change) 0.16 to review at P(change)
+  0.44, still leaning environment, now with `KeyboardInterrupt` as its root line and "Looks like a hang"
+  as its next step. Of four staged failures of jevmcp's smoke test, the two the environment caused lean
+  environment; a renamed tool leans "update the test" at 0.80, below the 0.905 that CHANGE needs
+  (P(change) 0.87); and a changed error message is still read as environment (P(change) 0.04), because
+  the log never says what the test expected.
+- **Spec drift**, a full check of jevmcp's own map as it was then (704 claims), with an earlier
+  candidate's code: DRIFT 4, review 494, `??` 101, ok 105, for $0.098 in 122 s of checking. The 4 DRIFT
+  claims were read against the code and are accurate: the model is wrong on them. The reply is 77,429
+  characters (1.7.6: 462,896).
+- **Code audit** of jevmcp's own code, with an earlier candidate's code: with the six engineering rules,
+  none of the 27 violations 1.7.6 had was left (an AST check finds none in this release's code either),
+  and every item to read was a false alarm, 20 of the 22 from the one conditional rule, the kind
+  `validate_rule_map` now warns about. With the rule from `AGENTS.md`, the re-ask bug it found was
+  fixed, and none of the ten items it ranked highest broke the rule.
+- **Tests:** 1,115 automated tests (one is skipped unless a file owned by another user exists). The change
+  was reviewed by independent agents in repeated rounds, each finding re-checked by a second agent told to
+  refute it. What the last round still found in this release's changes, and what 1.7.6 already did that
+  this release leaves for later, is listed below.
+
+**Known issues** (to be fixed in a later release). Found in this release's own changes by the last review
+round:
+- **CI triage, an action that failed on its own** keeps its own lines and run time (see above) only when
+  the job's time limit is in GitHub's annotation alone. When the log also prints the limit line
+  (`##[error]The job has exceeded the maximum execution time of ...`), the failed step gets the limit line
+  instead of its own error and the later step's run time and silence, next to "its record says this step
+  had already failed".
+- **CI triage, cancelled jobs of a matrix.** Triaging a cancelled job by its own URL calls a sibling of
+  its matrix that its own time limit stopped "cancelled after the failure (fail-fast)". A matrix whose
+  jobs set their own `name:` (no `base (values)` names) is not seen as one matrix: its fail-fast cancels
+  get the neutral note that suggests passing a job's own URL, and no fact says whether the same step
+  passed in the other jobs of its matrix.
+- **Rule-map drafting, stars.** A Python splat that ends a sentence (`must accept **kwargs.`) still loses
+  its `**` when the next sentence of the paragraph has a `**` of its own (a power `x**2`, a mask such as
+  `sk-***`), and that one is lost too; "at its end too" above holds only without one. A mask written with
+  separators (`***-***-1234`, `192.168.***.***`, `***@***.com`, `10.0.**.**`) is taken for bold and loses
+  its stars. 1.7.6 kept all of these as written.
+- **A run stopped by TypeSafe.** Requests go out several at a time (`jobs`). When the key is rejected or
+  the credits run out, the answers already received for items later in order are dropped: they are
+  missing from the results, the count and the cost, though TypeSafe answered them. When the stop hits the
+  first item in order, every answer is dropped and the reply is an error reply ("checked 0", $0),
+  although the paragraph on HTTP 402 above says credits running out part way give no error reply.
+
+Also in 1.7.6:
+- **Secrets still sent as written:** a commented-out setting in a config file (`# password: ...`); a YAML
+  secret on the lines below its key without `|` or `>` (a list under `api_keys:`, or a plain value on the
+  next line); the lines after `password = """` in a TOML multi-line string; a password inside a JDBC URL or
+  a connection string (`?password=...`, `Password=...;`); a declaration typed `Final`, `ClassVar` or `Any`
+  (`SECRET_KEY: Final = "..."`); C and C++ `L"..."` and `u8"..."` strings and C#'s `$"..."`.
+- **CI triage on Windows** reads a log file under `.git\` or a secret file in a subfolder
+  (`deploy\id_rsa`, `ci\.npmrc`), which it refuses on Linux and macOS: its guard compares the backslash
+  path with `/` patterns.
+- **Maps:** a spec or rule map saved as UTF-8 with a byte-order mark is refused as invalid JSON. Save it
+  without the mark.
+- **File names that are not valid UTF-8:** a code file with such a name, paired with a claim or holding
+  a draft's suggested code, makes spec drift fail with an internal error (on the command line, a
+  traceback and exit 1, which reads as "at least one DRIFT").
+- **Git in another language:** outside a git repository, when git prints its messages in another
+  language, `draft_rule_map` and `draft_spec_map` stop with "git could not list this project's files".
+- **Rule-map drafting** does not find Claude Code's `.claude/rules/*.md` or Cline's `.clinerules/`: name
+  such a file to draft from it. On Windows, a rule from an `AGENTS.md` or `CLAUDE.md` two or more folders
+  deep gets a scope with a backslash, which matches no file on Linux or macOS.
+- **CI triage** names no project file and offers no traceback frame from a container job's workspace
+  (`/__w/<repo>/<repo>/`) or a self-hosted runner's (`.../_work/<repo>/<repo>/`), and it takes Azure
+  Pipelines' `_tasks` folder for the workspace, so a task's own script is named as a project file. Jobs
+  that failed at different steps with the same first error are merged and told "2 jobs failed at this
+  step", with one step's name and run time.
+- **Spec drift:** two map entries with the same sentence and the same code share their answers, so one
+  can be decided on two independent answers instead of three.
+- **Reply size:** during an outage, `check_code_rules`' error reply lists every request that was not
+  checked, and `check_spec_drift`'s map problems are listed in full (a map broken by a rename can give a
+  reply of over 250,000 characters).
+- **`check_spec_drift`'s output schema** describes `complete` as "every selected claim was checked", but it
+  is also false when every claim was checked and only a re-ask failed or a map entry was unusable.
+
 ## 1.7.6 — 2026-09-28
 
 **Documentation only.** No code changed; every tool behaves exactly as in 1.7.5.

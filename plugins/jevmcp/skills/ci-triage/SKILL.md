@@ -101,12 +101,16 @@ failures the change had caused. It never produced a CHANGE.
 | Label | Your job |
 |---|---|
 | **CHANGE** | The change under test broke it, confidently. Read `root_error` and the files it names, then the change. Lean `change: fix the code`: fix the code; re-running will not help. Lean `change: update the test`: the model says a test still expects behaviour the change altered on purpose. **Confirm with the user that the new behaviour is intended before you edit any assertion, snapshot or fixture** - updating a test to match broken code hides a regression. |
-| **review** | Sorted by P(caused by the change). The `lean` (environment, dependency outside the change, flaky test, change) is the model's opinion, not a verdict. Read the root error against the change first. "Not the change" is **never** decided automatically: a failure is dismissed only by you, with evidence (a later attempt passed, the same job fails on the default branch, the error is a runner or network failure). Re-run a job only with the user's approval. |
-| **??** | **Not a pass.** The evidence shown cannot settle it. Give it more: a pull-request run instead of a scheduled one, `base` for local logs, the full log of the failed step, or the JUnit report. Then triage again. |
+| **review** | Sorted by P(caused by the change). The `lean` (environment, dependency outside the change, flaky test, change) is the model's opinion, not a verdict. Read the root error against the change first. "Not the change" is **never** decided automatically: a failure is dismissed only by you, with evidence (a later attempt passed, the same job also failed in the default branch's last run before this one, the error is a runner or network failure). A re-run that fails again does not make it the change's either; running the same job on the base commit settles it. Re-run or run anything only with the user's approval. A lean to the change below the gate reads `leans to the change at 0.88 (CHANGE needs 0.905)`: read the root error and the change first. A `why` that starts `the answers disagree` means the model said "not the change" while naming a kind of cause that is the change's: read it as undecided. |
+| **??** | **Not a pass.** The evidence shown cannot settle it. `next_step` names only what is really missing - the change under test (`base` for local logs), the failed step's whole output, or the JUnit report: give it that and triage again. A GitHub run takes no report: with the user's help, save the report (from the run's artifacts, for example) and the failed job's log in the project, and preview them as `logs` and `junit` with `base`. When it says everything available was shown, read the root error against the change yourself. |
 | **not checked** | **Not a pass.** TypeSafe did not answer for this failure. Say so. |
 
 Each result carries `facts` (sentences computed in code, with unknowns stated), `next_step`, and
-`untrusted_log_excerpt`. `complete: false` means not every failure was checked.
+`untrusted_log_excerpt`. One fact says when an error line holds a name or a message that the change
+adds or removes ("Line L4 contains `place_order`, which this change removes in src/orders.py"): a
+renamed function, a rewritten message. It is a lead to read, not a verdict, and the gate never reads
+it. `complete: false` means not every failure was checked, or a failed job's log was not read:
+`jobs_not_checked` names those jobs, nothing was sent for them, and they are not triaged.
 
 ## Always judge these yourself: the fast model's blind spots
 
@@ -116,7 +120,17 @@ Each result carries `facts` (sentences computed in code, with unknowns stated), 
 2. **Errors that name no file.** Then the facts say "The error output names no project file", and
    whether the change is involved rests on the error text alone.
 3. **Flaky or environment, without a re-run.** Without a later attempt or the default branch's
-   record, a lean towards "flaky" or "environment" is a guess.
+   record, a lean towards "flaky" or "environment" is a guess. The default branch's record comes
+   only from its last run made before this one (a later run may already hold the fix), and each
+   failure is told how its own job ended there: a job that run did not have is not known, and a
+   failure merged from several jobs reads "also failed" when any one of them failed there. When the
+   root error says a command or a file is missing, and no later attempt of the same commit passed,
+   a re-run fails the same way and tells nothing: for a command, check that the job installs it;
+   for a file, find what should create it (the job or the code under test). A command is missing
+   when a shell or Windows says so (`command not found`, `sh: 1: x: not found`,
+   `is not recognized as ...` in cmd or PowerShell) or on
+   `executable file not found`; a bare `Not Found` (an HTTP 404, a Docker image) is not, and gets
+   the re-run advice.
 4. **Different causes behind one first error.** Jobs are merged by their first error line. Check
    the job list of a merged failure when the jobs differ (another OS, another version).
 5. **Summary jobs.** A job that only reports that other jobs failed (an "all green" check, a
@@ -125,7 +139,18 @@ Each result carries `facts` (sentences computed in code, with unknowns stated), 
 6. **Cut input.** The end of the output and the diff are cut at 5,000 characters each, and at most
    30 error lines are offered. A cause printed early in a long log, or in a large change, may not
    have been shown. In a run with many failed jobs, the logs of the jobs after the first 40, or
-   after 50 MB of logs, are not read: a note names those jobs, and the triage does not cover them.
+   after 50 MB of logs, are not read, and neither is a log that could not be downloaded: a note
+   names those jobs, `jobs_not_checked` lists them, and nothing is sent for them. They are not
+   triaged: say so.
+7. **A hang reads as the environment.** A job stopped at its time limit, or a step still running
+   when the job was cancelled, often leans "environment" - but a test or tool that waits forever is
+   a code problem, often one the change brought in. The facts say how long the step ran, how long it
+   printed nothing, and where the same step passed in other jobs of the run. When GitHub reports the
+   time limit, `next_step` says a re-run will likely stop the same way; for a step that was only
+   cancelled while running it does not, so when the facts show a long silence, treat it as a likely
+   hang yourself before any re-run. Look at where the step's output stops and what it waits on.
+   When the facts say the job was cancelled later and the step had already failed, the step ended
+   on its own (a later step ran on): read it as that step's failure, not as a hang.
 
 A low P(caused by the change) on one of these is not a clearance.
 
@@ -140,7 +165,7 @@ read by other means (see "Before anything is sent").
 
 A short table: failed step (jobs) · label · lean · P(caused by the change) · root error (quoted as
 log text) · what you found · next step. Then your recommendation. Say plainly whether every failure
-was checked.
+was checked, and name any job that was not.
 
 **Never:** send CI logs or change excerpts without the user's consent in this conversation, triage
 the previewed failures yourself instead of asking for that consent (unless the user asks you to),

@@ -92,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.6"
+VERSION = "1.7.7"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -189,11 +189,12 @@ SPEC_DRIFT_TOOLS = [
         "annotations": {"title": "Check the code against the spec", "readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": True},
         "description": (
-            "Check code against the spec with TypeSafe's fast model and return the results, most "
-            "important first: DRIFT, then 'review' sorted by P(drifted), then '??' (not a pass), then "
-            "a count of 'ok'. By default only claims about the files git reports as changed are "
-            "checked (a few seconds, fractions of a cent). Sends the spec sentence and the paired code "
-            "(comments removed, secrets redacted) to TypeSafe."),
+            "Check code against the spec with TypeSafe's fast model and return a reading plan, most "
+            "important first: every DRIFT, then 'review' from P(drifted) 0.3 up grouped by the code each "
+            "claim pairs with (one group = one place to open), then '??' (not a pass) counted by reason, "
+            "then counts. The reply is cut to fit; every result is in results_file. By default only claims "
+            "about the files git reports as changed are checked (a few seconds, fractions of a cent). Sends "
+            "the spec sentence and the paired code (comments removed, secrets redacted) to TypeSafe."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -230,13 +231,23 @@ SPEC_DRIFT_TOOLS = [
                 "not_checked": {"type": "array", "items": {"type": "string"}},
                 "map_health": {"type": "object", "description":
                     "what the run says about the MAP: how many claims came back ?? (their pairing "
-                    "cannot settle them), and for each, why and what to pair it with instead",
+                    "cannot settle them), and for each, why and what to pair it with instead (cut to fit: "
+                    "entries_to_fix_total counts them all, and each ?? result in results_file carries its "
+                    "reasons and try_pairing_with when there are any)",
                     "properties": {"checked": {"type": "integer"}, "unverifiable": {"type": "integer"},
                                    "unverifiable_pct": {"type": "number"},
                                    "most_often_paired_with": {"type": "array"},
-                                   "entries_to_fix": {"type": "array", "items": {"type": "object"}}},
-                    "required": ["checked", "unverifiable", "unverifiable_pct", "entries_to_fix"]},
-                "flagged": {"type": "array", "description": "DRIFT, then review by P(drifted), then ??",
+                                   "entries_to_fix": {"type": "array", "items": {"type": "object"}},
+                                   "entries_to_fix_total": {"type": "integer"}},
+                    "required": ["checked", "unverifiable", "unverifiable_pct", "entries_to_fix",
+                                 "entries_to_fix_total"]},
+                "flagged": {"type": "array", "description":
+                            "the claims to read, in reading order: every DRIFT, then review from P(drifted) 0.3 "
+                            "up grouped by the code each claim pairs with (see review_groups), then ??, then the "
+                            "rest of review; cut to fit (a group is shown whole or not at all, except the first "
+                            "group - the most likely place - which lists as many of its claims as fit after the "
+                            "DRIFT rows; review_groups[].shown says how many of each place's claims are listed) "
+                            "- flagged_total counts them all, and every result is in results_file",
                             "items": {"type": "object", "properties": {
                     "label": {"type": "string", "enum": ["DRIFT", "review", "??"]},
                     "doc": {"type": "string"}, "line": {"type": "integer"}, "claim": {"type": "string"},
@@ -244,8 +255,39 @@ SPEC_DRIFT_TOOLS = [
                     "value_mismatch": {"type": ["number", "null"]},
                     "code_refs": {"type": "array", "items": {"type": "string"}}, "why": {"type": "string"},
                     "samples": {"type": "integer", "description": "how many times this claim was asked about"},
+                    "note": {"type": "string", "description": "why the label is the first answer's: asking "
+                                                            "again failed, so the run is not complete"},
                     "next_step": {"type": "string", "description": "on a DRIFT: the decision to make"}},
                     "required": ["label", "doc", "line", "claim", "p_drifted", "code_refs", "why"]}},
+                "flagged_total": {"type": "integer", "description": "every DRIFT, review and ?? claim"},
+                "to_read": {"type": "object", "additionalProperties": False, "description":
+                            "the reading list - every DRIFT, and review from P(drifted) 0.3 up in groups, one "
+                            "group per place in the code - and how much of it this reply shows. Report what "
+                            "was read as N of groups groups / K of review claims",
+                            "properties": {k: {"type": "integer"} for k in ("drift", "drift_shown", "review",
+                                                                             "review_shown", "groups",
+                                                                             "groups_shown")},
+                            "required": ["drift", "drift_shown", "review", "review_shown", "groups",
+                                         "groups_shown"]},
+                "review_groups": {"type": "array", "description":
+                                  "every place to open for review from P(drifted) 0.3 up (the first code_refs "
+                                  "entry of its claims), most likely first; shown: how many of its claims this "
+                                  "reply lists (the rest are in results_file). Cut to fit: to_read.groups "
+                                  "counts every place, and the text says when this list stops short",
+                                  "items": {"type": "object", "additionalProperties": False, "properties": {
+                                      "code": {"type": "string"}, "claims": {"type": "integer"},
+                                      "shown": {"type": "integer"}, "p_drifted_max": {"type": "number"}},
+                                      "required": ["code", "claims", "shown", "p_drifted_max"]}},
+                "unverifiable_by_reason": {"type": "array", "description":
+                                           "the ?? claims counted by why they came back ?? (the first cause the "
+                                           "map's own check names, else the model's), most common first; at: a "
+                                           "few of them",
+                                           "items": {"type": "object", "additionalProperties": False,
+                                                     "properties": {"reason": {"type": "string"},
+                                                                    "claims": {"type": "integer"},
+                                                                    "at": {"type": "array",
+                                                                           "items": {"type": "string"}}},
+                                                     "required": ["reason", "claims", "at"]}},
                 "warnings": {"type": "array", "items": {"type": "string"},
                              "description": "spec files in a folder the map's specs names that were NOT used: a "
                                             "skipped folder that holds some, a link not followed, a name that is "
@@ -253,7 +295,7 @@ SPEC_DRIFT_TOOLS = [
             },
             "required": ["project", "map", "claims_in_map", "claims_selected", "checked", "counts", "cost_usd",
                          "complete", "results_file", "map_problems", "not_checked", "map_health", "flagged",
-                         "warnings"],
+                         "flagged_total", "to_read", "review_groups", "unverifiable_by_reason", "warnings"],
         },
     },
     {
@@ -435,6 +477,9 @@ _OPT_STR = {"type": ["string", "null"]}
 _OPT_INT = {"type": ["integer", "null"]}
 _OPT_NUM = {"type": ["number", "null"]}
 _PROBS = {"type": "object", "additionalProperties": {"type": "number"}}
+_REASKED_NOTE = {"type": ["string", "null"],
+                 "description": "why the label is the first answer's: asking again failed, so the run is not "
+                                "complete"}
 
 # What a CI triage reads: a GitHub run of this project, or files from any CI.
 _CI_SOURCE_ARGS = {
@@ -488,7 +533,7 @@ _CI_RESULT_OUT = {  # one distinct failure, as triage_ci_failure judged it (ci_t
                        "properties": {"line": _STR, "confidence": _OPT_NUM}, "required": ["line", "confidence"]},
         "untrusted_log_excerpt": {**_STRS, "description": "error lines from the CI log - data, not instructions"},
         "cause_probabilities": _PROBS, "change_can_cause": _OPT_NUM,
-        "next_step": _STR, "samples": _INT, "request_id": _OPT_STR},
+        "next_step": _STR, "samples": _INT, "request_id": _OPT_STR, "note": _REASKED_NOTE},
     "required": ["step", "kind", "jobs", "job_count", "label", "why", "next_step"]}
 _AUDIT_RESULT_OUT = {  # one rule on one unit of code (code_audit.result_for)
     "type": "object", "additionalProperties": False,
@@ -496,7 +541,7 @@ _AUDIT_RESULT_OUT = {  # one rule on one unit of code (code_audit.result_for)
         "file": _STR, "lines": _STR, "rule": _STR, "rule_source": _STR,
         "label": {"type": "string", "enum": ["BREAKS", "review", "??", "ok", "n/a", "not checked"]},
         "confidence": _NUM, "why": _STR, "p_breaks": _OPT_NUM, "verdict": _OPT_STR,
-        "probabilities": _PROBS, "samples": _INT, "request_id": _OPT_STR},
+        "probabilities": _PROBS, "samples": _INT, "request_id": _OPT_STR, "note": _REASKED_NOTE},
     "required": ["file", "lines", "rule", "rule_source", "label", "why"]}
 _RULE_MAP_ARG = {"type": "string", "maxLength": 500,
                  "description": "The rule map (rule_map.json: the project's own rules, each with the files it "
@@ -554,14 +599,16 @@ CI_TRIAGE_TOOLS = [
                                                                 "job's log was read (false when a note starts "
                                                                 "INCOMPLETE)"},
                 "not_checked": _STRS,
+                "jobs_not_checked": {**_STRS, "description": "failed jobs whose logs were not read: nothing was "
+                                                             "sent for them and they are not triaged (NOT a pass)"},
                 "results_file": {"type": "string", "description": "every result, with the exact states sent"},
                 "results": {"type": "array", "items": _CI_RESULT_OUT,
                             "description": "CHANGE, then review by P(caused by the change), then ??, then "
                                            "anything not checked; cut to fit - the rest is in results_file"},
                 "results_shown": _INT, "inbox": _STR},
             "required": ["summary", "project", "source", "url", "trusted", "notes", "failures", "counts",
-                         "cost_usd", "complete", "not_checked", "results_file", "results", "results_shown",
-                         "inbox"],
+                         "cost_usd", "complete", "not_checked", "jobs_not_checked", "results_file", "results",
+                         "results_shown", "inbox"],
         },
     },
     {
@@ -590,14 +637,16 @@ CI_TRIAGE_TOOLS = [
                 "notes": _STRS, "model": _STR,
                 "failures": {"type": "array", "items": _CI_FAILURE_OUT},
                 "failures_total": _INT, "requests": _INT, "estimated_tokens": _INT, "estimate_usd": _NUM,
+                "jobs_not_checked": {**_STRS, "description": "failed jobs whose logs were not read: nothing is "
+                                                             "sent for them and they are not triaged (NOT a pass)"},
                 "questions": {"type": "object", "description": "the fixed questions asked about every failure "
                                                                "(only the number of L1..Ln options varies)"},
                 "snapshot": {"type": "string", "description": "pass to triage_ci_failure as snapshot"},
                 "preview_file": {"type": "string", "description": "every state in full"},
                 "inbox": {"type": "string", "description": "private folder (0700) for log files from other CIs"}},
             "required": ["project", "source", "url", "trusted", "notes", "model", "failures", "failures_total",
-                         "requests", "estimated_tokens", "estimate_usd", "questions", "snapshot", "preview_file",
-                         "inbox"],
+                         "requests", "estimated_tokens", "estimate_usd", "jobs_not_checked", "questions",
+                         "snapshot", "preview_file", "inbox"],
         },
     },
 ]
@@ -705,9 +754,9 @@ CODE_AUDIT_TOOLS = [
         "description": (
             "Free - sends nothing. Check rule_map.json: how many entries are reviewed, still draft or "
             "excluded; problems (a reviewed entry without a rule, a scope that matches no file, an exclusion "
-            "without a why); rules phrased as a negation, exception or compound, which tend to come back ?? "
-            "or as false alarms; and rule files in the project the map does not use. Run after editing the "
-            "map or the rule files."),
+            "without a why); rules phrased as a negation, exception, compound or condition, which tend to come "
+            "back ?? or as false alarms; rule files in the project the map does not use, and other documents "
+            "named after a coding agent that may hold rules. Run after editing the map or the rule files."),
         "inputSchema": {
             "type": "object",
             "properties": {"map": _RULE_MAP_ARG, "project": _PROJECT_ARG},
@@ -719,9 +768,14 @@ CODE_AUDIT_TOOLS = [
                 "project": _STR, "map": _STR,
                 "ready": {"type": "boolean", "description": "no problems and at least one reviewed rule"},
                 "entries": _INT, "reviewed": _INT, "draft": _INT, "excluded": _INT,
-                "problems": _STRS, "notes": _STRS, "rule_files_not_in_map": _STRS},
+                "problems": _STRS, "notes": _STRS, "rule_files_not_in_map": _STRS,
+                "candidate_rule_files": {**_STRS, "description": "documents named after a coding agent "
+                                                                 "(claude_notes.md, agents-howto.md) that the map "
+                                                                 "does not use and the finder does not take: they "
+                                                                 "may hold rules, or be about the agent. Pass them "
+                                                                 "in draft_rule_map's docs if they hold rules"}},
             "required": ["project", "map", "ready", "entries", "reviewed", "draft", "excluded", "problems",
-                         "notes", "rule_files_not_in_map"],
+                         "notes", "rule_files_not_in_map", "candidate_rule_files"],
         },
     },
     {
@@ -732,7 +786,9 @@ CODE_AUDIT_TOOLS = [
         "description": (
             "Set up code audit for a project: collect every rule sentence from its own rule files (CLAUDE.md, "
             "AGENTS.md, CONTRIBUTING, style guides - or the docs you name) into a new rule map for review. "
-            "Rules about process (commits, pull requests) or that a linter already checks start excluded. "
+            "Every sentence of a file you name is kept; those without rule wording are flagged descriptive. "
+            "Rules about process (commits, pull requests), that a linter already checks, or about how the "
+            "assistant works (ask the user, consent) start excluded. "
             "Every draft entry must then be reviewed with the user - rewrite `rule` as one positive condition, "
             "correct `scope`, set status reviewed, or excluded with a why - before check_code_rules sends it. "
             "Free: sends nothing. Never overwrites a file."),
@@ -754,7 +810,7 @@ CODE_AUDIT_TOOLS = [
                 "project": _STR, "out": _STR, "sources": _STRS, "entries": _INT, "draft": _INT, "excluded": _INT,
                 "flagged": {"type": "object", "additionalProperties": _INT,
                             "description": "how many entries carry each flag (negation, exception, compound, "
-                                           "process, linter, comments)"}},
+                                           "conditional, process, linter, conduct, comments, descriptive)"}},
             "required": ["project", "out", "sources", "entries", "draft", "excluded", "flagged"],
         },
     },
@@ -826,7 +882,7 @@ def set_key(target: Path | None = None) -> int:
         print("nothing entered - no file written", file=sys.stderr)
         return 2
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+    with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
         f.write(f"TYPESAFE_API_KEY={key}\n")
     print(f"Stored in {target} - only you can read it, and it survives plugin updates.\n"
           f"Restart your agent; the jevmcp server picks it up at its next start.", file=sys.stderr)
@@ -961,8 +1017,19 @@ class Server:
         """Where a tool family's last full results go (they include what was sent): a private
         folder of this process (0700), one file per family and project (0600) - a CI triage
         never overwrites the last spec-drift check."""
-        tag = hashlib.sha256(str(self.root).encode()).hexdigest()[:8]
-        out = self.private() / f"last-{name}-{self.root.name}-{tag}.json"
+        tag = hashlib.sha256(os.fsencode(self.root)).hexdigest()[:8]     # a folder name need not be UTF-8
+        # but the path goes out in a UTF-8 reply, and the client opens the UTF-8 bytes it reads there: a byte
+        # that is not UTF-8 would arrive as "?", and a locale whose file names are not UTF-8 (C, cp1252) writes
+        # a letter outside ASCII as other bytes, or cannot write it. Then each such letter becomes "_" here (the
+        # tag still tells projects apart), so the file the reply names is the one on disk.
+        stem = dd._readable(self.root.name).replace("\ufffd", "_")
+        try:
+            same = os.fsencode(stem) == stem.encode("utf-8")
+        except UnicodeEncodeError:
+            same = False
+        if not same:
+            stem = re.sub(r"[^\x20-\x7e]", "_", stem)
+        out = self.private() / f"last-{name}-{stem}-{tag}.json"
         out.touch(mode=0o600)
         return out
 
@@ -1111,8 +1178,11 @@ class Server:
                       "complete": not problems, "results_file": None, "map_problems": problems,
                       "not_checked": [],
                       "map_health": {"checked": 0, "unverifiable": 0, "unverifiable_pct": 0.0,
-                                     "most_often_paired_with": [], "entries_to_fix": []},
-                      "flagged": [], "warnings": warnings}
+                                     "most_often_paired_with": [], "entries_to_fix": [], "entries_to_fix_total": 0},
+                      "flagged": [], "flagged_total": 0,
+                      "to_read": {k: 0 for k in ("drift", "drift_shown", "review", "review_shown", "groups",
+                                                 "groups_shown")},
+                      "review_groups": [], "unverifiable_by_reason": [], "warnings": warnings}
         if not claims:
             head.append("nothing to check" + ("" if all else " - no claim in the map is about those files. "
                                               "Use all=true for a full check."))
@@ -1124,35 +1194,64 @@ class Server:
                                                            on_answer=self.progress,
                                                            cancelled=self.current_cancel.is_set,
                                                            samples=self.samples)
+        mh = dd.map_health(results, claims, syms)
+        mh["entries_to_fix"] = _entries_to_fix(results, claims, syms)
+        # The reply lists only what fits; each ?? result keeps what map_health says about it, so the
+        # results file holds everything the reply leaves out.
+        for r, e in zip([r for r in results if r["label"] == "??"], mh["entries_to_fix"]):
+            r.update({k: e[k] for k in ("reasons", "try_pairing_with") if e.get(k)})
         out = self.results_file("check")
-        out.write_text(json.dumps(results, indent=1, ensure_ascii=False))
+        out.write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
         head[0] += f" | checked {len(results)} in {time.perf_counter() - t:.1f}s | ${tokens * 0.042 / 1e6:.4f}"
-        text = "\n".join(head + [""] + _report(results, str(out)))
+        plan = _reading_plan(results)
+        is_error = bool(stopped) or (bool(failed) and not results)
+        places = None                             # an error reply has no structuredContent.review_groups:
+        if is_error and plan["to_read"]["review_shown"] < plan["to_read"]["review"]:   # every place goes to a file
+            places = self.results_file("check-groups")
+            places.write_text(json.dumps([{"code": code, "claims": len(rs), "p_drifted_max": _p_drifted(rs[0]),
+                                           "at": [f"{r['doc']}:{r['line']}" for r in rs]}
+                                          for code, rs, _ in plan["groups"]], indent=1, ensure_ascii=False),
+                              encoding="utf-8")
+        text = "\n".join(head + [""] + _report(results, str(out), plan, places and str(places)))
         if stopped or failed:
-            text += "\n\nINCOMPLETE - not everything was checked:\n" + "\n".join(f"  - {p}" for p in stopped + failed)
+            gone = stopped + failed               # one line per claim when TypeSafe is down: show the first
+            where = "structuredContent.not_checked"
+            if len(gone) > 20 and is_error:       # an error reply has no structuredContent: the rest go to a file
+                lost = self.results_file("check-not-checked")
+                lost.write_text(json.dumps(gone, indent=1, ensure_ascii=False), encoding="utf-8")
+                where = f"all {len(gone)} are listed in {lost}"
+            text += ("\n\nINCOMPLETE - not everything was checked:\n" + "\n".join(f"  - {p}" for p in gone[:20])
+                     + (f"\n  ... and {len(gone) - 20} more ({where})" if len(gone) > 20 else ""))
             if failed and not stopped:
                 text += "\n  (TypeSafe could not be used - not a problem with the code. Carry on without it.)"
+        fixes = _fit(mh["entries_to_fix"], INLINE_BUDGET // 3)
         structured.update(
             checked=len(results), cost_usd=round(tokens * 0.042 / 1e6, 6), results_file=str(out),
             counts={k: sum(1 for r in results if r["label"] == k) for k in ("DRIFT", "review", "??", "ok")},
             complete=not (problems or stopped or failed), not_checked=stopped + failed,
-            map_health=dd.map_health(results, claims, syms),
-            flagged=[{"label": r["label"], "doc": r["doc"], "line": r["line"], "claim": r["claim"],
-                      "p_drifted": r["probabilities"].get("drifted", 0.0), "severity": r["severity"],
-                      "value_mismatch": r.get("value_mismatch"), "code_refs": r["code_refs"],
-                      "why": r["why"], "samples": r.get("samples", 1),
-                      **({"next_step": dd.next_step_for_drift(r)} if r["label"] == "DRIFT" else {})}
-                     for r in _in_triage_order(results) if r["label"] != "ok"])
-        mh = structured["map_health"]
+            map_health={**mh, "entries_to_fix": fixes, "entries_to_fix_total": len(mh["entries_to_fix"])},
+            flagged=[_flag_row(r) for r in plan["shown"]],
+            flagged_total=sum(1 for r in results if r["label"] != "ok"), to_read=plan["to_read"],
+            review_groups=plan["review_groups"],
+            unverifiable_by_reason=plan["unverifiable_by_reason"])
         if mh["unverifiable"]:
             text += (f"\n\n  MAP HEALTH: {mh['unverifiable']} of {mh['checked']} claims "
                      f"({mh['unverifiable_pct']}%) came back ?? - those entries point at code that cannot "
-                     f"settle their sentence. See map_health.entries_to_fix; it names a better pairing where "
-                     f"the sentence's own words suggest one. This is a map problem, not a code problem.")
-        structured["summary"] = text.split("\n", 1)[0] + (" - DRIFT: investigate each; review: from p_drifted 0.3 up; "
-                                                            "??: NOT a pass, fix the map entry; full results in "
+                     f"settle their sentence. "
+                     + ("Each ?? result in the results file carries its reasons, and try_pairing_with"
+                        if is_error else          # an error reply has no structuredContent.map_health
+                        "See map_health.entries_to_fix"
+                        + (f" ({len(fixes)} of {len(mh['entries_to_fix'])} shown; each ?? result in the results "
+                           f"file carries the same, when there are any)" if len(fixes) < len(mh["entries_to_fix"])
+                           else "")
+                        + "; it")
+                     + " names a better pairing where the sentence's own words suggest one. Fix the pairing "
+                       "and check again: a ?? is not a pass, and such claims often hold real problems.")
+        structured["summary"] = text.split("\n", 1)[0] + (" - DRIFT: investigate each; review from p_drifted 0.3 up: "
+                                                            "read it group by group (to_read, review_groups); ??: "
+                                                            "NOT a pass, fix the map entry; full results in "
                                                             "results_file")
-        return text, bool(stopped) or (bool(failed) and not results), structured
+        return text, is_error, structured
 
     def api_key(self) -> str:
         """The TypeSafe key for a tool that sends: from the server's own sources only, never from the
@@ -1201,8 +1300,8 @@ class Server:
         excluded = dd.MAP_COUNTS.get("excluded", 0)
         moved = dd.MAP_COUNTS.get("moved", 0)
         warnings = list(dd.MAP_WARNINGS)
-        # Worked out locally, for free: claims whose pairing cannot settle them. Each would cost
-        # a request and come back "??", so it is cheaper to say so before anything is sent.
+        # Worked out locally, for free: claims whose pairing will probably not settle them. They are
+        # kept, not excluded: on this project's own docs such claims held 18 of the 28 real problems.
         weak_list = [(c, w) for c in claims if (w := dd.preflight(c))]
         weak_lines: dict[str, int] = {}          # entries that share a spec line and a reason are listed once
         for c, w in weak_list:
@@ -1211,8 +1310,9 @@ class Server:
                  + (f"; {excluded} marked excluded (not requirements, never sent)" if excluded else "")
                  + f" | {self.last_index}"]
         if weak_list:
-            lines.append(f"{len(weak_list)} of {len(claims)} claims will probably come back '??' - each costs "
-                         f"a request and answers nothing; see likely_unverifiable")
+            lines.append(f"{len(weak_list)} of {len(claims)} claims will probably come back '??' - not a pass, and such "
+                         f"claims often hold real problems: keep them, and see likely_unverifiable for how to reword "
+                         f"or pair each")
         lines.append(f"a full check would cost about ${dd.estimate_cost(claims):.4f}"
                      + (f" (up to ${dd.estimate_cost(claims, self.samples):.4f} if every claim has to be "
                         f"asked again)" if self.samples > 1 else ""))
@@ -1389,7 +1489,7 @@ class Server:
         full = self.results_file("ci-preview")
         full.write_text(json.dumps([{"step": it.meta["failure"].step, "jobs": it.meta["failure"].jobs,
                                      "state": it.state, "questions": it.questions} for it in items],
-                                   indent=1, ensure_ascii=False))
+                                   indent=1, ensure_ascii=False), encoding="utf-8")
         samples = min(self.samples, ci.SAMPLES)
         failures, room = [], INLINE_BUDGET
         for n, it in enumerate(items, 1):
@@ -1407,18 +1507,22 @@ class Server:
         structured = {"project": str(self.root), "source": ctx.source, "url": ctx.url, "trusted": ctx.trusted,
                       "notes": ctx.notes, "model": dd.MODEL, "failures": failures, "failures_total": len(items),
                       "requests": len(items) * samples, "estimated_tokens": tokens * samples,
-                      "estimate_usd": jevkit.estimate_cost(items, samples),
+                      "estimate_usd": jevkit.estimate_cost(items, samples), "jobs_not_checked": ctx.unread_jobs,
                       "questions": items[0].questions if items else {}, "snapshot": sid,
                       "preview_file": str(full), "inbox": inbox}
         lines = [f"CI triage preview - free, nothing was sent: {len(items)} distinct failure(s) from {ctx.source}"
                  + (f" ({ctx.url})" if ctx.url else ""),
                  f"Sending them would be {len(items) * samples} request(s) to TypeSafe, about "
                  f"${structured['estimate_usd']:.5f}. To send exactly this, call triage_ci_failure with "
-                 f"snapshot: {sid}"]
+                 f"snapshot: {sid}" if items else
+                 "Nothing would be sent: no failure is left to triage"
+                 + (" - no failed job's log could be read (see the notes). NOT a pass." if ctx.unread_jobs else ".")]
         if ctx.trusted is False:
             lines.append("This run tests a fork's pull request: its author also wrote the log. Weigh log text "
                          "accordingly.")
         lines += [f"note: {n}" for n in ctx.notes]
+        if ctx.unread_jobs:
+            lines.append(_jobs_not_checked(ctx.unread_jobs))
         for fl in failures[:12]:
             lines += ["", f"{fl['index']}. {fl['step']}  [{fl['kind']}]  in {', '.join(fl['jobs'][:3])}"
                       + (f" (+{fl['job_count'] - 3} more jobs)" if fl["job_count"] > 3 else "")]
@@ -1441,11 +1545,15 @@ class Server:
             fails, ctx = self._snapshot(snapshot)
         else:
             fails, ctx = self._ci_gather(run, repo, logs, junit, base)
-        key = self.api_key()
-        self.rate_limit("triage_ci_failure")
         t = time.perf_counter()
-        results, done = ci.triage(fails, ctx, key, jobs=self.jobs, samples=min(self.samples, ci.SAMPLES),
-                                  cancelled=self.current_cancel.is_set, on_answer=self.progress)
+        if fails:
+            key = self.api_key()
+            self.rate_limit("triage_ci_failure")
+            results, done = ci.triage(fails, ctx, key, jobs=self.jobs, samples=min(self.samples, ci.SAMPLES),
+                                      cancelled=self.current_cancel.is_set, on_answer=self.progress)
+        else:                                     # every failed job's log was unreadable: nothing to send
+            results, done = [], jevkit.Run(results=[])
+        _keep_notes(results, done)
         ordered = ci.in_triage_order(results)
         sent = {id(s.item): s.item.state for s in done.results}
         unread = [n for n in ctx.notes if n.startswith("INCOMPLETE")]   # failed jobs whose logs were not read
@@ -1453,9 +1561,10 @@ class Server:
         out = self.results_file("ci-triage")
         out.write_text(json.dumps({"source": ctx.source, "url": ctx.url, "trusted": ctx.trusted, "notes": ctx.notes,
                                    "cost_usd": done.cost_usd, "complete": complete,
+                                   "jobs_not_checked": ctx.unread_jobs,
                                    "results": [{**r, "state_sent": sent[id(s.item)]}
                                                for r, s in zip(results, done.results)]},
-                                  indent=1, ensure_ascii=False))
+                                  indent=1, ensure_ascii=False), encoding="utf-8")
         counts = {k: sum(1 for r in results if r["label"] == k) for k in ("CHANGE", "review", "??")}
         not_checked = done.problems + done.vendor
         shown = _fit(ordered, INLINE_BUDGET)
@@ -1476,24 +1585,37 @@ class Server:
                 lines += ["", titles.get(r["label"], r["label"])]
                 last = r["label"]
             root = (r.get("root_error") or {}).get("line")
+            # A lean to the change below the gate: the number the gate read (by_change's confidence), not
+            # P(change), which can be higher than the gate and then reads as a contradiction. Answers that
+            # disagree say so, rather than a lean with no explanation.
+            gate = r["why"] if r.get("why", "").startswith(("leans to the change at", "the answers disagree")) else \
+                f"P(change) {r.get('p_caused_by_change', 0):.2f}"
             lines.append(f"  {r['step']}  [{r['kind']}]  x{r['job_count']}"
-                         + (f"  lean: {r['lean']}  P(change) {r.get('p_caused_by_change', 0):.2f}" if "lean" in r else ""))
+                         + (f"  lean: {r['lean']}  {gate}" if "lean" in r else ""))
             if root:
                 lines.append(f"    root error (CI log text): {root[:200]}")
+            if r.get("note"):
+                lines.append(f"    note: {r['note']}")
             lines.append(f"    next: {r['next_step']}")
-        if len(ordered) > 15:
-            lines.append(f"\n... {len(ordered) - 15} more in structuredContent.results and {out}")
+        failed_all = not any(r["label"] != "not checked" for r in results)
+        is_error = bool(done.problems) or (bool(done.vendor) and failed_all)
+        if len(ordered) > 15:                     # an error reply has no structuredContent
+            lines.append(f"\n... {len(ordered) - 15} more in " + ("" if is_error else "structuredContent.results and ")
+                         + str(out))
+        if not fails:
+            lines += ["", "Nothing was sent: no failure was left to triage."]
         if not_checked or unread:
             lines += ["", "INCOMPLETE - not everything was checked:"] + [f"  - {p}" for p in not_checked + unread]
+            if ctx.unread_jobs:
+                lines.append(f"  - {_jobs_not_checked(ctx.unread_jobs)}")
             if done.vendor and not done.problems:
                 lines.append("  (TypeSafe could not be used - not a problem with the code. Carry on without it.)")
         structured = {"summary": head, "project": str(self.root), "source": ctx.source, "url": ctx.url,
                       "trusted": ctx.trusted, "notes": ctx.notes, "failures": len(results), "counts": counts,
                       "cost_usd": done.cost_usd, "complete": complete, "not_checked": not_checked,
-                      "results_file": str(out), "results": shown, "results_shown": len(shown),
-                      "inbox": str(self.inbox())}
-        failed_all = not any(r["label"] != "not checked" for r in results)
-        return "\n".join(lines), bool(done.problems) or (bool(done.vendor) and failed_all), structured
+                      "jobs_not_checked": ctx.unread_jobs, "results_file": str(out), "results": shown,
+                      "results_shown": len(shown), "inbox": str(self.inbox())}
+        return "\n".join(lines), is_error, structured
 
     # ── code audit ──────────────────────────────────────────────────────────
     def _project_path(self, given: str, what: str) -> Path:
@@ -1608,11 +1730,12 @@ class Server:
         t = time.perf_counter()
         results, done = audit.check(items, key, jobs=self.jobs, samples=min(self.samples, audit.SAMPLES),
                                     cancelled=self.current_cancel.is_set, on_answer=self.progress)
+        _keep_notes(results, done)
         out = self.results_file("code-audit")
         out.write_text(json.dumps({"map": rel, "scope": scope, "cost_usd": done.cost_usd, "complete": done.complete,
                                    "results": [{**r, "state_sent": s.item.state}
                                                for r, s in zip(results, done.results)]},
-                                  indent=1, ensure_ascii=False))
+                                  indent=1, ensure_ascii=False), encoding="utf-8")
         counts = {k: sum(1 for r in results if r["label"] == k) for k in ("BREAKS", "review", "??", "ok", "n/a")}
         flagged = [r for r in audit.in_triage_order(results) if r["label"] in ("BREAKS", "review", "??", "not checked")]
         shown = _fit(flagged, INLINE_BUDGET)
@@ -1636,8 +1759,13 @@ class Server:
             p = r.get("p_breaks")
             lines += [f"  {r['file']}:{r['lines']}" + (f"  P(breaks) {p:.2f}" if isinstance(p, (int, float)) else ""),
                       f"    rule ({r['rule_source']}): {r['rule'][:200]}", f"    why: {r['why']}"]
-        if len(flagged) > 20:
-            lines.append(f"\n... {len(flagged) - 20} more in structuredContent.flagged and {out}")
+            if r.get("note"):
+                lines.append(f"    note: {r['note']}")
+        failed_all = not any(r["label"] != "not checked" for r in results)
+        is_error = bool(done.problems) or (bool(done.vendor) and failed_all)
+        if len(flagged) > 20:                     # an error reply has no structuredContent
+            lines.append(f"\n... {len(flagged) - 20} more in " + ("" if is_error else "structuredContent.flagged and ")
+                         + str(out))
         not_checked = done.problems + done.vendor
         if not_checked:
             lines += ["", "INCOMPLETE - not everything was checked:"] + [f"  - {p}" for p in not_checked]
@@ -1646,19 +1774,29 @@ class Server:
         structured.update(summary=head, checked=sum(1 for r in results if r["label"] != "not checked"),
                           counts=counts, cost_usd=done.cost_usd, complete=done.complete, not_checked=not_checked,
                           results_file=str(out), flagged=shown, flagged_total=len(flagged))
-        failed_all = structured["checked"] == 0
-        return "\n".join(lines), bool(done.problems) or (bool(done.vendor) and failed_all), structured
+        return "\n".join(lines), is_error, structured
 
     def validate_rule_map(self, map: str | None = None) -> tuple:
         rel = self.resolve_rule_map(map)
         entries = audit.load_map(self.root / rel)
         v = audit.validate(entries, self.root)
         used = {e.get("source") for e in entries}
-        unused = [f for f in audit.find_rule_files(self.root) if f not in used]
+
+        def real(f: str) -> Path | None:
+            try:
+                return (self.root / f).resolve()
+            except (OSError, RuntimeError, ValueError):      # a link loop, a name the file system cannot take
+                return None
+        # AGENTS.md linked to CLAUDE.md is one file, as draft_rule_map reads it: a link to a file the map uses is used
+        used_real = {real(s) for s in used if isinstance(s, str) and s} - {None}
+        files = audit.tracked_files(self.root)
+        unused = [f for f in audit.find_rule_files(self.root, files) if f not in used and real(f) not in used_real]
+        maybe = [f for f in audit.candidate_rule_files(self.root, files) if f not in used and real(f) not in used_real]
         ready = not v["problems"] and v["reviewed"] > 0
         structured = {"project": str(self.root), "map": rel, "ready": ready, "entries": v["entries"],
                       "reviewed": v["reviewed"], "draft": v["draft"], "excluded": v["excluded"],
-                      "problems": v["problems"], "notes": v["notes"], "rule_files_not_in_map": unused}
+                      "problems": v["problems"], "notes": v["notes"], "rule_files_not_in_map": unused,
+                      "candidate_rule_files": maybe}
         lines = [f"{rel}: {v['entries']} entries - {v['reviewed']} reviewed (sent by check_code_rules), "
                  f"{v['draft']} still draft (never sent until reviewed), {v['excluded']} excluded"]
         if v["problems"]:
@@ -1670,9 +1808,13 @@ class Server:
             lines.append("OK - every reviewed entry has a rule and a scope that matches files.")
         if v["notes"]:
             lines += ["", "Phrasing that tends to come back ?? or as a false alarm - rewrite as one positive "
-                          "condition:"] + [f"  - {x}" for x in v["notes"]]
+                          "condition the code shows:"] + [f"  - {x}" for x in v["notes"]]
         if unused:
             lines += ["", "Rule files in the project that the map does not use: " + ", ".join(unused[:20])]
+        if maybe:
+            lines += ["", "Other documents named after a coding agent, which may hold rules or be about the agent "
+                          "(pass them in draft_rule_map's docs if they hold rules for the code): "
+                      + ", ".join(maybe[:20]) + (f" (+{len(maybe) - 20} more)" if len(maybe) > 20 else "")]
         return "\n".join(lines), False, structured
 
     def draft_rule_map(self, docs: list[str] | None = None, out: str | None = None) -> tuple:
@@ -1682,6 +1824,7 @@ class Server:
             raise ToolError(f"{out} already exists and may hold a reviewed map - nothing was written. Draft into a "
                             f"new file and compare.")
         sources: list[str] | None = None
+        warns: list[str] = []                       # rule files left out, e.g. a name that is not valid UTF-8
         if docs:
             sources = []
             for d in docs:
@@ -1690,25 +1833,55 @@ class Server:
                     raise ToolError(f"rule file not found in the project: {d}")
                 rel = os.path.relpath(p, self.root).replace(os.sep, "/")
                 if p.is_dir():                    # the files git would commit, never ignored or linked ones
-                    sources += sorted(f for f in audit.tracked_files(self.root)
-                                      if (rel == "." or f.startswith(rel + "/"))
-                                      and Path(f).suffix.lower() in audit.DOC_SUFFIXES
-                                      and not (self.root / f).is_symlink())
+                    found = sorted(f for f in audit.tracked_files(self.root)
+                                   if (rel == "." or f.startswith(rel + "/"))
+                                   and (Path(f).suffix.lower() in audit.DOC_SUFFIXES
+                                        or (not Path(f).suffix and Path(f).name.upper() in audit.PLAIN_RULE_FILES))
+                                   and not (self.root / f).is_symlink())
+                    # A map cannot record a name that is not valid UTF-8, and the user named the folder, not the
+                    # file: it is left out with a warning, as in a spec folder. Outside git the name is as on
+                    # disk; git's list has U+FFFD for each such byte, a name no file has.
+                    bad = [f for f in found if not dd._utf8(f) or ("\ufffd" in f and not (self.root / f).exists())]
+                    if bad:
+                        warns.append(f"{len(bad)} rule file(s) in {d} were left out because their names are not valid "
+                                     f"UTF-8, so a map cannot record them: {', '.join(dd._readable(f) for f in bad)}. "
+                                     f"Rename them if they hold rules.")
+                    # and one git still lists but that is gone from disk is not read, so not a source either
+                    sources += [f for f in found if f not in bad and (self.root / f).is_file()]
                 else:
                     sources.append(rel)
             if not sources:
-                raise ToolError("no .md, .rst, .txt, .adoc or .mdc file in " + ", ".join(docs))
-        m = audit.draft_map(self.root, sources)
+                raise ToolError("no .md, .mdx, .rst, .txt, .adoc or .mdc file (nor a CONTRIBUTING or CONVENTIONS file) "
+                                "in " + ", ".join(docs) + "".join(f" - {w}" for w in warns))
+        m = audit.draft_map(self.root, sources, warns)
+        left_out = "".join(f" {w}" for w in warns)  # say which rule files were set aside, even when nothing is left
         if not m["sources"]:
+            # Claude.md or agents.md is not taken (only the capitalised names are), and validate_rule_map, which
+            # lists such files, needs a map first: name them here, or the project looks as if it had no rules
+            maybe = [] if docs else audit.candidate_rule_files(self.root)
             raise ToolError("no rule files found (CLAUDE.md, AGENTS.md, CONTRIBUTING, style or convention guides). "
-                            "Pass docs: the files where this project writes its rules. Nothing was written.")
+                            "Pass docs: the files where this project writes its rules. Nothing was written."
+                            + (" Documents named after a coding agent that the finder does not take (it takes only "
+                               "CLAUDE.md, CLAUDE.local.md, AGENTS.md and AGENTS.override.md, in capitals): "
+                               + ", ".join(maybe[:20]) + (f" (+{len(maybe) - 20} more)" if len(maybe) > 20 else "")
+                               + " - pass them in docs if they hold rules for the code." if maybe else "")
+                            + left_out)
         if not m["entries"]:
-            raise ToolError(f"no rule sentences in {', '.join(m['sources'][:10])} - nothing was written. Pass docs "
-                            f"that state the project's rules for its code.")
+            # a named file keeps every sentence it has, so here it has none: only headings, code, tables or links
+            raise ToolError((f"no sentences in {', '.join(m['sources'][:10])} - only headings, code, tables or links - "
+                             f"nothing was written. Pass docs that state the project's rules for its code." if docs else
+                             f"no rule sentences in {', '.join(m['sources'][:10])} - nothing was written. Pass docs "
+                             f"that state the project's rules for its code.") + left_out)
         if self.current_cancel.is_set():
             raise ToolError("cancelled - nothing was written")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(m, indent=1, ensure_ascii=False) + "\n")
+        try:
+            target.write_text(json.dumps(m, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        except BaseException:
+            # never leave an empty or half-written map behind: the next draft would find it "already exists"
+            with contextlib.suppress(OSError):
+                target.unlink()
+            raise
         entries = m["entries"]
         flagged: dict[str, int] = {}
         for e in entries:
@@ -1716,12 +1889,29 @@ class Server:
                 flagged[f] = flagged.get(f, 0) + 1
         draft = sum(1 for e in entries if e["status"] == "draft")
         excluded = sum(1 for e in entries if e["status"] == "excluded")
+        # why each excluded entry starts excluded, in audit.draft_map's order: conduct, then process, then linter
+        kinds = {"conduct": "about how the assistant works", "process": "about process", "linter": "for a linter"}
+        why_out: dict[str, int] = {}
+        for e in entries:
+            if e["status"] == "excluded":
+                k = next((kinds[f] for f in kinds if f in e.get("flags", [])), "other")
+                why_out[k] = why_out.get(k, 0) + 1
+        descriptive = sum(1 for e in entries if e["status"] == "draft" and "descriptive" in e.get("flags", []))
+        conditional = sum(1 for e in entries if e["status"] == "draft" and "conditional" in e.get("flags", []))
         rel = os.path.relpath(target, self.root)
         text = (f"wrote {rel}: {len(entries)} rule sentence(s) from {len(m['sources'])} file(s) - {draft} to review, "
-                f"{excluded} excluded (process, or already checked by a linter).\n"
-                f"Nothing is checked until the entries are reviewed with the user: rewrite each `rule` as one "
-                f"positive condition, correct `scope`, then set status reviewed (or excluded with a why). Then "
-                f"validate_rule_map (map: {rel}) must report OK before check_code_rules.")
+                f"{excluded} excluded"
+                + (f" ({', '.join(f'{n} {k}' for k, n in why_out.items())})" if why_out else "") + ".\n"
+                + (f"{descriptive} of those to review are descriptive: no rule wording, kept because the file was "
+                   f"named - exclude them unless they state a rule for the code.\n" if descriptive else "")
+                + (f"{conditional} of those to review are conditional (\"When X, ...\", \"a function that needs X "
+                   f"...\"): one unit of code seldom shows whether the condition holds, so they tend to come back as "
+                   f"false alarms - name a trigger the code shows instead, like \"Every os.environ[...] read of the "
+                   f"API key goes through env_key().\"\n" if conditional else "")
+                + "".join(f"{w}\n" for w in warns)
+                + f"Nothing is checked until the entries are reviewed with the user: rewrite each `rule` as one "
+                  f"positive condition, correct `scope`, then set status reviewed (or excluded with a why). Then "
+                  f"validate_rule_map (map: {rel}) must report OK before check_code_rules.")
         return text, False, {"project": str(self.root), "out": rel, "sources": m["sources"], "entries": len(entries),
                              "draft": draft, "excluded": excluded, "flagged": flagged}
 
@@ -1778,6 +1968,19 @@ def _fit(items: list[dict], budget: int) -> list[dict]:
         out.append(it)
         size += n
     return out
+
+
+def _keep_notes(results: list[dict], done: jevkit.Run) -> None:
+    """Each result keeps the note its screening left (jevkit.Screened.note): asking again failed, so its
+    label is the first answer's. The run's vendor list says so too; the note says it where the item is."""
+    for r, s in zip(results, done.results):
+        if s.note and not r.get("note"):
+            r["note"] = s.note
+
+
+def _jobs_not_checked(jobs: list[str]) -> str:
+    return (f"jobs not checked - their logs were not read, so nothing is sent for them (NOT a pass): "
+            f"{', '.join(jobs[:20])}" + (f" (+{len(jobs) - 20} more)" if len(jobs) > 20 else ""))
 
 
 def _check_arguments(tool: dict, args: dict) -> dict:
@@ -1848,47 +2051,175 @@ def _warning_text(warnings: list[str]) -> list[str]:
             + [f"  - {w}" for w in warnings]) if warnings else []
 
 
-def _in_triage_order(results: list[dict]) -> list[dict]:
-    """DRIFT by severity, then review by P(drifted), then ??, then ok - where an agent's effort goes."""
-    rank = {"DRIFT": 0, "review": 1, "??": 2, "ok": 3}
-    return sorted(results, key=lambda r: (rank[r["label"]],
-                                          -r["severity"] if r["label"] == "DRIFT" else
-                                          -r["probabilities"].get("drifted", 0) if r["label"] == "review" else 0))
+READ_FROM = 0.3     # review from P(drifted) 0.3 up is read; below it is low risk (1.7.6's own docs: 0 real in 20)
 
 
-def _report(results: list[dict], path: str) -> list[str]:
-    """The results, in the order an agent should spend its effort."""
+def _p_drifted(r: dict) -> float:
+    return r["probabilities"].get("drifted", 0.0)
+
+
+def _flag_row(r: dict) -> dict:
+    """One claim as structuredContent.flagged lists it."""
+    return {"label": r["label"], "doc": r["doc"], "line": r["line"], "claim": r["claim"],
+            "p_drifted": _p_drifted(r), "severity": r["severity"], "value_mismatch": r.get("value_mismatch"),
+            "code_refs": r["code_refs"], "why": r["why"], "samples": r.get("samples", 1),
+            **({"note": r["note"]} if r.get("note") else {}),
+            **({"next_step": dd.next_step_for_drift(r)} if r["label"] == "DRIFT" else {})}
+
+
+def _entries_to_fix(results: list[dict], claims: list, syms: dict) -> list[dict]:
+    """map_health's entries_to_fix, each worked out from the ?? result's own claim. map_health finds a
+    result's claim by its spec line alone, and one line often holds several claims (322 of 644 in
+    jevmcp's own map): each got the reasons and try_pairing_with of the line's last claim, and was
+    counted under that claim's reason. A claim is its line, sentence and pairing (code_refs as
+    check_claims writes them)."""
+    own = {(c.doc, c.line, c.text, tuple(f"{s.file}:{s.line} {s.name}" for s in c.symbols)): c for c in claims}
+    out: list[dict] = []
+    for r in results:
+        if r["label"] == "??":
+            c = own.get((r["doc"], r["line"], r["claim"], tuple(r["code_refs"])))
+            out += dd.map_health([r], [c] if c else [], syms)["entries_to_fix"]
+    return out
+
+
+def _unverifiable_reason(r: dict) -> str:
+    """Why a claim came back ??: the first cause the map's own check names (dd.preflight), else the
+    model's. The paired code's size is left out, so every claim cut short for it counts as one reason."""
+    reason = (r.get("reasons") or [r.get("why") or "no reason given"])[0]
+    return re.sub(r"^the paired code is [\d,]+ characters and only ([\d,]+) are sent",
+                  r"the paired code is longer than the \1 characters sent", reason)
+
+
+def _reading_plan(results: list[dict], budget: int = INLINE_BUDGET) -> dict:
+    """Where an agent's reading goes, cut to fit `budget` characters of listed claims: every DRIFT, then
+    review from P(drifted) 0.3 up grouped by the code each claim pairs with first - one group is one
+    place to open, and the place with the most likely drift comes first - then ?? and the rest of
+    review. A group is listed whole or not at all (only the first, the most likely place, is cut when
+    it is too big for what the DRIFT rows left); everything is counted, and every result is in the
+    results file. One full check of 1.7.6's own docs returned 462,896 characters: 203 claims to read,
+    in 95 places. The list of places (review_groups) is cut to a third of `budget` here, so the text
+    can say when it is - never below the places listed with their claims."""
+    drift = sorted((r for r in results if r["label"] == "DRIFT"), key=lambda r: -r["severity"])
+    places: dict[str, list[dict]] = {}
+    for r in sorted((r for r in results if r["label"] == "review" and _p_drifted(r) >= READ_FROM),
+                    key=lambda r: -_p_drifted(r)):
+        places.setdefault(r["code_refs"][0] if r["code_refs"] else "(no code)", []).append(r)
+    groups = sorted(places.items(), key=lambda kv: (-_p_drifted(kv[1][0]), -len(kv[1]), kv[0]))
+    unverifiable = [r for r in results if r["label"] == "??"]
+    low = sorted((r for r in results if r["label"] == "review" and _p_drifted(r) < READ_FROM),
+                 key=lambda r: -_p_drifted(r))
+    shown, size = [], 0
+    first = len(drift) if groups else -1        # the first place is cut to fit, even after DRIFT rows
+    for i, rs in enumerate([[r] for r in drift] + [rs for _, rs in groups] + [[r] for r in unverifiable]
+                           + [[r] for r in low]):
+        sizes = [len(json.dumps(_flag_row(r), ensure_ascii=False)) for r in rs]
+        if shown and i != first and size + sum(sizes) > budget:
+            break
+        cut = False
+        for r, n in zip(rs, sizes):
+            if shown and size + n > budget:
+                cut = True
+                break
+            shown.append(r)
+            size += n
+        if cut:
+            break
+    listed = {id(r) for r in shown}
+    reasons: dict[str, list[dict]] = {}
+    for r in unverifiable:
+        reasons.setdefault(_unverifiable_reason(r), []).append(r)
+    rows = [{"code": code, "claims": len(rs), "shown": sum(id(r) in listed for r in rs),
+             "p_drifted_max": _p_drifted(rs[0])} for code, rs in groups]
+    groups_shown = sum(g["shown"] > 0 for g in rows)       # the first ones: places are listed in order
+    return {
+        "shown": shown, "drift": drift, "groups": [(code, rs, [r for r in rs if id(r) in listed]) for code, rs in groups],
+        "unverifiable": unverifiable, "low": low,
+        "to_read": {"drift": len(drift), "drift_shown": sum(id(r) in listed for r in drift),
+                    "review": sum(len(rs) for _, rs in groups),
+                    "review_shown": sum(id(r) in listed for _, rs in groups for r in rs),
+                    "groups": len(groups), "groups_shown": groups_shown},
+        # a place listed with its claims is in review_groups too, so what the text says of the rest is true;
+        # its row is smaller than the flagged rows it stands for, so the reply stays bounded
+        "review_groups": rows[:max(len(_fit(rows, budget // 3)), groups_shown)],
+        "unverifiable_by_reason": [{"reason": why, "claims": len(rs), "at": [f"{r['doc']}:{r['line']}" for r in rs[:5]]}
+                                   for why, rs in sorted(reasons.items(), key=lambda kv: (-len(kv[1]), kv[0]))]}
+
+
+def _report(results: list[dict], path: str, plan: dict, places: str | None = None) -> list[str]:
+    """The reading plan as text: what to read first, grouped where it is read, and what is left - every
+    result is in the results file. `places`: the file with every place, for an error reply (it has no
+    structuredContent, so no review_groups)."""
     by = {k: [r for r in results if r["label"] == k] for k in ("DRIFT", "review", "??", "ok")}
+    t = plan["to_read"]
     out = [f"DRIFT {len(by['DRIFT'])} · review {len(by['review'])} · ?? {len(by['??'])} · ok {len(by['ok'])}"
            f"   full results (with the exact code sent): {path}"]
+    if t["review"]:
+        out.append(f"To read: {t['drift']} DRIFT, and {t['review']} review claim(s) from P(drifted) {READ_FROM} up in "
+                   f"{t['groups']} place(s) of the code - each group below is one place to open. Say how far you got: "
+                   f"read N of {t['groups']} groups / K of {t['review']} claims.")
+    elif t["drift"]:
+        out.append(f"To read: {t['drift']} DRIFT; no review claim from P(drifted) {READ_FROM} up.")
 
-    def item(r: dict, extra: str = "") -> list[str]:
+    def item(r: dict, pad: str = "  ", code: bool = True, extra: str = "") -> list[str]:
         refs = r["code_refs"]
-        return [f"  {r['doc']}:{r['line']}  P(drifted) {r['probabilities'].get('drifted', 0):.2f}  "
-                f"severity {r['severity']}/3{extra}",
-                f"    claim: {r['claim']}",
-                f"    code:  {refs[0]}" + (f"  (+{len(refs) - 1} more: {', '.join(refs[1:])})" if len(refs) > 1 else ""),
-                f"    why:   {r['why']}"]
+        lines = [f"{pad}{r['doc']}:{r['line']}  P(drifted) {_p_drifted(r):.2f}  severity {r['severity']}/3{extra}",
+                 f"{pad}  claim: {r['claim']}"]
+        if code:
+            lines.append(f"{pad}  code:  {refs[0]}" + (f"  (+{len(refs) - 1} more: {', '.join(refs[1:])})"
+                                                        if len(refs) > 1 else ""))
+        elif len(refs) > 1:                       # the group's place is refs[0]; name the others
+            lines.append(f"{pad}  also:  {', '.join(refs[1:])}")
+        lines.append(f"{pad}  why:   {r['why']}")
+        return lines + ([f"{pad}  note:  {r['note']}"] if r.get("note") else [])
 
-    if by["DRIFT"]:
+    if plan["drift"]:
         out += ["", "DRIFT - investigate each one (which side is wrong: code or spec?):"]
-        for r in sorted(by["DRIFT"], key=lambda r: -r["severity"]):
+        for r in plan["drift"][:t["drift_shown"]]:
             out += item(r)
-    if by["review"]:
-        out += ["", "review - sorted by P(drifted); investigate from 0.3 up, skim below:"]
-        for r in sorted(by["review"], key=lambda r: -r["probabilities"].get("drifted", 0)):
-            out += item(r)
-    if by["??"]:
-        out += ["", "?? - NOT a pass: the code shown cannot settle these. Fix the map entry (add the "
-                    "implementation, the constant, the caller), then check again:"]
-        for r in by["??"]:
-            out += item(r)
+        if t["drift_shown"] < t["drift"]:
+            out.append(f"  {t['drift'] - t['drift_shown']} more DRIFT not shown (the reply is cut to fit) - in the "
+                       f"results file")
+    if plan["groups"]:
+        out += ["", f"review from P(drifted) {READ_FROM} up, by the code each claim pairs with - the most likely "
+                    "place first; open each place once and read its claims against it:"]
+        for n, (code, rs, listed) in enumerate(plan["groups"], 1):
+            if not listed:
+                continue
+            out.append(f"  [{n}] {code} - {len(rs)} claim(s)" + (f", {len(listed)} shown" if len(listed) < len(rs) else "")
+                       + f", P(drifted) up to {_p_drifted(rs[0]):.2f}")
+            for r in listed:
+                out += item(r, "    ", code=False)
+        # cut to fit too, never below the places listed above: when it is, the rest are only in the file
+        rows = len(plan["review_groups"])
+        if t["review_shown"] < t["review"]:
+            out.append(f"  {t['groups'] - t['groups_shown']} group(s) / {t['review'] - t['review_shown']} claim(s) not "
+                       f"shown - in the results file (review, P(drifted) {READ_FROM} and up, grouped by their first "
+                       f"code_refs entry); "
+                       + (f"every place, most likely first, with the spec lines of its claims: {places}" if places
+                          else "structuredContent.review_groups lists "
+                          + ("the places, most likely first." if rows >= t["groups"] else
+                             f"the first {rows} of {t['groups']} places, most likely first (cut to fit); the rest "
+                             f"are only in the results file.")))
+    if plan["low"]:
+        at = ", ".join(f"{r['doc']}:{r['line']}" for r in plan["low"][:10])
+        out += ["", f"review below P(drifted) {READ_FROM}: {len(plan['low'])} claim(s) - low risk; spot-check a few: "
+                    f"{at}" + (f" (+{len(plan['low']) - 10} more in the results file)" if len(plan["low"]) > 10 else "")]
+    if plan["unverifiable"]:
+        out += ["", f"?? {len(plan['unverifiable'])} - NOT a pass: the code shown cannot settle these, and such claims "
+                    f"often hold real problems. Fix the map entry (add the implementation, the constant, the caller), "
+                    f"then check again. By reason:"]
+        for g in plan["unverifiable_by_reason"]:
+            out += [f"  {g['claims']:>3}  {g['reason']}",
+                    f"       at {', '.join(g['at'])}" + (f" (+{g['claims'] - len(g['at'])} more)"
+                                                          if g["claims"] > len(g["at"]) else "")]
     if by["ok"]:
         odd = [r for r in by["ok"] if (r.get("value_mismatch") or 0) >= 0.5]
         out += ["", f"ok {len(by['ok'])} - spot-check a couple"
                 + (f"; these have value_mismatch >= 0.5, check them:" if odd else ".")]
-        for r in odd:
-            out += item(r, f"  value_mismatch {r['value_mismatch']:.2f}")
+        for r in odd[:10]:
+            out += item(r, extra=f"  value_mismatch {r['value_mismatch']:.2f}")
+        if len(odd) > 10:
+            out.append(f"  ... {len(odd) - 10} more with value_mismatch >= 0.5 in the results file")
     return out
 
 
@@ -2135,6 +2466,7 @@ def serve(server: Server, stdin=None) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    dd.utf8_restart()                               # LC_ALL=C and UTF-8 mode off: 订单.py would fail the tools
     dd.safe_path()
     ap = argparse.ArgumentParser(
         prog="jevmcp_server.py",

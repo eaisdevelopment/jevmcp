@@ -1,6 +1,12 @@
 # Starts the plugin's MCP server exactly as a client does (uv run --quiet --script), on Linux,
 # macOS and Windows, from an empty uv cache and with no API key, and checks that it answers MCP,
 # that all seven free tools work, and that the three tools that send data refuse without a key.
+# The throwaway project holds Russian, Chinese and typographic quotes, and a CI log named in Russian.
+# On Windows the server runs in the ANSI code page (cp1252), and on macOS a second run is in the
+# plain C locale (ASCII): there every file the tools read and write must be UTF-8 whatever the
+# locale. The same second run on Linux checks something else: file names are not UTF-8 there, so
+# the server starts itself again in Python's UTF-8 mode, and the run checks that restart and the
+# log's Russian name.
 # Free and offline apart from PyPI: nothing is sent to TypeSafe.
 name: smoke
 
@@ -31,4 +37,9 @@ jobs:
           enable-cache: false        # every run starts from an empty uv cache, as a new user does
 
       - name: Start the server and call every tool
+        run: uv run --no-project --quiet python -u .github/smoke/mcp_smoke.py
+
+      - name: The same in the C locale (Linux, macOS)
+        if: runner.os != 'Windows'
+        env: {LC_ALL: C, LANG: C, PYTHONUTF8: "0", PYTHONCOERCECLOCALE: "0"}
         run: uv run --no-project --quiet python -u .github/smoke/mcp_smoke.py

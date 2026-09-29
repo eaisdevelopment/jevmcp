@@ -31,9 +31,9 @@ The validate, preview and draft tools, `--help`, `--dry-run` and `--show-key-sou
 | **The GitHub CLI, `gh`** (optional) | Only to triage a GitHub Actions run by its URL: the server reads the run with the user's own `gh` login. A CI log saved as a file needs no `gh`. | `gh auth status` |
 | **A supported client** | Claude Code and OpenAI Codex are both tested. Any other client of the [Agent Plugins](https://agent-plugins.org) 1.0.0 format can load `plugins/jevmcp`. | Section 2–4 |
 | **Python** | `>=3.10`, supplied by `uv` if the system Python is older. | — |
-| **Operating system** | Linux, macOS or Windows. On all three, the repository's `smoke` CI job starts the server exactly as a client does on every change to the plugin, from an empty uv cache, runs the seven free tools and checks that the three that send refuse without a key. The three that send have been run with a real key on Linux only. The `$(ls … \| sort -V \| tail -1)` commands below are for bash or zsh; on Windows, give the full path of the script instead. | — |
+| **Operating system** | Linux, macOS or Windows. On all three, the repository's `smoke` CI job starts the server exactly as a client does on every change to the plugin, from an empty uv cache, runs the seven free tools and checks that the three that send refuse without a key. The three that send have been run with a real key on Linux only. Every file the tools read or write (specs, maps, logs, code, results) is read and written as UTF-8, and each command line prints UTF-8, so text in any language works whatever the system's code page (Windows' cp1252 included); since 1.7.7 the smoke job checks this with non-ASCII text. A CI log or JUnit report that Windows PowerShell 5.1 saved as UTF-16 is read too. On Linux under a locale whose file names are not UTF-8 (an 8-bit locale, or the C locale with Python's UTF-8 mode off), the server and the command lines start themselves again once in Python's UTF-8 mode, so files with non-ASCII names are found there too; under an 8-bit locale, a file whose name was saved in that locale's own encoding (`café.py` under Latin-1) is then not found, so rename it in UTF-8, or set `JEVMCP_NO_UTF8_RESTART=1` to turn the restart off: for Claude Code, in the shell that starts it; Codex passes the server only a minimal environment, so under Codex the variable reaches the command lines only (see [tools.md](tools.md#the-command-line)). The `$(ls … \| sort -V \| tail -1)` commands below are for bash or zsh; on Windows, give the full path of the script instead. | — |
 
-There is **one** plugin, `jevmcp`, version 1.7.6, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
+There is **one** plugin, `jevmcp`, version 1.7.7, published by Essential AI Solutions Ltd. under Apache-2.0. The marketplace is called `jev`, so the install id is **`jevmcp@jev`**. Inside the plugin there is **one** MCP server (`jevmcp`, `scripts/jevmcp_server.py`) with ten tools in three families — spec drift, CI failure triage and code audit — **three** skills (`skills/spec-drift/`, `skills/ci-triage/`, `skills/code-audit/`), and a command-line script for each family (`scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py`). New tool families add their tools to the *same* server and a skill to the *same* plugin: one install, one key, and they arrive as updates.
 
 ---
 
@@ -243,6 +243,19 @@ uv run --quiet --script <plugin>/scripts/spec_drift.py --help
 New tool families arrive this way: same plugin, same server, same key, no second install and no reconfiguration. Read [../CHANGELOG.md](../CHANGELOG.md) after an update — tools have been renamed before (1.3.0 renamed `check_drift` → `check_spec_drift`, `validate_map` → `validate_spec_map`, `draft_map` → `draft_spec_map`, `show_payload` → `preview_spec_check`), and a per-tool approval pinned by name in `~/.codex/config.toml` has to be re-approved under the new name.
 
 The stored key is **not** touched by an update: `~/.config/jevmcp/typesafe.env` and the plugin data folder both survive.
+
+**Updating to 1.7.7 on Windows.** Maps are read only as UTF-8 since 1.7.7. A rule map that 1.7.6 or
+earlier drafted on Windows with a typographic quote, a dash or an accent in it is in the Windows code
+page (cp1252 on Western European Windows), so the code-audit tools refuse it. On the system that wrote
+it, the message names that code page, shows the map's first line that is not plain ASCII read in it
+(the part around its first such character), and, if that is as written, gives a one-line
+`uv run --no-project --quiet python -c "..."` command that converts the map to UTF-8, with the map's
+path as its argument (it runs in bash too, and needs only uv, which jevmcp already uses, not a
+`python` on the PATH). Run it once, then check that the rules read as written; do not re-save the
+map from an editor that opened it as UTF-8, which loses every character it could not read. Where
+the map does not read as text in the system's code page (on Linux CI, or on a Windows with another
+code page) the message gives no command, because which code page the map is in cannot be told
+there: convert it on the Windows system that wrote it.
 
 ---
 

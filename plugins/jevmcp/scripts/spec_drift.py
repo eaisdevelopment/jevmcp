@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import ast
 import bisect
+import codecs
 import contextlib
 import functools
 import heapq
@@ -53,6 +54,8 @@ import importlib
 import io
 import hashlib
 import json
+import locale
+import math
 import os
 import re
 import shutil
@@ -271,9 +274,34 @@ def tidy(src: str) -> str:
 
 _SECRET_NAME = re.compile(r"pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"
                           r"credential|access[-_.]?key|signing[-_.]?key|client[-_.]?secret|(?:^|[-_.])key$|dsn$", re.I)
-_SECRET_LITERAL = re.compile(      # (?<!...) starts matches only at a name's start: same matches, linear time
-    r"""((?:(?<![\w.\-])[\w.\-]*(?:pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"""
-    r"""credential|access[-_.]?key)[\w.\-]*)["']?\s*(?::|=>|=)\s*)(["'`])(?!\$\{)([^"'`\n]{4,})\2""", re.I)
+# A name holding a secret word. (?<!...) starts matches only at a name's start: same matches, linear time.
+_SECRET_VAR = (r"""(?<![\w.\-])[\w.\-]*(?:pass(?:word|wd|phrase)|(?-i:(?<![A-Za-z])(?:[Pp]ass|PASS)(?![a-z])|(?<=[a-z0-9])Pass(?![a-z]))|secret|token|api[-_.]?key|private[-_.]?key|"""
+               r"""credential|access[-_.]?key)[\w.\-]*""")
+# A declared string type: str, Optional[str], Dict[str, list[str]], &'static str, String?, SecretStr, str | None
+_DECLARED_TYPE = r"""[\w.]+(?:\[(?:[^\[\]\n]|\[[^\[\]\n]{0,40}\]){0,60}\]|<(?:[^<>\n]|<[^<>\n]{0,40}>){0,60}>)?\??"""
+_SECRET_LITERAL = re.compile(
+    # the name (a C array, `char password[PW_LEN + 1] = "..."`, never `map['key']` or `x[i]`), then `=`, `:`, `=>`
+    # or Go's `:=` - the only form in which a quote may close the name: `"password": "..."`
+    r"""((?:""" + _SECRET_VAR + r"""(?:\[(?-i:[\dA-Z_ +]{0,24})\])?["']?\s*(?::=|:|=>|=)"""
+    # or a string type, then `=` (not `==`), only where a declaration or a parameter starts - never after `case`,
+    # `if` or `for`, or inside a tag: `password: str = "..."`, `f(a, password: str = "...")`,
+    # `const token: &'static str = "..."`, `val secret: String? = "..."`. A string type is a name that ends in str
+    # or string (SecretStr, StrictStr), not any name holding those letters: a value of another type is not a secret
+    # (`password: HashStrategy = "bcrypt"`, an enum);
+    r"""|(?:^[ \t]*|[(,;{][ \t]*|\b(?:let|const|val|var|static|final|pub|private|public|protected|readonly|export|mut)"""
+    r"""[ \t]+)""" + _SECRET_VAR + r"""[ \t]*:[ \t]*(?=[^=\n]{0,160}?(?:str|string)\b)"""
+    r"""&?(?:'\w+[ \t]+)?""" + _DECLARED_TYPE
+    + r"""(?:[ \t]*\|[ \t]*""" + _DECLARED_TYPE + r""")*[ \t]*=(?!=)"""
+    # or Go's `var password string = "..."`, at the start of a line (`ErrWeakPassword ErrorCode = ...` is an enum)
+    r"""|^[ \t]*(?:(?:var|const)[ \t]+)?""" + _SECRET_VAR + r"""[ \t]+string[ \t]*=(?!=))\s*"""
+    # a string prefix: b"...", u"...", C#'s @"...", r"..." when it holds no `\`, `(` or `[` (else it is a pattern:
+    # `token_pattern=r"(?u)\b\w\w+\b"`), and f"..." when it holds no `{` (else it is code)
+    r"""(?:[bBuU](?=["'])|@(?=")|(?:[rR][bB]?|[bB][rR])(?="[^"\\(\[\n]*"|'[^'\\(\[\n]*')"""
+    r"""|[fF](?="[^"{\n]*"|'[^'{\n]*')|(?:[fF][rR]|[rR][fF])(?="[^"{\\(\[\n]*"|'[^'{\\(\[\n]*'))?)"""
+    # the value; one word may hold one quote of another kind, after its first character: `"p'ssw0rd"`,
+    # `"hunter22'"` (never code, `'pw: "' + p + '"'`, JSON, `'{"user":"bob"}'`, or a shell's `'"${PW}"'`)
+    r"""(["'`])([^"'`\n]{4,}|(?=(?:[^\s"'`]|(?!\2)["'`]){4})[^\s"'`]+(?!\2)["'`][^\s"'`]*)\2""",
+    re.I | re.M)
 _SECRET_SHAPES = [re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{8,}"),     # Stripe
                   re.compile(r"\b(?:ghp|gho|ghu|ghs|github_pat)_[0-9A-Za-z_]{20,}"),     # GitHub
                   re.compile(r"\bxox[abprs]-[0-9A-Za-z-]{10,}"),                          # Slack
@@ -294,12 +322,85 @@ def redact(text: str) -> str:
     """Remove secret-looking values before anything is sent to the API.
 
     A spec check never needs a real password. Placeholders like `${DB_PASSWORD}`
-    reveal nothing and are kept - they are often what the claim is about.
+    reveal nothing and are kept - they are often what the claim is about. A default
+    written into one (`${DB_PASSWORD:hunter2}`) or text next to one is not kept.
     """
-    text = _SECRET_LITERAL.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>{m.group(2)}", text)
+    # in backticks (a JavaScript template string) `${A-B}` is code, never a default: colonless=False
+    text = _SECRET_LITERAL.sub(lambda m: f"{m.group(1)}{m.group(2)}{_redacted(m.group(3), m.group(2) != '`')}"
+                                         f"{m.group(2)}", text)
     for pat in _SECRET_SHAPES:
         text = pat.sub(lambda m: "://<redacted>@" if m.group(0).startswith("://") else "<redacted>", text)
     return text
+
+
+_EDITOR_VARIABLES = ("env", "input", "config", "command", "workspaceFolder")     # VS Code's ${env:NAME} and co.
+_PATH_PLACEHOLDER = re.compile(r"(?:^|_)(?:dir|root|path|file|home)$|dir$|^pwd$", re.I)   # ${WORK_DIR}, ${CONF_FILE}
+
+
+def _redacted(value: str, colonless: bool = True) -> str:
+    """What is sent in place of a secret's value: <redacted>, or its placeholders (see _keep_placeholders)."""
+    return _keep_placeholders(value, colonless=colonless) if value.startswith("${") else "<redacted>"
+
+
+def _a_path(text: str) -> bool:
+    """`/access.token`, `.token.json`, `/etc/app/operator.env`: the name of a file or folder."""
+    return bool(re.fullmatch(r"[\w.\-/\\~]+", text) and re.search(r"[/\\.]", text))
+
+
+def _keep_placeholders(value: str, _nested: int = 0, colonless: bool = True) -> str:
+    """A value that starts with a `${...}` placeholder: each placeholder's name is kept, while a default
+    written in one (`${DB_PASSWORD:hunter2}`, `${DB_PASS:-hunter2}`, and with no colon, a shell's and
+    Docker Compose's `${DB_PASS-hunter2}`, `${DB_PASS=hunter2}`: only after an environment variable's
+    upper-case name, so that a kebab-case key `${jwt-secret}` stays a name, and not with colonless=False,
+    for a JavaScript template string, where `${HMAC-SHA256(...)}` is code) and any text next to one
+    (`${PREFIX}hunter2`) is the secret itself and becomes <redacted>. Kept whole: a value of GitHub
+    Actions expressions (`${{ secrets.TOKEN }}`, a cache `key: ${{ runner.os }}-pip-${{ ... }}`), an
+    editor variable's name (`${env:TOKEN}`, `${input:token}`, `${ENV:TOKEN}` - there the colon is part of
+    the name; a default after it is not kept: `${env:TOKEN:-...}`, `${env:TOKEN, '...'}`), text with no
+    letter or digit between placeholders (`${HOST}:${PORT}`), and a trailing
+    ` # comment`. Kept too, as they are not secrets: a default or text under 4 characters (as a quoted
+    value is), the message of `${1:?message}`, and a path in or after a placeholder that names a folder
+    or a file (`${WORK_DIR}/token.json`, `${KEY_FILE:-/etc/app/key.pem}`)."""
+    if value.startswith("${{"):
+        return value
+    out, i, n, in_path = [], 0, len(value), False
+    while i < n:
+        if value.startswith("${", i):
+            depth, j = 1, i + 2
+            while j < n and depth:                 # to the matching }: a default may hold a placeholder
+                depth += {"{": 1, "}": -1}.get(value[j], 0)
+                j += 1
+            inner = value[i + 2:j - 1] if depth == 0 else value[i + 2:]
+            name, colon, default = inner.partition(":")
+            if name.startswith("{"):
+                name, colon, default = inner, "", ""
+            elif colonless and (plain := re.match(r"([A-Z_][A-Z0-9_]*)([-=?+].*)", inner, re.S)):
+                # `${DB_PASS-default}`: the default may hold a colon (a URL)
+                name, colon, default = plain.group(1), "", plain.group(2)
+            elif colon and (name in _EDITOR_VARIABLES or name == "ENV"):
+                # `${env:NAME}`: the colon is part of the name, and what follows the name is a default, as in
+                # Log4j2's `${env:NAME:-default}` and the Serverless Framework's `${env:NAME, 'default'}`
+                var, colon, default = re.match(r"([^:,]*)(:|,\s*|)(.*)", default, re.S).groups()
+                name = f"{name}:{var}"
+            op = default[:1] if default[:1] in ("-", "=", "?", "+") else ""
+            default = default[len(op):]
+            in_path = in_path or bool(_PATH_PLACEHOLDER.search(name))
+            if len(default) >= 4 and op != "?" and not (in_path and _a_path(default)):
+                default = (_keep_placeholders(default, _nested + 1, colonless) if default.startswith("${") and
+                           _nested < 8 else "<redacted>")
+            out.append("${" + name + colon + op + default + ("}" if depth == 0 else ""))
+            i = j
+            continue
+        j = value.find("${", i)
+        j = n if j < 0 else j
+        text = value[i:j]
+        if re.match(r"\s+#", text):                 # a YAML or shell comment after the value
+            out.append(value[i:])
+            break
+        kept = len(text) < 4 or not re.search(r"[^\W_]", text) or (in_path and _a_path(text))
+        out.append(text if kept else "<redacted>")
+        i = j
+    return "".join(out)
 
 
 def _secret_key(key: str) -> bool:
@@ -309,22 +410,88 @@ def _secret_key(key: str) -> bool:
 
 def _secret_value(key: str, value: str) -> str:
     v = value.strip()
-    if v and _secret_key(key) and not v.startswith("${"):
-        return "<redacted>"
+    if v and _secret_key(key):
+        if not v.startswith("${"):
+            return "<redacted>"
+        if (kept := _keep_placeholders(v)) != v:
+            return kept
     return redact(value)
 
 
 _CONFIG_LINE = re.compile(r"^(\s*(?:export\s+)?-?\s*)([\w.\-\[\]]+)(\s*[:=]\s*)(\S.*?)\s*$")
+# `"password": hunter2` - a quoted key (YAML); and in a .properties file, a key and value separated by
+# spaces alone (`db.password hunter2`), which Java reads as a setting too
+_CONFIG_QUOTED = re.compile(r"""^(\s*-?\s*)(["'])([\w.\-\[\]]+)\2(\s*[:=]\s*)(\S.*?)\s*$""")
+_PROPERTIES_SPACED = re.compile(r"^(\s*)([\w.\-\[\]]+)(\s+)([^\s=:].*?)\s*$")
+_BLOCK_SCALAR = re.compile(r"[|>][-+0-9]*(?:\s+#.*)?")          # `password: |` - the value is on the lines below
 
 
-def redact_config_text(text: str) -> str:
+def _goes_on(line: str) -> bool:
+    """A .properties line whose value goes on to the next line: it ends in an odd number of backslashes."""
+    body = line.rstrip("\r")
+    return (len(body) - len(body.rstrip("\\"))) % 2 == 1
+
+
+def redact_config_text(text: str, properties: bool = False) -> str:
     """Config files paired whole or by line range: redact secret settings line by line, quoted
-    or not (`spring.datasource.password=hunter2`, `  password: hunter2`), keeping placeholders."""
-    out = []
+    or not (`spring.datasource.password=hunter2`, `  password: hunter2`, `"password": hunter2`,
+    in a .properties file also `db.password hunter2`), and every line of a secret's YAML block
+    value (`password: |`) or of its .properties value continued with `\\`. A line that continues
+    a .properties value is that value, never a setting of its own (`...and \\` / `  password to
+    continue`), except that a `password=...` on it is still redacted, as 1.7.6 did (the next part
+    of a JDBC URL); a line after one with no key that can be read (`db.\\`, a lone `\\`) is read on
+    its own. Placeholders are kept, a default written in one is not. Every line stays where it was,
+    so a line range still names the same lines."""
+    out, block = [], -1            # block >= 0: inside a secret's block value, which is indented deeper
+    goes_on = None                 # .properties: the line above goes on to this one (True: a secret's value)
     for line in text.split("\n"):
+        if goes_on is not None:
+            secret, goes_on = goes_on, (goes_on if _goes_on(line) else None)
+            indent = len(line) - len(line.lstrip())
+            if secret and line.strip():
+                line = line[:indent] + "<redacted>"
+            elif (c := _CONFIG_LINE.match(line)) and _secret_key(c.group(2)) \
+                    and not _BLOCK_SCALAR.fullmatch(c.group(4)):
+                # as 1.7.6: `password=...` that starts a continued line (the next part of a JDBC URL); a
+                # placeholder's default there is redacted as on a line of its own
+                if not (value := c.group(4)).startswith("${"):
+                    line = f"{c.group(1)}{c.group(2)}{c.group(3)}<redacted>"
+                elif (kept := _keep_placeholders(value)) != value:
+                    line = f"{c.group(1)}{c.group(2)}{c.group(3)}{kept}"
+            out.append(line)
+            continue
+        if block >= 0:
+            indent = len(line) - len(line.lstrip())
+            if not line.strip() or indent > block:
+                out.append(line[:indent] + "<redacted>" if line.strip() else line)
+                continue
+            block = -1
         m = _CONFIG_LINE.match(line)
-        if m and _secret_key(m.group(2)) and not m.group(4).startswith(("${", "|", ">")):
-            line = f"{m.group(1)}{m.group(2)}{m.group(3)}<redacted>"
+        if properties and _goes_on(line) and not line.lstrip().startswith(("#", "!")):   # a comment never goes on
+            key = m.group(2) if m else ((p := _PROPERTIES_SPACED.match(line)) and p.group(2))
+            # a line with no key it can be read by (`db.\`, a lone `\`) leaves the next line to be read on its own
+            goes_on = bool(_secret_key(key)) if key else None
+        if m and _secret_key(m.group(2)):
+            value = m.group(4)
+            if value.startswith("${"):
+                if (kept := _keep_placeholders(value)) != value:      # else the line stays as it is, byte for byte
+                    line = f"{m.group(1)}{m.group(2)}{m.group(3)}{kept}"
+            elif _BLOCK_SCALAR.fullmatch(value):
+                block = len(m.group(1))
+            else:                          # `password=>Xk9q`, `token: |abc`: a value, not a block header
+                line = f"{m.group(1)}{m.group(2)}{m.group(3)}<redacted>"
+        elif m is None and (q := _CONFIG_QUOTED.match(line)) and _secret_key(q.group(3)):
+            value = q.group(5)
+            if _BLOCK_SCALAR.fullmatch(value):
+                block = len(q.group(1))
+            else:
+                v = re.fullmatch(r"""(["'])(.*)\1(,?)""", value)     # a quoted value keeps its quotes
+                sent = f"{v.group(1)}{_redacted(v.group(2))}{v.group(1)}{v.group(3)}" if v else _redacted(value)
+                if sent != value:
+                    line = f"{q.group(1)}{q.group(2)}{q.group(3)}{q.group(2)}{q.group(4)}{sent}"
+        elif m is None and properties and (p := _PROPERTIES_SPACED.match(line)) and _secret_key(p.group(2)):
+            if (sent := _redacted(p.group(4))) != p.group(4):
+                line = f"{p.group(1)}{p.group(2)}{p.group(3)}{sent}"
         out.append(line)
     return "\n".join(out)
 
@@ -371,7 +538,7 @@ def _py_clean(src: str) -> str:
 
 def strip_comments(path: Path, text: str) -> str:
     """A whole file (for line-range refs) with comments blanked, line numbers kept."""
-    if path.suffix == ".py":
+    if path.suffix in (".py", ".pyi"):                      # a stub file is Python too
         lines = text.split("\n")
         with contextlib.suppress(SyntaxError, ValueError):
             _blank_py_docstrings(text, lines)
@@ -2439,7 +2606,7 @@ MAP_README = [
     "why         - your note: why this code, or why the sentence is excluded. Not sent anywhere.",
     "alternatives- other candidates, for your information. Not sent anywhere.",
     "spec, line, spec_text - where the sentence came from. spec_text is a copy of the spec text you",
-    "              reviewed, used only to notice when the spec changes afterwards. If the tool says the",
+    "              reviewed, used to find the sentence again when it moves and to notice when the spec changes. If the tool says the",
     "              spec changed, re-check the entry, then paste the current spec paragraph (or the lines",
     "              of a code block) into spec_text - markdown and line breaks are fine.",
     "Deleting an entry also works, but --strict then reports its sentence as not in the map.",
@@ -2500,8 +2667,15 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
                 "spec_text": _norm_text(paragraphs.get(lineno, sent)),
             })
     specs = [Path(d).as_posix() for d in docs] if named_specs is None else list(dict.fromkeys(named_specs))
-    out.write_text(json.dumps({"_readme": MAP_README, "specs": specs,
-                               "entries": entries}, indent=1, ensure_ascii=False))
+    existed = out.exists()
+    try:
+        out.write_text(json.dumps({"_readme": MAP_README, "specs": specs,
+                                   "entries": entries}, indent=1, ensure_ascii=False), encoding="utf-8")
+    except BaseException:
+        if not existed:                 # an empty map left behind would make the next draft refuse to write
+            with contextlib.suppress(OSError):
+                out.unlink()
+        raise
     named = sum(1 for e in entries if e["status"] == "named in the sentence")
     guessed = [e for e in entries if e["status"] == "suggested"]
     print(f"wrote {len(entries)} spec sentences to {out}")
@@ -2580,7 +2754,12 @@ def _find_snapshot(index: tuple[str, list[int], list[int]], snap: str, near: int
 
 
 _VERB_RE = re.compile(r"\s*(?:(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY|WS)\s+)?(\S+)\s*$", re.I)
-_SECRET_FILE = re.compile(r"^\.env(?:\..+)?$|\.(?:pem|key|p12|jks|pfx)$|^id_(?:rsa|ed25519|ecdsa)$")
+# Files that hold secrets by what they are, whatever is in them: a map entry pointing at one is refused
+# (the kinds code_audit and ci_triage keep out too). `.env.example` and other templates are allowed.
+# any case: on a disk that ignores it (macOS by default) `.ENV` opens `.env`
+_SECRET_FILE = re.compile(r"^\.env(?:\..+)?$|.\.env$|\.(?:pem|key|p12|jks|pfx|kdbx|tfvars|tfstate)$|\.tfstate\.\w+$|"
+                          r"^id_(?:rsa|ed25519|ecdsa|dsa)$|^\.(?:npmrc|pypirc|netrc|git-credentials)$|^kubeconfig$|"
+                          r"^credentials[\w.-]*\.json$|service-account[\w.-]*\.json$", re.I)
 
 
 def _close(word: str, options) -> str:
@@ -2594,8 +2773,9 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
     """route:GET /orders/{id}  |  config:app.orders.max-items  |  file:Symbol  |  file:120-160  |  file
 
     File paths are tried against each of `bases` in turn (the folder you run in,
-    --src, the map's folder). A .env file, a key file, or anything outside those
-    folders is refused: a map must never be able to send a secret."""
+    --src, the map's folder). A .env file, a key file, a credentials file (.netrc,
+    .npmrc, .pypirc, .git-credentials, ... - see _SECRET_FILE), or anything outside
+    those folders is refused: a map must never be able to send a secret file."""
     def fail(msg: str) -> None:
         text = f"{where + ': ' if where else ''}{msg}"
         if problems is None:
@@ -2636,7 +2816,7 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
         return s
     text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
     if _is_config_file(path):
-        text = redact_config_text(text)
+        text = redact_config_text(text, properties=path.suffix == ".properties")
     lines = text.split("\n")
     if m := re.fullmatch(r"(\d+)-(\d+)", target or ""):
         a, b = int(m.group(1)), int(m.group(2))
@@ -2658,6 +2838,51 @@ def _shown(path: Path) -> str:
     return rel if not rel.startswith("..") else path.name
 
 
+# What bash changes inside double quotes: a path holding one gets no ready-made command (as code_audit's)
+_SHELL_SPECIAL = re.compile(r"[\"$`\n]|\\(?=\\|$)")
+
+
+# Another code page's letters read in this one (as code_audit's): Cyrillic or Greek read as cp1252 is a run of
+# accented Latin letters, and a Western map read as cp1251 or cp1253 puts those letters inside a Latin word.
+_GARBLED = re.compile(r"[\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff]{3}|[A-Za-z\u00c0-\u024f][\u0370-\u04ff]|"
+                      r"[\u0370-\u03ff][A-Za-z\u00c0-\u024f\u0400-\u04ff]|"
+                      r"[\u0400-\u04ff][A-Za-z\u00c0-\u024f\u0370-\u03ff]")
+
+
+def _map_text(data: bytes, enc: str) -> str | None:
+    """The bytes of a file read in the code page `enc`, when that gives a map."""
+    try:
+        text = data.decode(enc)
+        m = json.loads(text)
+    except ValueError:
+        return None
+    return text if isinstance(m, list) or isinstance(m, dict) and isinstance(m.get("entries"), list) else None
+
+
+def _code_page_of(data: bytes) -> tuple[str, str] | None:
+    """(this system's code page, the first line with other characters than ASCII read in it, from 60 characters
+    before the first such character - a long sentence's start alone may hold none) for a map that is
+    not UTF-8, when it reads right in it. 1.7.6 and earlier wrote maps in the system's - cp1252 on most Windows,
+    where a sentence with a dash, a typographic quote or an accent made the map cp1252. Never another: cp1252
+    reads nearly any bytes, and a Cyrillic map converted from it loaded with every sentence garbled.
+    On Python 3.10 (no getencoding) the locale's own: getpreferredencoding says UTF-8 in UTF-8 mode, which
+    utf8_restart turns on under an 8-bit locale - on the very system that wrote the map. Windows has no
+    nl_langinfo, and no restart."""
+    system = (locale.getencoding() if hasattr(locale, "getencoding") else
+              locale.nl_langinfo(locale.CODESET) if hasattr(locale, "nl_langinfo") else
+              locale.getpreferredencoding(False))
+    try:
+        enc = codecs.lookup(system).name
+    except LookupError:
+        return None
+    text = None if enc in ("utf-8", "ascii") else _map_text(data, enc)
+    if not text or _GARBLED.search(text):
+        return None
+    line = next((ln.strip() for ln in text.splitlines() if not ln.isascii()), "")
+    first = next((k for k, ch in enumerate(line) if not ch.isascii()), 0)
+    return enc, line[max(0, first - 60):first + 60]
+
+
 def load_map(path: Path) -> list:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -2665,6 +2890,34 @@ def load_map(path: Path) -> list:
         raise Stop(f"{path} is not valid JSON: {e.msg} at line {e.lineno}, column {e.colno}. "
                    f"A trailing comma or a missing quote is the usual cause.") from None
     except UnicodeDecodeError as e:
+        raw = b""
+        with contextlib.suppress(OSError):
+            raw = path.read_bytes()
+        keep = ("then check that its sentences read as written. Do not re-save it from an editor that opened it as "
+                "UTF-8: that loses every character it could not read.")
+        if found := _code_page_of(raw):
+            enc, line = found
+            # the path as an argument, with forward slashes: a Windows path written into the code, in double
+            # quotes, reached Python through bash with each \\ halved ('C:\Users' - a \U escape). Python through
+            # uv, which jevmcp needs anyway: a bare `python` is often missing on Windows, or the Store's stub
+            where = path.as_posix()
+            convert = (f"uv run --no-project --quiet python -c \"import pathlib, sys; p = pathlib.Path(sys.argv[1]); "
+                       f"p.write_text(p.read_text(encoding='{enc}'), encoding='utf-8')\" \"{where}\""
+                       if not _SHELL_SPECIAL.search(where) else
+                       f"in Python (uv run --no-project --quiet python), p.write_text(p.read_text(encoding='{enc}'), "
+                       f"encoding='utf-8') with p its path (a shell would change a character of that path, so no "
+                       f"command is given)")
+            raise Stop(f"{path} is not UTF-8 text: it reads as this system's code page {enc}, as jevmcp 1.7.6 and "
+                       f"earlier wrote maps on Windows, and maps are read only as UTF-8 now. Read that way, its first "
+                       f"line that is not plain ASCII, around its first such character, is: {line} - if that is as "
+                       f"written, convert it once: {convert} - {keep}") from None
+        if _map_text(raw, "latin-1"):
+            raise Stop(f"{path} is not UTF-8 text: it looks like a map in the code page of the Windows system that "
+                       f"wrote it (cp1252 on Western European Windows, cp1251 on Cyrillic, ...), as jevmcp 1.7.6 and "
+                       f"earlier wrote them, and maps are read only as UTF-8 now. Which code page cannot be told here, "
+                       f"and one converted from the wrong one loads with every sentence garbled: convert it once on "
+                       f"the system that wrote it, where this message gives the command, or with its code page named - "
+                       f"{keep}") from None
         raise Stop(f"{path} is not UTF-8 text (byte {e.start} cannot be read), so it is not a map. Save it as "
                    f"UTF-8.") from None
     entries = data.get("entries") if isinstance(data, dict) else data
@@ -2949,6 +3202,8 @@ _BANNER_MARKS = r"(?:>\s*|\[!\w+\]\s*|[*_]{1,3}(?=[^\s*_]))*"
 _BANNER_END = r"[*_`]*\s*(?:$|[:.,;!()\[\]|–—-]|\s+(?:by|in\s+favou?r\s+of|see|use)\b)"
 _LATER = r"(?:ultimately|finally|later|eventually|since|subsequently)"
 _DOC_NOUN = r"(?:document|doc|page|spec|specification|design|adr|rfc|proposal|decision|prd|srs|requirements)"
+_ONLY_PART = (r"(?![^.;]{0,300}\b(?:in\s+parts?|parts?\s+(?:of\s+(?:it|them)|is|was|are|were|has|have)|partly|"
+              r"partially|mostly|largely)\b)")
 _DECLARATIONS = [
     # "Status: Superseded by ADR-7", "- **Status:** deprecated", "| Status | Obsolete |", "status: accepted,
     # superseded by ADR-9", "Status: Proposed, accepted, reconsidered, and ultimately reverted.", YAML front matter
@@ -2965,13 +3220,31 @@ _DECLARATIONS = [
     # archived after 30 days" is a requirement, not a status. Never a part of it: "This RFC was
     # previously approved, but part of it later withdrawn", "Part of this RFC was later withdrawn".
     # The look ahead for "part" reads at most 300 characters: unbounded, it read to the end of the
-    # sentence at every "this spec", and a long line that repeats it took minutes.
-    re.compile(rf"\bthis\s+{_DOC_NOUN}\b[^.;]{{0,80}}?\b(?:is|was|are|were|has\s+been|have\s+been)\s+(?:now\s+)?"
+    # sentence at every "this spec", and a long line that repeats it took minutes. Both forms have
+    # it: "Part of this spec is superseded by ADR-9", "This document has been superseded in part".
+    # In the first form it reads only words that limit the declaration to a part: "in part", "part
+    # of it", "parts were", "partly" - never "part of the platform", "as part of the cleanup" or
+    # "docs/part-2.md". The second form ("... later/since superseded") keeps 1.7.6's look ahead: any
+    # "part", "parts", "partly", "mostly" or "largely" later in it ("since superseded in large part").
+    re.compile(rf"(?<!\bpart of )(?<!\bparts of )\bthis\s+{_DOC_NOUN}\b{_ONLY_PART}"
+               rf"[^.;]{{0,80}}?\b(?:is|was|are|were|has\s+been|have\s+been)\s+(?:now\s+)?"
                rf"(?:{_OLD}|{_NO_LONGER})\b"
                rf"|(?<!\bpart of )(?<!\bparts of )\bthis\s+{_DOC_NOUN}\b"
                rf"(?![^.;]{{0,300}}\b(?:part|parts|partly|partially|mostly|largely)\b)"
                rf"[^.;]{{0,80}}?\b{_LATER}\s+(?:been\s+)?[*_]*{_OLD}\b", re.I),
 ]
+# "Section 3 of this spec has been superseded", "Chapters 2-4 of this document are obsolete": a part of
+# it, named before "this" - which a look behind cannot read, as it has to be of one fixed width.
+_PART_BEFORE = re.compile(r"(?:\b(?:part|parts|portions?|sections?|chapters?|appendix|appendices|paragraphs?|"
+                          r"clauses?)\b[\w\s.,&§–-]{0,30}?|\b(?:most|some|much)\s+)\bof\s+$", re.I)
+
+
+def _says_this_is_old(line: str) -> bool:
+    """Does `line` say that this document is superseded, withdrawn or no longer current - all of it."""
+    return any(not _PART_BEFORE.search(line[max(0, m.start() - 60):m.start()])
+               for m in _DECLARATIONS[3].finditer(line))
+
+
 # A header field that names what replaced the document: "Superseded-By: 3333" (a PEP's header). It
 # counts anywhere in the header block, not only where a paragraph starts.
 _FIELD_BY = re.compile(r"^\s*(?:superseded|replaced|obsoleted)[-_ ]by\s*:\s*\S", re.I)
@@ -3121,7 +3394,7 @@ def _front_matter_end(lines: list[str]) -> int:
 
 def _title_says_old(text: str) -> bool:
     """Does a title say the document is old: "Payments spec (DEPRECATED)", "ADR013: [superseded] ..."."""
-    return bool(_TITLE_MARK.search(text) or _DECLARATIONS[2].match(text) or _DECLARATIONS[3].search(text))
+    return bool(_TITLE_MARK.search(text) or _DECLARATIONS[2].match(text) or _says_this_is_old(text))
 
 
 def declared_old(lines: list[str]) -> tuple[int, str] | None:
@@ -3163,7 +3436,7 @@ def declared_old(lines: list[str]) -> tuple[int, str] | None:
             continue                                        # a section heading ("## Deprecated fields")
         banner = first or raw.lstrip().startswith((">", "[!", "*", "_"))
         if (_DECLARATIONS[0].match(raw) or _DECLARATIONS[1].match(raw) or _FIELD_BY.match(raw)
-                or (banner and _DECLARATIONS[2].match(raw)) or _DECLARATIONS[3].search(raw)):
+                or (banner and _DECLARATIONS[2].match(raw)) or _says_this_is_old(raw)):
             return i + 1, raw.strip()
     return None
 
@@ -3977,6 +4250,43 @@ def build_questions() -> dict:
     return q
 
 
+def _a_number(x) -> bool:
+    """A number a gate can compare and round: never a bool, None, a string, NaN or infinity."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def _input_tokens(reply) -> int:
+    """The input tokens a reply says it used; 0 when its usage cannot be read (null, not an object)."""
+    usage = reply.get("usage") if isinstance(reply, dict) else None
+    n = usage.get("input_tokens") if isinstance(usage, dict) else None
+    return int(n) if _a_number(n) else 0
+
+
+def unreadable_answer(answers, questions: dict) -> str | None:
+    """Why one reply's answers cannot be read, or None when they can. Checked once, where every tool
+    gets its answers (ask, and a replay from the cache): each question asked has an answer; a choice
+    is one of the options offered, with a confidence and probabilities that are numbers; a score or a
+    noul is a number. The gates read these parts, and a part they cannot read made a pass of a null
+    choice, or crashed a run on a null confidence - so such an answer is an API error for its item."""
+    if not isinstance(answers, dict):
+        return "no answers"
+    for q, spec in questions.items():
+        a, kind = answers.get(q), spec.get("type")
+        if not isinstance(a, dict):
+            return f"no answer to {q}"
+        if kind == "choice":
+            if not isinstance(a.get("choice"), str) or (spec.get("criteria") and a["choice"] not in spec["criteria"]):
+                return f"{q}: the choice {a.get('choice')!r:.40} is not one of those offered"
+            if not _a_number(a.get("confidence")):
+                return f"{q}: the confidence {a.get('confidence')!r:.40} is not a number"
+            probs = a.get("probabilities", {})
+            if not isinstance(probs, dict) or not all(_a_number(p) for p in probs.values()):
+                return f"{q}: the probabilities are not numbers"
+        elif kind in ("score", "noul") and not _a_number(a.get(kind)):
+            return f"{q}: the {kind} {a.get(kind)!r:.40} is not a number"
+    return None
+
+
 def ask(state: dict, questions: dict, key: str, timeout: int = 60, retries: int = 3,
         cancelled: Callable[[], bool] | None = None) -> dict:
     body = json.dumps({"state": canonical(state), "model": MODEL, "questions": questions}).encode()
@@ -3998,12 +4308,25 @@ def ask(state: dict, questions: dict, key: str, timeout: int = 60, retries: int 
             return {"_error": "cancelled before it was sent again"}
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                out = json.loads(r.read())
+                reply = r.read()
+                out = json.loads(reply)
+                # A reply holds one answer per question asked. One that does not is an API error for
+                # this item - never an answer, never cached, and never a crash of the whole run.
+                answers = out.get("answers") if isinstance(out, dict) else None
+                if not isinstance(answers, dict):
+                    return {"_error": f"the reply held no answers: {reply.decode('utf-8', 'replace')[:160]}"}
+                if missing := [q for q in questions if not isinstance(answers.get(q), dict)]:
+                    return {"_error": f"the reply held no answer to {', '.join(missing)}"}
+                if why := unreadable_answer(answers, questions):
+                    return {"_error": f"the reply could not be read ({why})"}
                 out["_upstream_ms"] = r.headers.get("x-envoy-upstream-service-time")
                 out["_request_id"] = r.headers.get("x-typesafe-request-id")
                 return out
         except urllib.error.HTTPError as e:
-            raw = e.read().decode(errors="replace")[:400]
+            try:
+                raw = e.read().decode("utf-8", errors="replace")[:400]
+            except Exception:  # noqa: BLE001 - the status code says what happened; the body only adds detail
+                raw = ""
             if e.code == 402:
                 raise VendorStop("TypeSafe's credits are used up (HTTP 402). There is no low-balance warning. "
                            "Top up and switch on auto-reload: https://console.typesafe.ai/settings/billing")
@@ -4047,25 +4370,29 @@ def load_cache(path: Path | None = None) -> dict[str, list]:
     agreement gate needs several INDEPENDENT answers, and replaying one answer three times
     would make unanimity meaningless."""
     try:
-        data = json.loads((path or CACHE_FILE).read_text())
+        data = json.loads((path or CACHE_FILE).read_text(encoding="utf-8"))
         return data.get("answers", {}) if isinstance(data, dict) else {}
     except Exception:                                  # noqa: BLE001 - a bad cache is not an error
         return {}
 
 
-def save_cache(answers: dict[str, list], path: Path | None = None) -> None:
+def save_cache(answers: dict[str, list], path: Path | None = None,
+               drop: set[str] | frozenset[str] = frozenset()) -> None:
     """Merge into what is on disk now: another run (a second session, a parallel CLI) may have saved
-    since this one loaded, and writing only this run's copy would throw its answers away."""
+    since this one loaded, and writing only this run's copy would throw its answers away. The keys in
+    `drop` are removed: answers that could not be read are asked for again, never replayed."""
     tmp = None
     try:
         path = path or CACHE_FILE          # read at call time: a default argument could not be patched
         merged = load_cache(path)
         merged.update(answers)
+        for k in drop:
+            merged.pop(k, None)
         if len(merged) > CACHE_MAX:
             merged = dict(list(merged.items())[-CACHE_MAX:])
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".verdicts-", suffix=".tmp")   # one per writer
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump({"version": 1, "model": MODEL, "answers": merged}, fh)
         os.replace(tmp, path)
         tmp = None
@@ -4086,12 +4413,13 @@ def map_health(results: list[dict], claims: list[Claim], syms: dict[str, Symbol]
     claim's own words suggest, because that is the cheapest fix available.
     """
     unver = [r for r in results if r.get("label") == "??"]
-    by_line = {(c.doc, c.line): c for c in claims}
+    # a claim is its line, sentence and pairing: one spec line often holds several claims
+    own = {(c.doc, c.line, c.text, tuple(f"{s.file}:{s.line} {s.name}" for s in c.symbols)): c for c in claims}
     worst: dict[str, int] = {}
     fixes: list[dict] = []
     for r in unver:
         worst[r.get("symbol", "?")] = worst.get(r.get("symbol", "?"), 0) + 1
-        c = by_line.get((r.get("doc"), r.get("line")))
+        c = own.get((r.get("doc"), r.get("line"), r.get("claim"), tuple(r.get("code_refs") or ())))
         entry = {"doc": r.get("doc"), "line": r.get("line"), "claim": r.get("claim"),
                  "paired_with": r.get("code_refs", []), "why": r.get("why", "")}
         if c is not None:
@@ -4123,6 +4451,64 @@ def next_step_for_drift(r: dict) -> str:
             f"`git log -p`/`git blame` on the paired code usually shows which.")
 
 
+def ask_again(answer_n: Callable[[int, int], dict], ks: list[int], samples: int, jobs: int,
+              cancelled: Callable[[], bool] | None = None) -> tuple[list[list[dict]], list[Stop]]:
+    """Answers 2 to `samples` of each item k in `ks` (answer_n(k, n) gives its n-th answer), `jobs`
+    items at a time: the re-ask pass of check_claims and jevkit.screen.
+
+    An item is decided by agreement only when ALL its answers came back, so its asking ends at its
+    first failure (an API error, a reply without answers): one more answer would be paid for and
+    never used. Once the check is cancelled, or a Stop is raised (a rejected key; VendorStop:
+    credits used up), nothing more is sent: the item that raised it and every item cut short end
+    with an entry marked "_halted", and the Stops are returned as the second value."""
+    halted: list[Stop] = []
+
+    def again(k: int) -> list[dict]:
+        got: list[dict] = []
+        for n in range(1, samples):
+            if halted:
+                got.append({"_error": "not asked: re-asking stopped early", "_halted": True})
+                break
+            if cancelled and cancelled():
+                got.append({"_error": "cancelled before it was sent", "_halted": True})
+                break
+            try:
+                m = answer_n(k, n)
+            except Stop as e:
+                halted.append(e)
+                got.append({"_error": f"re-asking stopped early: {e}", "_halted": True})
+                break
+            if "_error" not in m and not isinstance(m.get("answers"), dict):
+                m = {**m, "_error": "the reply held no answers"}
+            got.append(m)
+            if "_error" in m:
+                break
+        return got
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        more = list(pool.map(again, ks))
+    return more, halted
+
+
+def reask_failures(more: list[list[dict]], halted: list[Stop]) -> tuple[list[str], list[str]]:
+    """What a re-ask pass that was cut short adds to the run: (vendor failures, problems). A Stop is
+    a problem (exit 2), VendorStop and a cancellation are vendor failures (exit 3); either way the
+    run is not complete. An item whose own request failed is reported by the caller, by name."""
+    cut = sum(1 for extra in more if extra and extra[-1].get("_halted"))
+    if halted:
+        line = f"re-asking stopped early - {cut} item(s) keep their first answer's label: {halted[0]}"
+        return ([line], []) if isinstance(halted[0], VendorStop) else ([], [line])
+    if cut:
+        return [f"re-asking was cancelled - {cut} item(s) keep their first answer's label"], []
+    return [], []
+
+
+def reask_note(error: str) -> str:
+    """The note on an item whose re-asking failed: it keeps its first answer's label and why."""
+    return f"not decided by agreement: asking again failed ({error[:120]}), so the label is the first answer's"
+
+
 def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[str], None] = print,
                  on_answer: Callable[[int, int], None] | None = None,
                  cancelled: Callable[[], bool] | None = None,
@@ -4134,13 +4520,18 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
     could not be used). Shared by the CLI and jevmcp_server.py, so both judge identically.
 
     `on_answer(done, total)` is called as each answer arrives (from worker threads);
-    once `cancelled()` returns true, no further claims are sent.
+    once `cancelled()` returns true, no further claims are sent, and after a rejected key or
+    credits running out no new request starts (those already in flight finish).
 
     Every claim is asked once. A claim the single-answer gate does NOT settle is then asked
     `samples - 1` more times, and is decided only if every answer agrees and none is below
     `agree_floor`. Claims the first answer already settled are never asked again, so the extra
     cost falls only on the uncertain middle. `samples=1` restores the single-answer behaviour
-    exactly."""
+    exactly. When asking again fails for a claim, it keeps its first answer's label and why,
+    gets a `note` saying so, and the failure is a vendor failure (see ask_again): never a pass.
+    An answer that cannot be read (a part missing or of the wrong type, a choice that was not offered:
+    unreadable_answer) is such a failure too, in either pass - never a crash of the run or a pass -
+    and it is never kept in the cache or replayed from it, so it is asked again."""
     problems: list[str] = []
     vendor: list[str] = []
     results: list[dict] = []
@@ -4152,29 +4543,38 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
     store = load_cache() if use_cache else {}
     keys = [_cache_key(s, questions) for s in states]
     cache_lock, replayed = threading.Lock(), [0]
+    unreadable: set[str] = set()              # cache keys of answers that could not be read: never kept
 
     def answer_n(k: int, n: int) -> dict:
         """The n-th independent answer for claim k: replayed from the cache when we already
         have that many, otherwise asked and remembered. Answers are kept as a LIST per claim,
         because the agreement gate needs independent answers - handing it one answer three
-        times would make unanimity mean nothing."""
+        times would make unanimity mean nothing. A kept answer that cannot be read (an earlier version
+        kept it) is dropped with the ones after it, and asked for again."""
         with cache_lock:
             have = store.get(keys[k], [])
             if n < len(have):
-                replayed[0] += 1
-                return {"answers": have[n], "usage": {"input_tokens": 0}, "_cached": True}
+                if unreadable_answer(have[n], questions) is None:
+                    replayed[0] += 1
+                    return {"answers": have[n], "usage": {"input_tokens": 0}, "_cached": True}
+                store[keys[k]] = have[:n]
         got = ask(states[k], questions, key, cancelled=cancelled)
         if use_cache and "answers" in got:
             with cache_lock:
                 store.setdefault(keys[k], []).append(got["answers"])
         return got
 
+    stopped = threading.Event()               # a rejected key or credits used up: send nothing more
+
     def one(k: int):
         if cancelled and cancelled():
             return {"_error": "cancelled before it was sent"}
+        if stopped.is_set():
+            return {"_error": "not sent: the run stopped early", "_halted": True}
         try:
             return answer_n(k, 0)
         except Stop as e:                      # re-raised in order below
+            stopped.set()
             return {"_stop": e}
         finally:
             if on_answer:
@@ -4190,31 +4590,40 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
         for i, (c, state, ans) in enumerate(zip(claims, states, answers), 1):
             if "_stop" in ans:
                 raise ans["_stop"]
-            if "_error" in ans:
-                vendor.append(f"{c.doc}:{c.line} was not checked - API error: {ans['_error'][:120]}")
-                show(f"  [{i}/{len(claims)}] ERROR  {c.doc}:{c.line}  {ans['_error'][:80]}")
+            if ans.get("_halted"):             # not sent after a Stop, which is reported below
                 continue
-            a = ans["answers"]
-            action, conf, why = classify(a)
-            tokens += ans.get("usage", {}).get("input_tokens", 0)
-            results.append({
-                "label": {"act": "DRIFT", "review": "review", "unverifiable": "??", "clean": "ok"}[action],
-                "action": action, "confidence": round(conf, 3), "why": why,
-                "doc": c.doc, "line": c.line, "claim": c.text,
-                "code_file": c.symbol.file, "code_line": c.symbol.line, "symbol": c.symbol.name,
-                "code_refs": [f"{s.file}:{s.line} {s.name}" for s in c.symbols],
-                "verdict": a["verdict"]["choice"],
-                "probabilities": a["verdict"]["probabilities"],
-                "severity": round(a["severity"]["score"], 2),
-                "severity_legend": a["severity"]["legend"],
-                "value_mismatch": a["value_mismatch"]["noul"],
-                "code_sent": state["code"] + (f"\n\n[computed_values]\n{state['computed_values']}"
-                                              if "computed_values" in state else ""),
-                "request_id": ans.get("_request_id"),
-                "upstream_ms": ans.get("_upstream_ms"),
-                "samples": 1,
-                "_k": i - 1, "_a": a,
-            })
+            error = ans.get("_error") or (None if isinstance(ans.get("answers"), dict) else "the reply held no answers")
+            a = ans.get("answers")
+            if error is None:
+                try:
+                    action, conf, why = classify(a)
+                    row = {
+                        "label": {"act": "DRIFT", "review": "review", "unverifiable": "??", "clean": "ok"}[action],
+                        "action": action, "confidence": round(conf, 3), "why": why,
+                        "doc": c.doc, "line": c.line, "claim": c.text,
+                        "code_file": c.symbol.file, "code_line": c.symbol.line, "symbol": c.symbol.name,
+                        "code_refs": [f"{s.file}:{s.line} {s.name}" for s in c.symbols],
+                        "verdict": a["verdict"]["choice"],
+                        "probabilities": a["verdict"]["probabilities"],
+                        "severity": round(a["severity"]["score"], 2),
+                        "severity_legend": a["severity"]["legend"],
+                        "value_mismatch": a["value_mismatch"]["noul"],
+                        "code_sent": state["code"] + (f"\n\n[computed_values]\n{state['computed_values']}"
+                                                      if "computed_values" in state else ""),
+                        "request_id": ans.get("_request_id"),
+                        "upstream_ms": ans.get("_upstream_ms"),
+                        "samples": 1,
+                        "_k": i - 1, "_a": a,
+                    }
+                except (KeyError, TypeError, AttributeError, ValueError) as e:   # an answer missing a part
+                    error = f"the reply could not be read ({type(e).__name__}: {e})"
+                    unreadable.add(keys[i - 1])
+            tokens += _input_tokens(ans)
+            if error is not None:
+                vendor.append(f"{c.doc}:{c.line} was not checked - API error: {error[:120]}")
+                show(f"  [{i}/{len(claims)}] ERROR  {c.doc}:{c.line}  {error[:80]}")
+                continue
+            results.append(row)
             flag = {"act": "DRIFT ", "review": "review", "unverifiable": "  ??  ", "clean": "  ok  "}[action]
             show(f"  [{i}/{len(claims)}] {flag} {conf:.2f}  {c.doc}:{c.line}  {c.text[:64]}")
     except VendorStop as e:
@@ -4229,22 +4638,30 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
     if samples > 1 and undecided and not problems and not vendor and not (cancelled and cancelled()):
         show(f"  asking again about {len(undecided)} claim(s) one answer did not settle "
              f"({samples - 1} more each)")
-
-        def again(r: dict) -> list[dict]:
-            return [answer_n(r["_k"], n) for n in range(1, samples)]
-
-        try:
-            with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-                more = list(pool.map(again, undecided))
-        except Stop as e:
-            problems.append(f"re-asking stopped early: {e}")
-            more = []
+        more, halted = ask_again(answer_n, [r["_k"] for r in undecided], samples, jobs, cancelled)
+        vendor_lines, stop_lines = reask_failures(more, halted)
+        vendor += vendor_lines
+        problems += stop_lines
         changed = 0
         for r, extra in zip(undecided, more):
-            good = [m["answers"] for m in extra if "_error" not in m and "answers" in m]
-            tokens += sum(m.get("usage", {}).get("input_tokens", 0) for m in extra if "_error" not in m)
-            r["samples"] = 1 + len(good)
-            settled = classify_samples([r["_a"], *good], agree_floor)
+            good = [m["answers"] for m in extra if "_error" not in m]
+            tokens += sum(_input_tokens(m) for m in extra)
+            if failed := next((m for m in extra if "_error" in m), None):
+                r["note"] = reask_note(failed["_error"])
+                if not failed.get("_halted"):
+                    vendor.append(f"{r['doc']}:{r['line']} could not be asked again - API error: "
+                                  f"{failed['_error'][:120]} (it keeps its first answer's label)")
+                continue
+            try:
+                settled = classify_samples([r["_a"], *good], agree_floor)
+            except (KeyError, TypeError, AttributeError, ValueError) as e:   # a wrong-typed part: confidence null
+                error = f"the reply could not be read ({type(e).__name__}: {e})"
+                r["note"] = reask_note(error)
+                vendor.append(f"{r['doc']}:{r['line']} could not be asked again - API error: {error[:120]} "
+                              f"(it keeps its first answer's label)")
+                unreadable.add(keys[r["_k"]])
+                continue
+            r["samples"] = 1 + len(good)     # all came back and decided it; when one failed it stays 1
             if settled:
                 action, conf, why = settled
                 r["action"], r["confidence"], r["why"] = action, round(conf, 3), why
@@ -4256,7 +4673,7 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
     for r in results:
         r.pop("_k", None); r.pop("_a", None)
     if use_cache:
-        save_cache(store)
+        save_cache(store, drop=unreadable)
     globals()["LAST_RUN_REPLAYED"] = replayed[0]
     if replayed[0]:
         show(f"  {replayed[0]} answer(s) replayed from the cache - unchanged code is never asked about twice")
@@ -4340,7 +4757,7 @@ def classify_samples(answers: list[dict], floor: float = AGREE_FLOOR) -> tuple[s
     return None
 
 
-# A claim about what the code does NOT do. One excerpt can never settle it: code that does
+# A claim about what the code does NOT do. One excerpt rarely settles it: code that does
 # not do X proves nothing, and the one place that does X reads as a refutation. Measured on
 # this project's own PRIVACY.md, where "sends no telemetry" paired with the single function
 # that makes a request came back DRIFT at 0.93 against correct code.
@@ -4383,15 +4800,19 @@ def _relevant_slice(source: str, claim: str, budget: int) -> tuple[str, bool]:
 def preflight(c: Claim) -> list[str]:
     """Why this claim will probably come back "??", worked out locally and for free.
 
-    A "??" costs a request and returns nothing, and in this project's own audit 38% of claims
-    came back that way. Every cause below is visible without asking anyone.
+    A "??" costs a request and settles nothing on its own, and in this project's own audit 38% of
+    claims came back that way. Every cause below is visible without asking anyone.
     """
     out = []
+    # Neither kind is to be excluded: on this project's own documentation such claims held 18 of
+    # the 28 real problems found - a ?? or review on one is read, not dropped.
     if _NEGATIVE_UNIVERSAL.search(c.text):
-        out.append("says what the code does NOT do - no excerpt can settle that; exclude it with a "
-                   "why, or reword the sentence to name the one place involved")
+        out.append("says what the code does NOT do - one excerpt rarely settles that. Keep it (such claims "
+                   "often hold real problems), and reword it to name the one place involved, or pair it with "
+                   "the code that enforces it")
     if (c.text.rstrip().endswith(":") or c.text.rstrip().endswith("：") and _CJK_ANY.search(c.text)):
-        out.append("ends in a colon - a lead-in, not a requirement; exclude it and check the items below it")
+        out.append("ends in a colon - a lead-in; keep it, and pair it with the code that enforces what it "
+                   "introduces - the items below it are checked on their own")
     total = sum(len(s.source) for s in dict.fromkeys(c.symbols))
     if total > MAX_CODE_CHARS:
         out.append(f"the paired code is {total:,} characters and only {MAX_CODE_CHARS:,} are sent - "
@@ -4700,6 +5121,14 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _key_file_text(path: Path) -> str:
+    """A key file's or a .env's text, as Windows saves it too: Notepad writes UTF-8 with a byte-order mark,
+    or UTF-16 ("Unicode"), as Windows PowerShell 5.1's `>` and Out-File do. Read as UTF-8, every character
+    of UTF-16 comes with a NUL and no line can be read, so a file that starts with its mark is UTF-16."""
+    raw = path.read_bytes()
+    return raw.decode("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig", errors="replace")
+
+
 def _load_key(key_file: str | None = None, dotenv: bool = True) -> str:
     """--key-file alone if given; else TYPESAFE_API_KEY; else (command line only, dotenv=True)
     the .env of the folder you run from. The MCP server passes dotenv=False: a project it is
@@ -4708,14 +5137,14 @@ def _load_key(key_file: str | None = None, dotenv: bool = True) -> str:
         kf = Path(key_file).expanduser()
         if not kf.is_file():
             raise Stop(f"--key-file {key_file} not found.")
-        for line in kf.read_text(errors="replace").splitlines():
+        for line in _key_file_text(kf).splitlines():
             if m := re.match(r"\s*(?:export\s+)?TYPESAFE_API_KEY\s*=\s*(.+)", line):
                 return m.group(1).strip().strip('"').strip("'")
         raise Stop(f"{key_file} has no TYPESAFE_API_KEY=... line.")
     key = env_key()
     env = Path.cwd() / ".env"
     if not key and dotenv and env.is_file():
-        for line in env.read_text(errors="replace").splitlines():
+        for line in _key_file_text(env).splitlines():
             if m := re.match(r"\s*(?:export\s+)?TYPESAFE_API_KEY\s*=\s*(.+)", line):
                 key = m.group(1).strip().strip('"').strip("'")
     if not key:
@@ -4733,13 +5162,25 @@ def _changed_files(given: list[str], src: Path) -> set[str]:
         return {str(Path(f).resolve()) for f in given}
     need_git("the changed files cannot be found: name the files to check, or check the whole map.")
     out = set()
-    for cmd in (git_argv("diff", "--name-only", "HEAD"), git_argv("ls-files", "--others", "--exclude-standard")):
-        r = subprocess.run(cmd, cwd=src, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        if r.returncode != 0:
-            raise Stop(f"--changed with no files needs a git repository at {src.resolve()}: {r.stderr.strip()[:120]}")
-        top = subprocess.run(git_argv("rev-parse", "--show-toplevel"), cwd=src, capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL).stdout.strip()
-        out |= {str((Path(top) / f).resolve()) for f in r.stdout.split()}
+    # -z: every name as it is on disk (os.fsdecode, as _git_list reads them), with spaces and letters
+    # such as é, which git otherwise quotes; a git that hangs stops the check instead of holding it.
+    # Both lists name files from the top of the repository (--full-name: also when src is a subfolder).
+    try:
+        top = None
+        for cmd in (git_argv("diff", "--name-only", "-z", "HEAD"),
+                    git_argv("ls-files", "-z", "--full-name", "--others", "--exclude-standard")):
+            r = subprocess.run(cmd, cwd=src, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+            if r.returncode != 0:
+                raise Stop(f"--changed with no files needs a git repository at {src.resolve()}: "
+                           f"{r.stderr.decode('utf-8', 'replace').strip()[:120]}")
+            if top is None:
+                top = Path(os.fsdecode(subprocess.run(git_argv("rev-parse", "--show-toplevel"), cwd=src,
+                                                      capture_output=True, timeout=60,
+                                                      stdin=subprocess.DEVNULL).stdout.rstrip(b"\r\n")))
+            out |= {str((top / os.fsdecode(f)).resolve()) for f in r.stdout.split(b"\0") if f}
+    except subprocess.TimeoutExpired:
+        raise Stop("git took more than 60 s to say which files changed, so nothing was checked. Name the files "
+                   "to check, or check the whole map.") from None
     return out
 
 
@@ -4769,7 +5210,43 @@ def safe_path() -> None:
         os.environ["NoDefaultCurrentDirectoryInExePath"] = "1"
 
 
+def utf8_output() -> None:
+    """Print UTF-8 whatever the locale: to a pipe or a file (a CI log, an agent's shell) Windows would
+    write the ANSI code page, and a spec sentence in Chinese - or one typographic quote - would stop
+    the run. errors="replace": a character that cannot be written becomes "?", never a crash."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+def utf8_restart() -> None:
+    """Under a locale that is not UTF-8 with Python's UTF-8 mode off (LC_ALL=C with PYTHONUTF8=0, an 8-bit
+    locale) Python writes a file name in the locale's encoding, while git, the maps and the command line give
+    UTF-8 names: docs/спец.md was "not valid UTF-8", 订单.py "not found" or left out without a word. Start
+    again, once, in UTF-8 mode, before anything is read. Only when the main() calling this is the script
+    Python was started with - a test or another program that calls main() is never restarted. POSIX only:
+    Windows names files in UTF-16, and exec there starts a second process.
+    The cost, under an 8-bit locale: a file whose name is in that locale's own encoding (café.py saved under
+    Latin-1 or cp1252) is not found after the restart. `python -X utf8=0` or JEVMCP_NO_UTF8_RESTART=1 turns
+    the restart off (PYTHONUTF8=0 cannot: it is part of what starts it)."""
+    if os.name == "posix" and not sys.flags.utf8_mode and sys.executable \
+            and sys._xoptions.get("utf8") != "0" \
+            and os.environ.get("JEVMCP_NO_UTF8_RESTART", "").strip() in ("", "0") \
+            and codecs.lookup(sys.getfilesystemencoding()).name != "utf-8" \
+            and sys._getframe(1).f_globals.get("__name__") == "__main__":
+        for stream in (sys.stdout, sys.stderr):     # exec drops what is still in the buffers
+            with contextlib.suppress(Exception):
+                stream.flush()
+        with contextlib.suppress(OSError):          # cannot start again: run as before
+            os.execv(sys.executable, [sys.executable, "-X", "utf8",      # with Python's own options: -I, -u, -B, -m
+                                      *(sys.orig_argv[1:] if getattr(sys, "orig_argv", None) else sys.argv)])
+
+
 def main() -> None:
+    utf8_restart()
+    utf8_output()
     safe_path()
     here = Path(__file__).resolve().parent
     inside_tool_folder = Path.cwd().resolve() == here
@@ -4969,8 +5446,8 @@ def run(args, inside_tool_folder: bool) -> int:
                          "likely_unverifiable": warn, "state": canonical(state)})
         weak = sum(1 for e in plan if e["likely_unverifiable"])
         if weak:
-            print(f"\n  {weak} of {len(claims)} claims will probably come back \"??\" - each costs a request "
-                  f"and answers nothing. Fix those entries before spending.")
+            print(f"\n  {weak} of {len(claims)} claims will probably come back \"??\" - not a pass, and such claims "
+                  f"often hold real problems: keep them, and see LIKELY ?? above for how to pair them better.")
         print(f"\ndry run - nothing was sent. {len(claims)} claim{'s' if len(claims) != 1 else ''}, "
               f"estimated cost ${estimate_cost(claims):.4f}"
               + (f", up to ${estimate_cost(claims, args.samples):.4f} if every claim needs re-asking."
@@ -4978,7 +5455,7 @@ def run(args, inside_tool_folder: bool) -> int:
         if args.out:
             Path(args.out).write_text(json.dumps({"claims": plan, "problems": problems,
                                                   "estimated_cost_usd": round(estimate_cost(claims), 5)},
-                                                 indent=1, ensure_ascii=False))
+                                                 indent=1, ensure_ascii=False), encoding="utf-8")
             print(f"plan -> {Path(args.out).resolve()}")
         if problems:
             print(f"INCOMPLETE: {len(problems)} problem(s) above - fix them before the real check. Exit code 2.")
@@ -4998,7 +5475,7 @@ def run(args, inside_tool_folder: bool) -> int:
     vendor += failed
 
     args.out = args.out or "drift.json"
-    Path(args.out).write_text(json.dumps(results, indent=1, ensure_ascii=False))
+    Path(args.out).write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
     acts = [r for r in results if r["action"] == "act"]
     revs = [r for r in results if r["action"] == "review"]
     unv = [r for r in results if r["action"] == "unverifiable"]
