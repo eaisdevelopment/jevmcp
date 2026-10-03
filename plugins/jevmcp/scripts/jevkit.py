@@ -15,7 +15,8 @@ them, and it is the part that was measured (spec drift 1.6.0, 115 graded claims)
   only if every answer came back, agrees and none is below a floor - so re-asking can only move an
   item OUT of `review`, never quietly into it, and a failed re-ask is never a pass;
 - answers are cached as a LIST per exact request, so an unchanged item costs nothing the second time
-  and the agreement gate never sees one answer three times.
+  and the agreement gate never sees one answer three times; items whose requests are exactly the same
+  are asked once and share the answers.
 
 The HTTP client, the cache file, the key lookup and the errors (Stop = fix your setup, VendorStop =
 TypeSafe could not be used) are spec_drift's, so every tool behaves the same way when things fail.
@@ -107,8 +108,9 @@ def screen(items: list[Item], key: str,
 
     Once `cancelled()` returns true nothing further is sent. A rejected key stops the run (a
     problem); exhausted credits stop it too (a vendor failure). After either, no new request starts
-    (those already in flight finish). Neither is ever reported as a pass:
-    items that were not checked carry `error`, and `Run.complete` is False. An item whose asking
+    (those already in flight finish), and every answer that came back counts, whatever the item's place
+    in the order. Neither is ever reported as a pass: items that were not checked carry `error`, and
+    `Run.complete` is False. An item whose asking
     again failed keeps its first answer's action with a `note`, and the failure is in `vendor`. An
     answer that cannot be read (a part missing or of the wrong type, a choice that was not offered:
     dd.unreadable_answer) is an API error for its item in either pass, never a crash of the run or a
@@ -116,6 +118,10 @@ def screen(items: list[Item], key: str,
     run = Run(results=[Screened(item=i) for i in items])
     store = dd.load_cache() if use_cache else {}
     keys = [dd._cache_key(i.state, i.questions) for i in items]
+    alike = dd.asked_alike(keys)              # an item asked exactly as an earlier one shares its answers
+    sharing = {k: 0 for k in alike}
+    for k in alike:
+        sharing[k] += 1
     cache_lock, done_lock, done, replayed = threading.Lock(), threading.Lock(), [0], [0]
     unreadable: set[str] = set()              # cache keys of answers that could not be read: never kept
 
@@ -145,52 +151,65 @@ def screen(items: list[Item], key: str,
             return {"_error": "not sent: the run stopped early", "_halted": True}
         try:
             return answer_n(k, 0)
-        except dd.Stop as e:
+        except dd.Stop as e:                   # reported below, after every answer that came back
             stopped.set()
             return {"_stop": e}
         finally:
             if on_answer:
                 with done_lock:
-                    done[0] += 1
+                    done[0] += sharing[k]      # the items that share this answer
                     n = done[0]
                 on_answer(n, len(items))
 
-    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        got = list(pool.map(first, range(len(items))))
-    try:
-        for k, (r, ans) in enumerate(zip(run.results, got)):
-            if "_stop" in ans:
-                raise ans["_stop"]
-            if ans.get("_halted"):             # not sent after a Stop, which is reported below
-                continue
-            error = ans.get("_error") or (None if isinstance(ans.get("answers"), dict) else "the reply held no answers")
-            if error is None:
-                try:
-                    r.action, r.confidence, r.why = classify(ans["answers"])
-                except (KeyError, TypeError, AttributeError, ValueError) as e:     # an answer missing a part
-                    r.action, error = None, f"the reply could not be read ({type(e).__name__}: {e})"
-                    unreadable.add(keys[k])
-            run.tokens += dd._input_tokens(ans)
-            if error is not None:
-                r.error = error[:200]
-                run.vendor.append(f"{r.item.name} was not checked - API error: {error[:120]}")
-                continue
-            r.answers = [ans["answers"]]
-            r.request_id, r.upstream_ms = ans.get("_request_id"), ans.get("_upstream_ms")
-    except dd.VendorStop as e:
-        run.vendor.append(f"the run stopped early: {e}")
-    except dd.Stop as e:
-        run.problems.append(f"the run stopped early: {e}")
-    for r in run.results:
-        if r.action is None and r.error is None:
-            r.error = "not checked: the run stopped early"
-
+    def ask_each(ks: list[int]) -> list[dict]:
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            return list(pool.map(first, ks))
+    got = dd.share_answers(alike, list(range(len(items))), ask_each)
+    # A stop sends nothing more, but every answer that came back before it counts, whatever its item's
+    # place in the order: it is classified and paid for.
+    stop: dd.Stop | None = None
+    for k, (r, ans) in enumerate(zip(run.results, got)):
+        if "_stop" in ans:
+            stop = stop or ans["_stop"]
+            continue
+        if ans.get("_halted"):                 # not sent after a Stop, which is reported below
+            continue
+        error = ans.get("_error") or (None if isinstance(ans.get("answers"), dict) else "the reply held no answers")
+        if error is None:
+            try:
+                r.action, r.confidence, r.why = classify(ans["answers"])
+            except (KeyError, TypeError, AttributeError, ValueError) as e:     # an answer missing a part
+                r.action, error = None, f"the reply could not be read ({type(e).__name__}: {e})"
+                unreadable.add(keys[k])
+        run.tokens += dd._input_tokens(ans)
+        if error is not None:
+            r.error = error[:200]
+            run.vendor.append(f"{r.item.name} was not checked - API error: {error[:120]}")
+            continue
+        r.answers = [ans["answers"]]
+        r.request_id, r.upstream_ms = ans.get("_request_id"), ans.get("_upstream_ms")
     # An item is decided by agreement only when every one of its `samples` answers came back. When
     # asking again fails, it keeps its first answer's action and why, `note` says so, and the run is
     # not complete (dd.ask_again: nothing more is sent after a cancellation or a Stop).
     undecided = [k for k, r in enumerate(run.results) if r.action is not None and r.action not in settled]
+    if stop is not None:            # nothing is asked again: each item it cut says so, and the line counts them
+        cut = undecided if samples > 1 else []
+        for k in cut:
+            run.results[k].note = dd.reask_note("not asked: the run stopped early")
+        (run.vendor if isinstance(stop, dd.VendorStop) else run.problems).append(
+            "the run stopped early" + (f" - {len(cut)} item(s) keep their first answer's label" if cut else "")
+            + f": {stop}")
+    for r in run.results:
+        if r.action is None and r.error is None:
+            r.error = "not checked: the run stopped early"
     if samples > 1 and undecided and not run.problems and not run.vendor and not (cancelled and cancelled()):
-        more, halted = dd.ask_again(answer_n, undecided, samples, jobs, cancelled)
+        halted: list[dd.Stop] = []
+
+        def again(ks: list[int]) -> list[list[dict]]:
+            more, stops = dd.ask_again(answer_n, ks, samples, jobs, cancelled)
+            halted.extend(stops)
+            return more
+        more = dd.share_answers(alike, undecided, again)
         vendor, problems = dd.reask_failures(more, halted)
         run.vendor += vendor
         run.problems += problems

@@ -92,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.7"
+VERSION = "1.7.8"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -178,6 +178,23 @@ _SPEC_FAMILY_OUT = {
                                                  "it got there); such a member is committed, not new"}},
     "required": ["family", "members", "newest", "decided_by", "last_commits", "last_commit_not_found"]}
 
+
+def _not_checked(unsent: str) -> str:
+    """not_checked's description: a stop adds one line, not one per item it cut (`unsent` says where a
+    tool counts the items it left unsent)."""
+    return ("what was NOT checked, and why: why the run (or asking again) stopped, if it did, comes first, then one "
+            "line per item whose request failed, or whose asking again failed other than by a stop. A stop gives "
+            f"its one line, none per item it cut: an item it left unsent is {unsent}; an item whose asking again it "
+            "cut keeps its first answer's label with a note, and the stop line gives how many: 'the run stopped "
+            "early - N item(s) keep their first answer's label: <reason>' for a stop before asking again, 're-asking "
+            "stopped early - N item(s) keep their first answer's label: <reason>' for one while asking again. Cut to "
+            "fit: not_checked_total counts the lines, not the items; when this list is cut, the text names a file "
+            "that lists every line")
+
+
+_NOT_CHECKED_TOTAL = {"type": "integer", "description": "how many lines not_checked holds before the cut - not how "
+                                                        "many items were left unchecked"}
+
 # One list per family; TOOLS below joins them. A new family adds its list there and its methods to
 # Server.call's table - people keep one server and one key.
 SPEC_DRIFT_TOOLS = [
@@ -225,10 +242,19 @@ SPEC_DRIFT_TOOLS = [
                 "counts": {"type": "object", "properties": {k: {"type": "integer"} for k in ("DRIFT", "review", "??", "ok")},
                            "required": ["DRIFT", "review", "??", "ok"]},
                 "cost_usd": {"type": "number"},
-                "complete": {"type": "boolean", "description": "every selected claim was checked"},
+                "complete": {"type": "boolean", "description": "true only when nothing was skipped: no map "
+                                                           "problems, nothing stopped, nothing failed - asking a "
+                                                           "claim again included"},
                 "results_file": {"type": ["string", "null"], "description": "full results, with the exact code sent"},
-                "map_problems": {"type": "array", "items": {"type": "string"}},
-                "not_checked": {"type": "array", "items": {"type": "string"}},
+                "map_problems": {"type": "array", "items": {"type": "string"},
+                                 "description": "problems with map entries, which were NOT checked, and why; one "
+                                                "entry can give more than one line (cut to fit: "
+                                                "map_problems_total counts the lines; past 20, the text names a "
+                                                "file that lists every one)"},
+                "map_problems_total": {"type": "integer"},
+                "not_checked": {"type": "array", "items": {"type": "string"}, "description": _not_checked(
+                    "counted by claims_selected minus checked, with the claims whose request failed")},
+                "not_checked_total": _NOT_CHECKED_TOTAL,
                 "map_health": {"type": "object", "description":
                     "what the run says about the MAP: how many claims came back ?? (their pairing "
                     "cannot settle them), and for each, why and what to pair it with instead (cut to fit: "
@@ -598,7 +624,9 @@ CI_TRIAGE_TOOLS = [
                 "complete": {"type": "boolean", "description": "every failure was checked, and every failed "
                                                                 "job's log was read (false when a note starts "
                                                                 "INCOMPLETE)"},
-                "not_checked": _STRS,
+                "not_checked": {**_STRS, "description": _not_checked(
+                    "a result labelled 'not checked', as is a failure whose request failed")},
+                "not_checked_total": _NOT_CHECKED_TOTAL,
                 "jobs_not_checked": {**_STRS, "description": "failed jobs whose logs were not read: nothing was "
                                                              "sent for them and they are not triaged (NOT a pass)"},
                 "results_file": {"type": "string", "description": "every result, with the exact states sent"},
@@ -607,8 +635,8 @@ CI_TRIAGE_TOOLS = [
                                            "anything not checked; cut to fit - the rest is in results_file"},
                 "results_shown": _INT, "inbox": _STR},
             "required": ["summary", "project", "source", "url", "trusted", "notes", "failures", "counts",
-                         "cost_usd", "complete", "not_checked", "jobs_not_checked", "results_file", "results",
-                         "results_shown", "inbox"],
+                         "cost_usd", "complete", "not_checked", "not_checked_total", "jobs_not_checked",
+                         "results_file", "results", "results_shown", "inbox"],
         },
     },
     {
@@ -688,18 +716,24 @@ CODE_AUDIT_TOOLS = [
                            "properties": {k: _INT for k in ("BREAKS", "review", "??", "ok", "n/a")},
                            "required": ["BREAKS", "review", "??", "ok", "n/a"]},
                 "cost_usd": _NUM,
-                "complete": {"type": "boolean", "description": "every request was answered"},
-                "not_checked": _STRS,
+                "complete": {"type": "boolean", "description": "true only when every request was answered: nothing "
+                                                                "stopped, nothing failed - asking a request again "
+                                                                "included (a file the audit never reads, such as one "
+                                                                "over 1.5 MB, is not a request)"},
+                "not_checked": {**_STRS, "description": _not_checked(
+                    "a flagged row labelled 'not checked', as is a request that failed (requests minus checked "
+                    "counts them)")},
+                "not_checked_total": _NOT_CHECKED_TOTAL,
                 "results_file": {"type": ["string", "null"],
                                  "description": "every result, with the exact code sent"},
                 "flagged": {"type": "array", "items": _AUDIT_RESULT_OUT,
-                            "description": "BREAKS, then review from P(breaks) 0.3 up, then ??, then the rest of "
-                                           "review; cut to fit - the rest "
-                                           "is in results_file"},
+                            "description": "BREAKS, then review from P(breaks) 0.3 up, then ??, then anything not "
+                                           "checked, then the rest of review; cut to fit - the rest is in "
+                                           "results_file (flagged_total counts them all)"},
                 "flagged_total": _INT},
             "required": ["summary", "project", "map", "scope", "rules_reviewed", "units", "files", "requests",
-                         "checked", "counts", "cost_usd", "complete", "not_checked", "results_file", "flagged",
-                         "flagged_total"],
+                         "checked", "counts", "cost_usd", "complete", "not_checked", "not_checked_total",
+                         "results_file", "flagged", "flagged_total"],
         },
     },
     {
@@ -1167,16 +1201,26 @@ class Server:
             claims, where = self.select(claims, files)
             scope = f"{len(claims)} of {total} claims, about {where}"
         head = [f"spec-drift check ({self.map_used}): {scope} | {self.last_index}"]
+        # the map-level lines (a "specs" folder gone, items that are not paths) first, so no cut below hides them
+        problems[:] = [p for p in problems if p.startswith(_MAP_LEVEL)] + \
+            [p for p in problems if not p.startswith(_MAP_LEVEL)]
         if problems:
             head += ["", "MAP PROBLEMS - these entries were NOT checked (fix the map, then validate_spec_map):"]
-            head += [f"  - {p}" for p in problems]
+            head += [f"  - {p}" for p in problems[:20]]
+            if len(problems) > 20:                # a map broken by a rename has two per entry: the rest go to a file
+                every = self.results_file("check-map-problems")
+                every.write_text(json.dumps(problems, indent=1, ensure_ascii=False), encoding="utf-8",
+                                 errors="replace")   # a project path that is not UTF-8: '?', as in the reply
+                head.append(f"  ... and {len(problems) - 20} more lines (all {len(problems)} lines are listed in "
+                            f"{every})")
         warnings = list(dd.MAP_WARNINGS)
         head += _warning_text(warnings)
         structured = {"summary": head[0], "project": str(self.root), "map": self.map_used, "claims_in_map": total,
                       "claims_selected": len(claims), "checked": 0,
                       "counts": {"DRIFT": 0, "review": 0, "??": 0, "ok": 0}, "cost_usd": 0.0,
-                      "complete": not problems, "results_file": None, "map_problems": problems,
-                      "not_checked": [],
+                      "complete": not problems, "results_file": None,
+                      "map_problems": _fit(problems, INLINE_BUDGET // 3), "map_problems_total": len(problems),
+                      "not_checked": [], "not_checked_total": 0,
                       "map_health": {"checked": 0, "unverifiable": 0, "unverifiable_pct": 0.0,
                                      "most_often_paired_with": [], "entries_to_fix": [], "entries_to_fix_total": 0},
                       "flagged": [], "flagged_total": 0,
@@ -1201,7 +1245,8 @@ class Server:
         for r, e in zip([r for r in results if r["label"] == "??"], mh["entries_to_fix"]):
             r.update({k: e[k] for k in ("reasons", "try_pairing_with") if e.get(k)})
         out = self.results_file("check")
-        out.write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
+        out.write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8",
+                       errors="replace")          # a name that is not UTF-8: '?', as in the reply
         head[0] += f" | checked {len(results)} in {time.perf_counter() - t:.1f}s | ${tokens * 0.042 / 1e6:.4f}"
         plan = _reading_plan(results)
         is_error = bool(stopped) or (bool(failed) and not results)
@@ -1211,24 +1256,19 @@ class Server:
             places.write_text(json.dumps([{"code": code, "claims": len(rs), "p_drifted_max": _p_drifted(rs[0]),
                                            "at": [f"{r['doc']}:{r['line']}" for r in rs]}
                                           for code, rs, _ in plan["groups"]], indent=1, ensure_ascii=False),
-                              encoding="utf-8")
+                              encoding="utf-8", errors="replace")
         text = "\n".join(head + [""] + _report(results, str(out), plan, places and str(places)))
+        gone, not_checked = self.not_checked(stopped + failed, is_error, "check-not-checked")
         if stopped or failed:
-            gone = stopped + failed               # one line per claim when TypeSafe is down: show the first
-            where = "structuredContent.not_checked"
-            if len(gone) > 20 and is_error:       # an error reply has no structuredContent: the rest go to a file
-                lost = self.results_file("check-not-checked")
-                lost.write_text(json.dumps(gone, indent=1, ensure_ascii=False), encoding="utf-8")
-                where = f"all {len(gone)} are listed in {lost}"
-            text += ("\n\nINCOMPLETE - not everything was checked:\n" + "\n".join(f"  - {p}" for p in gone[:20])
-                     + (f"\n  ... and {len(gone) - 20} more ({where})" if len(gone) > 20 else ""))
+            text += "\n\nINCOMPLETE - not everything was checked:\n" + "\n".join(gone)
             if failed and not stopped:
                 text += "\n  (TypeSafe could not be used - not a problem with the code. Carry on without it.)"
         fixes = _fit(mh["entries_to_fix"], INLINE_BUDGET // 3)
         structured.update(
             checked=len(results), cost_usd=round(tokens * 0.042 / 1e6, 6), results_file=str(out),
             counts={k: sum(1 for r in results if r["label"] == k) for k in ("DRIFT", "review", "??", "ok")},
-            complete=not (problems or stopped or failed), not_checked=stopped + failed,
+            complete=not (problems or stopped or failed), not_checked=not_checked,
+            not_checked_total=len(stopped + failed),
             map_health={**mh, "entries_to_fix": fixes, "entries_to_fix_total": len(mh["entries_to_fix"])},
             flagged=[_flag_row(r) for r in plan["shown"]],
             flagged_total=sum(1 for r in results if r["label"] != "ok"), to_read=plan["to_read"],
@@ -1252,6 +1292,24 @@ class Server:
                                                             "NOT a pass, fix the map entry; full results in "
                                                             "results_file")
         return text, is_error, structured
+
+    def not_checked(self, gone: list[str], is_error: bool, name: str) -> tuple[list[str], list[str]]:
+        """What was not checked: the INCOMPLETE block's lines and structuredContent.not_checked. Why the
+        run stopped comes first, so no cut hides it; then one line per request - thousands when TypeSafe
+        is down. The text lists the first 20 and structuredContent what fits; when either leaves some
+        out, a file lists them all (an error reply has no structuredContent)."""
+        gone = [p for p in gone if p.startswith(_RUN_STOPPED)] + [p for p in gone if not p.startswith(_RUN_STOPPED)]
+        kept = gone if len(gone) <= 20 else _fit(gone, INLINE_BUDGET // 3)
+        lines = [f"  - {p}" for p in gone[:20]]
+        if len(gone) > 20:
+            where = "structuredContent.not_checked"
+            if is_error or len(kept) < len(gone):
+                every = self.results_file(name)
+                every.write_text(json.dumps(gone, indent=1, ensure_ascii=False), encoding="utf-8",
+                                 errors="replace")   # a name that is not UTF-8: '?', as in the reply
+                where = f"all {len(gone)} are listed in {every}"
+            lines.append(f"  ... and {len(gone) - 20} more ({where})")
+        return lines, kept
 
     def api_key(self) -> str:
         """The TypeSafe key for a tool that sends: from the server's own sources only, never from the
@@ -1489,7 +1547,7 @@ class Server:
         full = self.results_file("ci-preview")
         full.write_text(json.dumps([{"step": it.meta["failure"].step, "jobs": it.meta["failure"].jobs,
                                      "state": it.state, "questions": it.questions} for it in items],
-                                   indent=1, ensure_ascii=False), encoding="utf-8")
+                                   indent=1, ensure_ascii=False), encoding="utf-8", errors="replace")
         samples = min(self.samples, ci.SAMPLES)
         failures, room = [], INLINE_BUDGET
         for n, it in enumerate(items, 1):
@@ -1564,7 +1622,8 @@ class Server:
                                    "jobs_not_checked": ctx.unread_jobs,
                                    "results": [{**r, "state_sent": sent[id(s.item)]}
                                                for r, s in zip(results, done.results)]},
-                                  indent=1, ensure_ascii=False), encoding="utf-8")
+                                  indent=1, ensure_ascii=False), encoding="utf-8",
+                       errors="replace")          # a log name that is not UTF-8: '?', as in the reply
         counts = {k: sum(1 for r in results if r["label"] == k) for k in ("CHANGE", "review", "??")}
         not_checked = done.problems + done.vendor
         shown = _fit(ordered, INLINE_BUDGET)
@@ -1604,17 +1663,20 @@ class Server:
                          + str(out))
         if not fails:
             lines += ["", "Nothing was sent: no failure was left to triage."]
+        gone, kept = self.not_checked(not_checked, is_error, "ci-triage-not-checked")
         if not_checked or unread:
-            lines += ["", "INCOMPLETE - not everything was checked:"] + [f"  - {p}" for p in not_checked + unread]
+            lines += (["", "INCOMPLETE - not everything was checked:"] + gone
+                      + [f"  - {p}" for p in unread])          # logs not read: a few lines, at most one per job read
             if ctx.unread_jobs:
                 lines.append(f"  - {_jobs_not_checked(ctx.unread_jobs)}")
             if done.vendor and not done.problems:
                 lines.append("  (TypeSafe could not be used - not a problem with the code. Carry on without it.)")
         structured = {"summary": head, "project": str(self.root), "source": ctx.source, "url": ctx.url,
                       "trusted": ctx.trusted, "notes": ctx.notes, "failures": len(results), "counts": counts,
-                      "cost_usd": done.cost_usd, "complete": complete, "not_checked": not_checked,
-                      "jobs_not_checked": ctx.unread_jobs, "results_file": str(out), "results": shown,
-                      "results_shown": len(shown), "inbox": str(self.inbox())}
+                      "cost_usd": done.cost_usd, "complete": complete, "not_checked": kept,
+                      "not_checked_total": len(not_checked), "jobs_not_checked": ctx.unread_jobs,
+                      "results_file": str(out), "results": shown, "results_shown": len(shown),
+                      "inbox": str(self.inbox())}
         return "\n".join(lines), is_error, structured
 
     # ── code audit ──────────────────────────────────────────────────────────
@@ -1719,7 +1781,8 @@ class Server:
                       "rules_reviewed": len(reviewed), "units": len({(u.path, u.start, u.end) for _, u in pairs}),
                       "files": len({u.path for _, u in pairs}), "requests": len(items), "checked": 0,
                       "counts": {k: 0 for k in ("BREAKS", "review", "??", "ok", "n/a")}, "cost_usd": 0.0,
-                      "complete": True, "not_checked": [], "results_file": None, "flagged": [], "flagged_total": 0}
+                      "complete": True, "not_checked": [], "not_checked_total": 0, "results_file": None, "flagged": [],
+                      "flagged_total": 0}
         if not items:
             text = (f"code audit ({rel}): nothing to audit - no reviewed rule applies to the units in scope. That "
                     f"is not a pass: check the rules' scope, or use files / all=true.")
@@ -1735,7 +1798,8 @@ class Server:
         out.write_text(json.dumps({"map": rel, "scope": scope, "cost_usd": done.cost_usd, "complete": done.complete,
                                    "results": [{**r, "state_sent": s.item.state}
                                                for r, s in zip(results, done.results)]},
-                                  indent=1, ensure_ascii=False), encoding="utf-8")
+                                  indent=1, ensure_ascii=False), encoding="utf-8",
+                       errors="replace")          # a name that is not UTF-8: '?', as in the reply
         counts = {k: sum(1 for r in results if r["label"] == k) for k in ("BREAKS", "review", "??", "ok", "n/a")}
         flagged = [r for r in audit.in_triage_order(results) if r["label"] in ("BREAKS", "review", "??", "not checked")]
         shown = _fit(flagged, INLINE_BUDGET)
@@ -1767,12 +1831,14 @@ class Server:
             lines.append(f"\n... {len(flagged) - 20} more in " + ("" if is_error else "structuredContent.flagged and ")
                          + str(out))
         not_checked = done.problems + done.vendor
+        gone, kept = self.not_checked(not_checked, is_error, "code-audit-not-checked")
         if not_checked:
-            lines += ["", "INCOMPLETE - not everything was checked:"] + [f"  - {p}" for p in not_checked]
+            lines += ["", "INCOMPLETE - not everything was checked:"] + gone
             if done.vendor and not done.problems:
                 lines.append("  (TypeSafe could not be used - not a problem with the code. Carry on without it.)")
         structured.update(summary=head, checked=sum(1 for r in results if r["label"] != "not checked"),
-                          counts=counts, cost_usd=done.cost_usd, complete=done.complete, not_checked=not_checked,
+                          counts=counts, cost_usd=done.cost_usd, complete=done.complete, not_checked=kept,
+                          not_checked_total=len(not_checked),
                           results_file=str(out), flagged=shown, flagged_total=len(flagged))
         return "\n".join(lines), is_error, structured
 
@@ -1955,6 +2021,9 @@ class Server:
 
 
 INLINE_BUDGET = 30_000       # characters of listed results in structuredContent (sent twice: text copy)
+# The lines that say why a whole run stopped (spec_drift.check_claims, jevkit.screen), not which item.
+_MAP_LEVEL = "the map's \"specs\""
+_RUN_STOPPED = ("the run stopped early", "re-asking stopped early", "re-asking was cancelled")
 
 
 def _fit(items: list[dict], budget: int) -> list[dict]:

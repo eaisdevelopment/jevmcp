@@ -99,17 +99,50 @@ _TS = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
 # Each CI's default workspace folder. GitHub Actions (and Azure Pipelines' hosted agents, whose
 # vsts/work/1/s/ under /home and D:\a\1\s\ have the same shape), GitLab (/builds/ only at the start of a path:
 # unanchored it cut the middle out of other paths, such as Buildkite's), Jenkins, CircleCI, Travis,
-# GitLab's shell executor, Buildkite and TeamCity. The runner's own folders beside the workspace (_actions:
-# an action's own code, _temp, _tool: a Python or Node it installed) are not the project's.
+# GitLab's shell executor, Buildkite and TeamCity; a GitHub container job's /__w/ and a self-hosted runner's
+# (or Azure agent's) <install folder>/_work/. The runner's own folders beside the workspace (_actions: an
+# action's own code, _temp, _tool: a Python or Node it installed, Azure's _tasks) are not the project's.
+# The container and self-hosted cuts (new in 1.7.8, _GUARDED) start a path, never inside a URL: no word character,
+# '.', '~', '-' or '/' before the start (a URL's '//', file:///), nor a one-letter word and ':' (a drive, D:/__w/,
+# -v /x:/opt/...), and (_outside_url) no '://' in the path's own word (the non-space characters before it), as in
+# https://[::1]/_work/. A GitHub-hosted Windows workspace written with '/' (D:/a/..., Git Bash's /d/a/...) is never
+# taken for a runner's install folder.
+# A ']' alone does not stop them: '##[error]/opt/r/_work/w/w/x.ts' is cut. A self-hosted <install folder>/_work/
+# <a>/<b>/ goes up to the first such _work only (lazy), and its install folder never crosses a runner folder.
+# Their <a> and <b> hold no ':', ';' or ',', a list separator: in '-v /__w/r/r:/app', 'PATH=...\_work\w\w;C:\...'
+# or '--mount type=bind,source=/__w/r/r,target=/app' the cut would run on into the next entry, so such a path is
+# left as written.
+_CONTAINER = r"(?<![\w.~/-])(?<!\b[A-Za-z]:)/__w/(?!_(?:actions|temp|tool|tasks)/)[^/\s:;,]+/[^/\s:;,]+/"
+_WORK_PATH = (r"(?<![\w.~/-])(?<!\b[A-Za-z]:)(?!/[A-Za-z]/a/)(?:[A-Za-z]:(?!/a/))?(?:/(?!_(?:actions|temp|tool|tasks)/)[\w.~-]+)*?"
+              r"/_work/(?!_(?:actions|temp|tool|tasks)/)[^/\s:;,]+/[^/\s:;,]+/")
+_WORK_PATH_WIN = (r"(?<![\w.~/-])[A-Za-z]:\\(?:(?!_(?:actions|temp|tool|tasks)\\)[\w.~-]+\\)*?"
+                  r"_work\\(?!_(?:actions|temp|tool|tasks)\\)[^\\\s:;,]+\\[^\\\s:;,]+\\")
+# A line that starts with /workspace/ is cut in 1.7.7's slot, before the unanchored cuts below could splice its
+# path: at its first cuttable _work/<a>/<b>/ (a runner installed under /workspace/), else 1.7.7's /workspace/.
+_WORKSPACE_WORK = r"^(?=/workspace/)" + _WORK_PATH
+_GUARDED = (_CONTAINER, _WORK_PATH, _WORK_PATH_WIN, _WORKSPACE_WORK)
 _RUNNER_ROOTS = [re.compile(p) for p in (
-    r"/(?:home|Users)/[^/\s]+/work/(?!_(?:actions|temp|tool)/)[^/\s]+/[^/\s]+/",
-    r"[A-Za-z]:\\a\\(?!_(?:actions|temp|tool)\\)[^\\\s]+\\[^\\\s]+\\",
+    # Not a self-hosted runner installed in ~/work/ or ~/work/<dir>/ (its _work/ pattern below cuts that
+    # one). A hosted workspace is <r>/<r>/, so _work/_work/ (a repository named _work) is still the hosted one.
+    r"/(?:home|Users)/[^/\s]+/work/(?!_(?:actions|temp|tool|tasks)/)"
+    r"(?!(?!_work/_work/)[^/\s]+/_work/|_work/(?!_work/))[^/\s]+/[^/\s]+/",
+    r"[A-Za-z]:\\a\\(?!_(?:actions|temp|tool|tasks)\\)"
+    r"(?!(?!_work\\_work\\)[^\\\s]+\\_work\\|_work\\(?!_work\\))[^\\\s]+\\[^\\\s]+\\",
+    _CONTAINER,
     r"/github/workspace/", r"(?<![\w.~-])/builds/[^/\s]+/[^/\s]+/", r"/var/lib/jenkins/workspace/[^/\s]+/",
-    r"/(?:home|Users)/circleci/project/", r"^/workspace/",
+    r"/(?:home|Users)/circleci/project/",
+    # 1.7.7's slot (see _WORKSPACE_WORK).
+    _WORKSPACE_WORK, r"^/workspace/",
     r"/(?:home|Users)/travis/build/[^/\s]+/[^/\s]+/", r"[A-Za-z]:\\Users\\travis\\build\\[^\\\s]+\\[^\\\s]+\\",
     r"/home/(?:gitlab-runner)/builds/[^/\s]+/\d+/[^/\s]+/[^/\s]+/",
     r"/var/lib/buildkite-agent/builds/[^/\s]+/[^/\s]+/[^/\s]+/",
-    r"/opt/(?:[Tt]eam[Cc]ity/)?build[Aa]gent/work/[^/\s]+/", r"[A-Za-z]:\\[Bb]uild[Aa]gent\\work\\[^\\\s]+\\")]
+    r"/opt/(?:[Tt]eam[Cc]ity/)?build[Aa]gent/work/[^/\s]+/", r"[A-Za-z]:\\[Bb]uild[Aa]gent\\work\\[^\\\s]+\\",
+    # After the other CIs' workspaces, which keep their own cut (a project's _work/<a>/<b>/ folder there keeps its
+    # path). A line that starts with /workspace/ was cut above (_WORKSPACE_WORK). A GitHub-hosted X:/a/ written
+    # with '/' is left as written, as it always was.
+    _WORK_PATH, _WORK_PATH_WIN)]
+# The change excerpt is code, not a log: only the workspace cuts 1.7.7 made apply to it.
+_CHANGE_ROOTS = [r for r in _RUNNER_ROOTS if r.pattern not in _GUARDED]
 _HOME = re.compile(r"(/home/|/Users/|[A-Za-z]:\\Users\\)[^/\\\s]+")
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 # Logs, unlike source code, are also redacted by these broad rules: a log never needs a credential,
@@ -127,18 +160,25 @@ _LOG_SECRETS = [
 _INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
 
 
-def light_clean(line: str) -> str:
+def light_clean(line: str, roots: list[re.Pattern] = _RUNNER_ROOTS) -> str:
     """The layout part of clean_line: no colour codes, timestamps, control or invisible characters,
-    or runner workspace prefix. Enough to read a log's structure; NOT safe to show."""
+    or runner workspace prefix (those in roots). Enough to read a log's structure; NOT safe to show."""
     line = _ANSI.sub("", line[:4_000])          # no shown line is longer; long lines make regexes crawl
     line = _TS.sub("", line.lstrip("\ufeff"))
     line = _INVISIBLE.sub("", line)
     if not line.replace("\t", " ").isprintable():                 # rare: most lines have no control character
         line = "".join(ch for ch in line if ch == "\t" or unicodedata.category(ch)[0] != "C")
     if "/" in line or "\\" in line:
-        for root in _RUNNER_ROOTS:
-            line = root.sub("", line)
+        for root in roots:
+            line = root.sub(_outside_url if root.pattern in _GUARDED else "", line)
     return line.rstrip()
+
+
+def _outside_url(m: re.Match) -> str:
+    """A _GUARDED match is cut, unless the path's own word is a URL (has '://' before the path)."""
+    before = m.string[:m.start()]
+    word = "" if not before or before[-1].isspace() else before.split()[-1]
+    return m.group(0) if "://" in word else ""
 
 
 def clean_line(line: str) -> str:
@@ -443,7 +483,9 @@ def _split_steps(job: str, raw_lines: list[str], failed_names: list[str], cut: b
     if not any(s.failed for s in steps):
         marked = [s for s in steps if any("##[error]" in ln for ln in s.lines)]
         if own_failure:      # an action's ##[error] with no exit code, then a later step stopped by the cancel
-            marked = [s for s in marked if any("##[error]" in ln and not _RUNNER_CANCEL.match(ln.strip())
+            # (the runner's cancel and time-limit lines are not a step's own error)
+            marked = [s for s in marked if any("##[error]" in ln and not (_RUNNER_CANCEL.match(ln.strip())
+                                                                          or _TIME_LIMIT.search(ln))
                                                for ln in s.lines)] or marked
         (marked[-1] if marked else ([s for s in steps if not s.post] or steps)[-1]).failed = True
     for s, display in zip([s for s in steps if s.failed], failed_names):
@@ -593,19 +635,24 @@ def _files(lines: list[str]) -> list[str]:
 _MASK = [(re.compile(r"(?i)\b(?:ubuntu|macos|windows)(?:-latest|-\d+[.\d]*)?\b"), "<os>"),
          (re.compile(r"0x[0-9a-f]+|\b[0-9a-f]{7,}\b"), "#"), (re.compile(r"\d+"), "#"),
          (re.compile(r"\\"), "/"), (re.compile(r"\s+"), " ")]
+_LINUX = re.compile(r"(?i)\blinux\b")
+
+
+def _masked(text: str) -> str:
+    text = text.lower()
+    for pat, rep in _MASK:
+        text = pat.sub(rep, text)
+    return text
 
 
 def _signature(f: Failure) -> str:
     first = f.candidates[0] if f.candidates else (f.tail[-1] if f.tail else "")
-    sig = first.lower()
-    for pat, rep in _MASK:
-        sig = pat.sub(rep, sig)
-    return f"{f.kind}|{sig[:160]}"
+    return f"{f.kind}|{_masked(first)[:160]}"
 
 
 def failures_from_steps(steps: list[Step]) -> list[Failure]:
     """Every failed step, merged when several jobs failed the same way (a matrix): one cause x N jobs."""
-    merged: dict[str, Failure] = {}
+    merged: dict[tuple[str, str], Failure] = {}
     for s in steps:
         if not s.failed:
             continue
@@ -620,13 +667,19 @@ def failures_from_steps(steps: list[Step]) -> list[Failure]:
         f.cancelled_running = any(_RUNNER_CANCEL.match(ln.strip()) for ln in end)
         f.time_limit = next((m.group(1) for ln in end if (m := _TIME_LIMIT.search(ln))), None)
         f.signature = _signature(f)
-        if f.signature in merged:
-            m = merged[f.signature]
+        # The same first error at another step is another failure; a step name that differs only by a
+        # matrix value ('Set up Python 3.12') or an OS is masked the way the first error is, and also
+        # runner.os's 'Linux' (here only: the first error's own mask, and so the state sent, stay as they are);
+        # a version counts as one number however many parts it has ('Go 1.22' / 'Go 1.22.3'), Python's
+        # free-threaded build's too ('3.13t').
+        key = (re.sub(r"#(?:\.#)+(?:t(?!\w))?", "#", _masked(_LINUX.sub("<os>", f.step))), f.signature)
+        if key in merged:
+            m = merged[key]
             m.jobs.append(job)
             m.tests.extend(t for t in f.tests if t not in m.tests)
             m.files.extend(p for p in f.files if p not in m.files)
         else:
-            merged[f.signature] = f
+            merged[key] = f
     return list(merged.values())
 
 
@@ -1187,8 +1240,9 @@ def assemble(info: dict, log: str, diff: str | None, source: str = "github", not
     # time limit, a person, a newer run: named, never explained.
     cancelled = [j for j in jobs if j.get("conclusion") == "cancelled" and j["name"] not in failed_steps]
     ends: dict[str, list[int]] = {}
-    for j in bad:
-        ends.setdefault(_matrix_base(j["name"]), []).extend(t for t in [_ended(j)] if t is not None)
+    for j in jobs:          # every job that failed, triaged or not: a cancelled job given by its URL is no failure
+        if j.get("conclusion") in ("failure", "timed_out"):
+            ends.setdefault(_matrix_base(j["name"]), []).extend(t for t in [_ended(j)] if t is not None)
 
     def by_fail_fast(j: dict) -> bool:
         base, end = ends.get(_matrix_base(j["name"])), _ended(j)
@@ -1221,7 +1275,9 @@ def _limit_seconds(limit: str) -> int | None:
 
 
 def _matrix_base(job: str) -> str:
-    """A matrix job's name without its values: 'server-starts (windows-latest)' -> 'server-starts'."""
+    """A matrix job's name without its values: 'server-starts (windows-latest)' -> 'server-starts'. GitHub's
+    record of a job (and of its check run) names no matrix, so a matrix whose jobs set their own `name:`
+    ('ubuntu-latest @ Go 1.25') is not known as one: each of its jobs is a matrix of its own."""
     return job.split(" (", 1)[0]
 
 
@@ -1280,7 +1336,7 @@ def _job_facts(fails: list[Failure], jobs: list[dict], time_limits: dict) -> Non
 
 def safe_file(p: Path, root: Path | None, inbox: Path | None = None) -> Path:
     """A log or report the tool may read: a regular file owned by this user, not a symlink, inside
-    the project (not under .git, not a secret file) or inside the server's private inbox."""
+    the project (not under any .git folder, not a secret file) or inside the server's private inbox."""
     if p.is_symlink():
         raise Stop(f"{p.name} is a symbolic link; pass the file itself.")
     try:
@@ -1296,8 +1352,10 @@ def safe_file(p: Path, root: Path | None, inbox: Path | None = None) -> Path:
     if not any(real == b or b in real.parents for b in bases):
         raise Stop(f"{p} is outside the project" + (" and the jevmcp inbox" if inbox else "")
                    + "; save the log inside the project" + (f" or in {inbox}" if inbox else "") + ".")
-    rel = str(real.relative_to(root.resolve())) if root and root.resolve() in real.parents else real.name
-    if rel.startswith(".git/") or _is_secret_path(rel):
+    # '/' on every OS: the .git/ and secret-file patterns below are written with '/'
+    rel = real.relative_to(root.resolve()).as_posix() if root and root.resolve() in real.parents else real.name
+    # lower case: macOS and Windows disks ignore case, so .GIT/config there is the repository's own .git/config
+    if re.search(r"(?:^|/)\.git/", rel.lower()) or _is_secret_path(rel.lower()):   # any .git folder: a vendored repo's too
         raise Stop(f"{rel} is not a log a check may read.")
     return real
 
@@ -1508,7 +1566,8 @@ def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
                 continue                        # author text: judge the code, not the comments
             lines.append(ln)
         body = dd.redact("\n".join(lines))
-        body = "\n".join(clean_line(x[:2000]) for x in body.split("\n"))     # a long line is cut, then cleaned too
+        # a long line is cut, then cleaned too (as a log line, but with only 1.7.7's workspace cuts: it is code)
+        body = "\n".join(_scrub(light_clean(x[:2000], _CHANGE_ROOTS)) for x in body.split("\n"))
         (named if path and any(norm_path(e).endswith(path) or path.endswith(norm_path(e)) for e in f.files)
          else other).append(body)
     out, size, cut = [], 0, 0

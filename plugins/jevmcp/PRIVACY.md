@@ -46,50 +46,153 @@ The code paired with a requirement is cleaned before it is sent:
     declared with a string type before the `=` where a declaration or a parameter starts — a type
     whose name ends in `str` or `string` (`password: str = "..."`, `Optional[str]`, `SecretStr`,
     `StrictStr`, `const token: string = "..."`, `string | undefined`, `let token: &str = "..."`,
-    and Kotlin's and Swift's `String` declarations) — and Go's `var password string = "..."` at
-    the start of a line. The name may end in a subscript that is empty, a number or an upper-case
-    name, as a C array's does (`char password[] = "..."`, `[64]`, `[PW_LEN + 1]`) and as a table
-    element's does (`TokenName[1] = "..."`); the value may have a string prefix
-    (`b"..."`, `u"..."`, C#'s `@"..."`; `r"..."`, `rb"..."` or `br"..."` when it holds no `\`,
-    `(` or `[`; an f-string when it holds no `{`, and an `fr` or `rf` string under both), and a
-    value of one word may hold one quote of the other kind (`"p'ssw0rd"`). A value declared with
-    any other type (an enum such as `HashStrategy`) is sent as written, and so are a raw string that
-    holds `\`, `(` or `[`, which is a pattern (`token_pattern=r"(?u)\b\w\w+\b"`), an f-string that
-    holds `{`, a triple-quoted string (`"""..."""`), a value that holds the other kind of quote along
-    with a space, or starts with a quote, a value set through a quoted or lower-case subscript
+    and Kotlin's and Swift's `String` declarations), or with a bare `Final`, `typing.Final`,
+    `ClassVar` or `Any` (Python) or TypeScript's `any`, written in that case
+    (`SECRET_KEY: typing.Final = "..."`, `private password: any = "..."`) — and Go's
+    `var password string = "..."` at the start of a line. The name may end in a subscript that is
+    empty, a number or an upper-case name, as a C array's does (`char password[] = "..."`, `[64]`,
+    `[PW_LEN + 1]`) and as a table element's does (`TokenName[1] = "..."`); the value may have a
+    string prefix (`b"..."`, `u"..."`, C#'s `@"..."`; C and C++'s `L"..."` and `u8"..."`, in
+    single quotes too; C#'s `$"..."`, `$@"..."` and `@$"..."` when it holds no `{`; `r"..."`,
+    `rb"..."` or `br"..."` when it holds no `\`, `(` or `[`; an f-string when it holds no `{`, and
+    an `fr` or `rf` string under both), and in a C# verbatim string (`@`, `$@`, `@$`) a doubled
+    `""` is part of the value, which is redacted whole. A lower-case `l` is not a prefix. A value
+    of one word may hold one quote of the other kind (`"p'ssw0rd"`). A value declared with any
+    other type (an enum such as `HashStrategy`, or `Final[int]`) is sent as written, and so are a
+    raw string that holds `\`, `(` or `[`, which is a pattern (`token_pattern=r"(?u)\b\w\w+\b"`),
+    an f-string that holds `{`, a triple-quoted string (`"""..."""`), a value that holds the other
+    kind of quote along with a space, or starts with a quote (except in a C# verbatim string on one
+    line, `@"..."`, and `$@"..."` or `@$"..."` when it holds no `{`, where any value of four
+    characters or more is redacted whole, quotes of the other kind, backticks, spaces and a leading
+    `""` included, as in `@"it's a secret"` and `@"""quoted"""`; one that spans lines, or a
+    `$@"..."` that holds `{`, follows the general rule), a value set through a quoted or lower-case subscript
     (`settings['token'] = "..."`, `token[i] = "..."`), and the next value on a line after a `case`
     label, an `if` or `for` line, or a secret word inside a quoted value that no `:` or `=` follows
     (`type="password" autoComplete="new-password"`, `if token: msg = "..."`). A quoted text that
     ends in a secret word and a `:` or `=` (`label="Password:" placeholder="..."`,
     `"Token: " + token + " refreshed"`) has what follows it on the line redacted, up to the next
     quote, as in 1.7.6;
+  - in code and configuration files alike, a password in a JDBC URL or a connection string: a
+    `password=`, `passwd=` or `pwd=` value, in any case (`?user=x&password=...`, `;password=...`,
+    `Server=db;Password=...;` or `Server=db; Password=...`, `UID=x;PWD=...`, libpq's
+    `host=db user=x password=...`), when it comes right after `?`, `&`, `;`, a quote or a
+    backtick, or after another `name=value` (ending in `;` or not) and a space, with no space
+    around the `=`. That earlier value is a word with no space, `=`, `;`, `&` or quote that does not
+    end in `,`, `(` or `)` (`Data Source=db,1433; Password=...`,
+    `Server=(localdb)\MSSQLLocalDB; Password=...`, `port=5432,5433 password=...`), one word in
+    parentheses (`Server=(local); Password=...`) or a single-quoted value (libpq's
+    `dbname='app' password=...`). The key is kept, and the value is redacted unless the whole of it has the shape
+    of a placeholder or a variable (`{pw}`, `{{pw}}`, `<password>`, `%s`, `%(pw)s`, `%v`, `%DB_PASS%`,
+    `$1`, `$DB_PASS`, `$cfg.pw`, `$env:DB_PASS`, `$(DB_PASS)`, `$(cat file)`, Ruby's and Elixir's
+    `#{pw}`, Swift's `\(pw)`, Ruby's `%{pw}` and `%<pw>s`, a mask `*****`, a
+    regular expression's group such as `(.*)` or `(\S+)`), with `\n` or punctuation after it or not
+    (`password=***,`), or is a `{...}`, `#{...}`, `<...>` or `$(...)` that a quote or a space cuts
+    and that closes later on the line (`{ pw }`, `#{ENV['PW']}`, `<your password>`); `${...}` is
+    kept and its default redacted, as below. A password that only starts like one of those, or with `@` or `:`,
+    is redacted (`%40dm1n%21x`, `$uperS3cret!`, `*Hunter22*`, `(Hunter22)`, `#Hunter22`,
+    `@dmin2024`, `****1234`), and so is a `{`, `#{` or `<` value that a `;` or `&` cuts
+    (`{Hunter22;`, `#{Hunter22;`), even when a `}` or `>` follows later on the line, and ODBC's
+    brace-quoted value with a `;` in it, spaces, `&`, `'`, backticks and an escaped `\"` included
+    (`PWD={Str0ng;Pass}`, `PWD={My Str0ng;Pass}`, `PWD={Hu&nter;22}`, `PWD={It's;Str0ng}`,
+    redacted whole). A brace-quoted value may be sent whole or in part when it holds a bare,
+    unescaped `"`, or a raw `{` (`PWD={a{b;c}` reads `PWD=<redacted>;c}`; `PWD={a;b{c}` is sent
+    whole), or an `&` and no `;` (`PWD={Hu&nter22}` is sent whole, `PWD={Hunt&er22}` reads
+    `PWD=<redacted>&er22}`). An unquoted value ends at `&`, a space or a quote, as a URL query's
+    value does, so in a `;`-separated string a password holding one is sent in part, or whole when
+    fewer than four characters come before it (`Password=P&ssw0rd!;` is sent as written,
+    `Password=Tr0ub4dor&3;` reads `Password=<redacted>&3;`). A value in
+    escaped quotes, as written inside a source string or a JSON file (`Password=\"...\"`,
+    `password=\'...\'`), is one value: it may hold `;`, spaces, the other kind of quote, backticks
+    and ADO.NET's doubled quote (`\"Hunt\"\"er\"`); the escaped quotes are kept and what is inside
+    them is redacted (`Password=\"<redacted>\"`). A whole placeholder inside them is kept
+    (`\"{pw}\"`, `\"<password>\"`, and `${...}` keeps its name with any default redacted), but a
+    `<...>`, `{{...}}` or `#{...}` there that holds `;` or `&` is redacted, and so is a command
+    substitution with arguments (`\"$(cat file)\"`, kept unquoted), and a value under four
+    characters (an empty `\"\"` too) is sent as written, as unquoted values are. Code that builds
+    the quotes with the string's own quote (`"password=\"" + pw + "\""`) is sent as written; built
+    with the other kind of quote, it may be redacted. A password whose whole value has the shape of
+    a placeholder or a variable is sent as written (`{Hunter22}`, as ODBC quotes a password with no
+    `;`, `#{Hunter22}`, `%{Hunter22}`, `\(Hunter22)`, `<Hunter22>`, `$uperS3cret`, `$ecret.Pass`,
+    `%NAME%`), and so is one in braces that a space cuts, with no `;` (`PWD={Str0ng Pass}`, read
+    as `{ pw }` is). A keyword argument
+    (`connect(host=h, password=pw)`), a statement (`foo(a=1); password=x`, `x=f(a); password=x`)
+    and a password after a value that holds a space inside braces (`Driver={SQL Server}; PWD=...`)
+    or ends in `)` without being one word in parentheses (`Server=f(a); Password=...`) are sent as
+    written;
   - in configuration files (`.properties`, YAML, TOML, INI, `.env` templates) — however they are
     paired, quoted or not — values whose key has one of those names, or whose last part is `key`
     (`jwt.key`, `encryption-key`, `encryptionKey`) or `dsn`, and signing keys and client secrets.
     That includes a quoted key (`"password": ...`), a value that starts with `|` or `>`
-    (`password=>Xk9q`, `token: |abc`), every line of a YAML block value (`password: |`, a value
-    that is only `|` or `>`, with `-`, `+` or a digit and a `# comment` after it or not), and in a
-    `.properties` file a key and value separated by spaces
-    (`db.password hunter2`) and every line of a value continued with a backslash. A line that
-    continues a value is read as a setting of its own only in the `key=value` or `key: value`
-    form, so `password=...` on the next line of a JDBC URL is redacted, as in 1.7.6 (a
-    placeholder there, `password=${DB_PASSWORD:hunter2}`, loses its default as below), while
-    words there (`password to continue`) are sent as written; a line that continues a key (after
-    `db.\` or a lone `\`) is read as a setting in every form. When a key is whole but its
-    `=` or `:` is on the line after it (`db.password\` then `=hunter2`), that value is sent as
-    written, as in 1.7.6. A line with nothing to redact is sent exactly as written.
+    (`password=>Xk9q`, `token: |abc`), every line of a YAML block value (`password: |`, a value that
+    is only `|` or `>`, with `-`, `+` or a digit and a `# comment` after it or not), and in a
+    `.properties` file a key and value separated by spaces (`db.password hunter2`) and every line of
+    a value continued with a backslash. A line that continues a value is read as a setting of its
+    own only in the `key=value` or `key: value` form, so `password=...` on the next line of a JDBC
+    URL is redacted, as in 1.7.6 (a placeholder there, `password=${DB_PASSWORD:hunter2}`, loses its
+    default as below), while words there (`password to continue`) are sent as written; a line that
+    continues a key (after `db.\` or a lone `\`) is read as a setting in every form. When a key is
+    whole but its `=` or `:` is on the line after it (`db.password\` then `=hunter2`), that value is
+    sent as written, as in 1.7.6. A value that opens a multi-line string with three double or three
+    single quotes (TOML's `password = """`) is redacted with every line up to and including the
+    closing quotes. In YAML, after a secret key with no value on its line (`password:`,
+    `api_keys:`), the sequence items below it (`- ...`, the `-` kept) and plain values on the lines
+    below it are redacted; a quoted item is an item even when it holds a colon and a space, also
+    after a tag or an anchor (`- "admin: x"`, `- 'a: b'`, `- !!str "admin: x"`, `- &a "admin: x"`).
+    When the first line below is itself a key (a mapping, such as an OpenAPI property's `type:`): an
+    unquoted `key:`, or a quoted key followed by `:`, after a tag or an anchor too
+    (`- !!str key: v`), the lines are read one by one as before. A `#` comment line among the lines
+    below such a key, at any column, does not end its value: the items and values after it are still
+    redacted, and the comment line is read as a line of its own (a commented-out setting there,
+    `# password: x`, has its value redacted, as below; any other comment, a commented-out item or
+    value such as `# - sk-old...` or `#   hunter22` included, is sent as written, as in 1.7.7). A
+    `;` line is not a comment in YAML: one indented deeper than the key is read as part of the value
+    and redacted; one at the key's column or to its left ends the value, and what follows is read
+    line by line. A placeholder there is read as on the key's line, so `- ${API_KEY}`,
+    `${GOOGLE_SECRET}` and `- ${{ secrets.TOKEN }}` are kept, a default written in one or text glued
+    to one is redacted (`${DB_PASS:hunter2}` is sent as `${DB_PASS:<redacted>}`), a quoted
+    placeholder, or one after a tag or an anchor, is redacted whole, as `password: "${KEY}"` is, and
+    a lone `-` is sent as written. A value that opens a list or a table on its key's line and goes
+    on below it (TOML's `api_keys = [` or YAML's `api_keys: [`, then one value a line) has only that
+    line redacted: the lines below it are sent as written, as in 1.7.7. A secret setting left in a
+    comment (`#spring.datasource.password=...`, `# password: ...`, `; password = ...`,
+    `# export API_KEY=...`, behind `#` or `;`, and `!` in a `.properties` file) has its value
+    redacted when that value is one word or one quoted string, with a ` # comment` of its own after
+    it or not; the marker, the key and that comment are kept (in a `.properties` file the text after
+    the value is part of the value, and is redacted with it). A comment whose value is several
+    words, a note, is sent as written. A PEM private key over several lines, from its `-----BEGIN`
+    marker to the first `-----END` marker of a private key after it, has its inner lines redacted
+    before these rules read the file: each inner line with text on it becomes `<redacted>`, keeping
+    its indentation and its line-continuation backslashes, so every line stays where it was, a line
+    range names the same lines, and a value that goes on after the END line (a `.properties`
+    continuation, more text under a YAML key) is still read, and redacted, as part of that secret.
+    When these rules redact the key line by line (a YAML `|` or `>` block under a secret key, a
+    `.properties` continuation, and also a TOML multi-line string under a secret key or a plain
+    value on the lines below a bare YAML secret key), it is sent as one `<redacted>` a line; when
+    they leave it as written (under a key that is not secret-named, such as `content: |`, or in a
+    TOML or INI value), it is sent whole as one `<redacted>`, as in 1.7.7. When they take only part
+    of it (its BEGIN line as a quoted value, `private-key: "-----BEGIN ...`, of which 1.7.7 sent all
+    but the first line), or a line range cuts it, it is sent as one `<redacted>` a line, its BEGIN
+    and END lines and any text after END on that line included. In any file, when the
+    2,600-character cap on a file, a line range or a symbol, or the share of it a claim's code gets,
+    would cut inside a PEM private key over several lines, every such
+    key in that code is first sent as `<redacted>` lines, so no part of it is sent (1.7.7 sent the part
+    before the cut; a key on one line, or in a Java, JavaScript or TypeScript file whose lines end in a
+    lone `\r`, is still cut so); the
+    hidden key is shorter, so more of the code after it can be sent. Redacted lines stay on their
+    own lines, so line numbers never move, except that a PEM private key hidden whole is sent as one
+    `<redacted>` line, as in 1.7.7. A line with nothing to redact is sent exactly as written.
     Placeholders such as `${DB_PASSWORD}` are kept: they reveal nothing. A default written into one
     (`${DB_PASSWORD:hunter2}`, `${DB_PASSWORD:-hunter2}`, and without a colon, as shells and Docker
     Compose write it, `${DB_PASSWORD-hunter2}` or `${DB_PASSWORD=hunter2}`) and text glued to one
-    (`${PREFIX}hunter2`) are redacted when they are four characters or longer, as a quoted value
-    is. A default without a colon is read only after an upper-case environment variable's name, so
-    `${jwt-secret}` stays a name, and never in a JavaScript template string in code, where
-    `${A-B}` is code. Kept: a GitHub Actions expression (`${{ secrets.TOKEN }}`) whole; an editor
-    variable's name (`${env:TOKEN}`, `${input:token}`), while a default after the name is redacted
-    as above (Log4j2's `${env:TOKEN:-...}`, the Serverless Framework's `${env:TOKEN, '...'}`); the
-    message of `${1:?message}`; and a path in or after a placeholder that names a folder or a file
-    (`${WORK_DIR}/token.json`, `${KEY_FILE:-/etc/app/key.pem}`). A path after any other
-    placeholder is redacted, as a webhook address carries its token in the path.
+    (`${PREFIX}hunter2`) are redacted when they are four characters or longer, as a quoted value is.
+    A default without a colon is read only after an upper-case environment variable's name, so
+    `${jwt-secret}` stays a name, and never in a JavaScript template string in code, where `${A-B}`
+    is code. Kept: a GitHub Actions expression (`${{ secrets.TOKEN }}`) whole; an editor variable's
+    name (`${env:TOKEN}`, `${input:token}`), while a default after the name is redacted as above
+    (Log4j2's `${env:TOKEN:-...}`, the Serverless Framework's `${env:TOKEN, '...'}`); the message of
+    `${1:?message}`; and a path in or after a placeholder that names a folder or a file
+    (`${WORK_DIR}/token.json`, `${KEY_FILE:-/etc/app/key.pem}`). A path after any other placeholder
+    is redacted, as a webhook address carries its token in the path.
 
   A value that matches none of these (for example `DATABASE_DSN = "..."` written in code, or a
   quoted password of three characters) is sent as written. `preview_spec_check` shows you exactly
@@ -121,11 +224,27 @@ cleaning:
   work out how long the step ran), control characters and invisible characters are removed;
   timestamps in other formats, or inside a line, stay;
 - the CI runner's workspace path is removed, so paths are relative to the repository, for the
-  default workspaces of GitHub Actions, Azure Pipelines' hosted agents, GitLab (Docker and shell
-  executors), Jenkins, CircleCI, Travis CI, Buildkite and TeamCity (the runner's own `_actions`,
-  `_temp` and `_tool` folders beside the workspace are not the workspace, so their paths are kept
-  whole); in a log or JUnit report read from a file, the project folder is removed from the
-  start of a path; any other home folder is shown as `<user>`;
+  default workspaces of GitHub Actions (a container job's `/__w/<a>/<b>/` included; a hosted Windows
+  workspace written with `/`, `D:/a/...` or Git Bash's `/d/a/...`, is left as written, as in 1.7.7),
+  self-hosted GitHub runners and Azure Pipelines agents (`<install folder>/_work/<a>/<b>/`, on
+  Windows `X:\...\_work\<a>\<b>\` too; a runner installed two or more folders below `~/work` or
+  `X:\a\` is taken for a GitHub-hosted one, so `_work/<a>/<b>/` stays in front of its paths), Azure
+  Pipelines' hosted agents, GitLab (Docker and shell executors), Jenkins, CircleCI, Travis CI,
+  Buildkite and TeamCity, each at the exact paths `docs/tools.md` lists (the runner's own
+  `_actions`, `_temp` and `_tool` folders, and Azure Pipelines' `_tasks`, beside the workspace are
+  not the workspace, so their paths are kept whole). A container job's or self-hosted runner's path
+  is removed only where a path starts (not right after a letter, a digit, `_`, `.`, `~`, `-`, `/`,
+  or a one-letter word and `:`, a drive) and never inside a URL (a word with `://` in it before the
+  path), and where its `<a>` and `<b>` hold no `:`, `;` or `,`: a workspace path that such a list
+  separator ends (`-v /__w/r/r:/app`, `PATH=C:\actions-runner\_work\w\w;C:\...`) is sent as written,
+  as in 1.7.7, except that of a runner installed in `~/work` or `X:\a\`, or one folder below either:
+  1.7.7 cut that one as a GitHub-hosted workspace (`-v /home/<user>/work/_work/r/r:/app` read
+  `-v r:/app`), and it is now sent whole, a home folder shown as `<user>`, as it is when it ends at
+  a space or at the end of the line, or is inside a URL. A path under another workspace that holds a
+  `_work/<a>/<b>/` loses everything up to the first one, as a self-hosted runner's would, and so
+  does a line that starts with `/workspace/` (with no such `_work/<a>/<b>/`, only `/workspace/`
+  comes off, as in 1.7.7). In a log or JUnit report read from a file, the project folder is removed
+  from the start of a path; any other home folder is shown as `<user>`;
 - email addresses are replaced by `<email>`;
 - secret-looking values are redacted: the shapes listed under spec drift, and in logs also
   bearer, basic and token authorization values, `_authToken=` lines, the password given to
@@ -143,7 +262,17 @@ The excerpt of the change is cleaned as well:
   mentioned, with a note that its content is withheld;
 - lines that only add or remove a comment are left out, in Python, shell, Ruby, YAML, TOML, Go,
   Rust, Java, Kotlin, Scala, JavaScript, TypeScript, C, C++, C#, Swift and PHP files;
-- secret-looking values are redacted as in log lines.
+- secret-looking values are redacted as in log lines, home folders are shown as `<user>` and
+  email addresses as `<email>`;
+- a workspace path is removed only where 1.7.7 removed it, for GitHub-hosted (a hosted path under
+  `_actions`, `_temp`, `_tool` or `_tasks`, or of a runner installed in `~/work` or `X:\a\`, or one
+  folder below either, is kept whole), Azure Pipelines' hosted agents, GitLab, Jenkins, CircleCI,
+  Travis CI, Buildkite and TeamCity, and a line that starts with `/workspace/` (only that comes
+  off). So a hosted path under `_tasks`, or of a runner installed in `~/work` or `X:\a\` or one
+  folder below either (`/home/<user>/work/_work/<r>/<r>/...`, `X:\a\<x>\_work\<r>\<r>\...`), which
+  1.7.7 cut, is now sent whole, its home folder shown as `<user>`. Any other container job's
+  `/__w/<a>/<b>/` or self-hosted runner's `_work/<a>/<b>/` in a diff line is code, and is sent as
+  written, as in 1.7.7.
 
 jevmcp never adds the commit message, the pull request's title or its description to what it sends:
 text an author wrote about their own change steers a verdict about it. A CI step that prints one of
@@ -163,8 +292,9 @@ included, is never used as either. `gh` runs without the TypeSafe key in its env
 cleaned excerpts above go to TypeSafe, and only when `triage_ci_failure` runs.
 
 **Log files from another CI** are read only when they are inside your project or in the server's
-private inbox. Symbolic links, `.git`, secret files, other users' files, the server's own results
-folder and other sessions' temporary folders are refused.
+private inbox. Symbolic links, files under any `.git` folder (a vendored repository's too), secret
+files, other users' files, the server's own results folder and other sessions' temporary folders
+are refused, on Windows as on Linux and macOS.
 
 ### Code audit
 
@@ -181,9 +311,17 @@ Which code can be sent:
 
 - only files git tracks or would commit, so files git ignores — build output, a local `.env`,
   credentials — are left out. In a git repository where git is not installed, which files git
-  ignores cannot be told, so no code is read at all. In a folder that is not a git repository there
-  is nothing to ignore: every code file outside the skipped folders (`node_modules`, `.venv`,
-  `build` and the like) can be read, and secret files are still skipped;
+  ignores cannot be told, so no code is read at all, and neither is any in a repository git cannot
+  read (dubious ownership, a broken index, a worktree whose repository folder is gone): the audit
+  stops with git's message. So it does at a `.git` folder in the folder or above it, up to any
+  ceiling or mount point where git stops looking, that is not empty but that git does not take for a
+  repository (its `HEAD` or `refs` gone, as a copy or sync tool that drops empty folders can leave
+  it), as its ignored files cannot be told apart either. In a folder that is not a git repository
+  there is nothing to ignore (an empty `.git` folder in it or above it does not make it one, nor
+  does a repository above a `GIT_CEILING_DIRECTORIES` entry or, unless
+  `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set, past a mount point, as git does not look there): every
+  code file outside the skipped folders (`node_modules`, `.venv`, `build` and the like) can be read,
+  and secret files are still skipped;
 - only code files that a reviewed rule's `scope` matches, and by default only the units that the
   change under test touches;
 - symbolic links, files over 1.5 MB and secret files (the files listed under "What is never

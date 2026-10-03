@@ -111,14 +111,14 @@ class Symbol:
     def source(self) -> str:
         if self._source is None:
             try:
-                self._source = (self._loader() if self._loader else "")[:MAX_CODE_CHARS]
+                self._source = _head(self._loader() if self._loader else "")
             except Exception as e:  # noqa: BLE001 - a broken render must not stop a run
                 self._source = f"(source unavailable: {type(e).__name__})"
         return self._source
 
     @source.setter
     def source(self, value: str) -> None:
-        self._source = value[:MAX_CODE_CHARS]
+        self._source = _head(value)
 
     def __repr__(self) -> str:
         return f"Symbol({self.kind} {self.name} @ {self.file}:{self.line})"
@@ -287,21 +287,61 @@ _SECRET_LITERAL = re.compile(
     # `if` or `for`, or inside a tag: `password: str = "..."`, `f(a, password: str = "...")`,
     # `const token: &'static str = "..."`, `val secret: String? = "..."`. A string type is a name that ends in str
     # or string (SecretStr, StrictStr), not any name holding those letters: a value of another type is not a secret
-    # (`password: HashStrategy = "bcrypt"`, an enum);
+    # (`password: HashStrategy = "bcrypt"`, an enum); or a bare qualifier that names no type at all:
+    # `SECRET_KEY: Final = "..."`, `typing.Final`, `ClassVar`, `Any`, TypeScript's `any`;
     r"""|(?:^[ \t]*|[(,;{][ \t]*|\b(?:let|const|val|var|static|final|pub|private|public|protected|readonly|export|mut)"""
-    r"""[ \t]+)""" + _SECRET_VAR + r"""[ \t]*:[ \t]*(?=[^=\n]{0,160}?(?:str|string)\b)"""
+    r"""[ \t]+)""" + _SECRET_VAR + r"""[ \t]*:[ \t]*(?=[^=\n]{0,160}?(?:str|string)\b"""
+    r"""|(?:typing\.)?(?-i:Final|ClassVar|Any|any)[ \t]*=)"""
     r"""&?(?:'\w+[ \t]+)?""" + _DECLARED_TYPE
     + r"""(?:[ \t]*\|[ \t]*""" + _DECLARED_TYPE + r""")*[ \t]*=(?!=)"""
     # or Go's `var password string = "..."`, at the start of a line (`ErrWeakPassword ErrorCode = ...` is an enum)
     r"""|^[ \t]*(?:(?:var|const)[ \t]+)?""" + _SECRET_VAR + r"""[ \t]+string[ \t]*=(?!=))\s*"""
-    # a string prefix: b"...", u"...", C#'s @"...", r"..." when it holds no `\`, `(` or `[` (else it is a pattern:
-    # `token_pattern=r"(?u)\b\w\w+\b"`), and f"..." when it holds no `{` (else it is code)
-    r"""(?:[bBuU](?=["'])|@(?=")|(?:[rR][bB]?|[bB][rR])(?="[^"\\(\[\n]*"|'[^'\\(\[\n]*')"""
+    # a string prefix: b"...", u"...", C/C++'s L"..." and u8"...", C#'s @"...", r"..." when it holds no `\`, `(`
+    # or `[` (else it is a pattern: `token_pattern=r"(?u)\b\w\w+\b"`), and f"..." and C#'s $"..." (also $@, @$)
+    # when it holds no `{` (else it is code); in a C# verbatim string (@, $@, @$) `""` is a quote inside the value
+    r"""(?:[bBuU](?=["'])|(?-i:L|u8)(?=["'])|@(?=")|\$(?="[^"{\n]*")|(?:\$@|@\$)(?="(?:[^"{\n]|"")*"(?!"))"""
+    r"""|(?:[rR][bB]?|[bB][rR])(?="[^"\\(\[\n]*"|'[^'\\(\[\n]*')"""
     r"""|[fF](?="[^"{\n]*"|'[^'{\n]*')|(?:[fF][rR]|[rR][fF])(?="[^"{\\(\[\n]*"|'[^'{\\(\[\n]*'))?)"""
     # the value; one word may hold one quote of another kind, after its first character: `"p'ssw0rd"`,
-    # `"hunter22'"` (never code, `'pw: "' + p + '"'`, JSON, `'{"user":"bob"}'`, or a shell's `'"${PW}"'`)
-    r"""(["'`])([^"'`\n]{4,}|(?=(?:[^\s"'`]|(?!\2)["'`]){4})[^\s"'`]+(?!\2)["'`][^\s"'`]*)\2""",
+    # `"hunter22'"` (never code, `'pw: "' + p + '"'`, JSON, `'{"user":"bob"}'`, or a shell's `'"${PW}"'`);
+    # after a verbatim prefix, the value goes on past each `""` to the closing quote: `@"hunter""22"`
+    r"""(["'`])((?<=@")(?:[^"\n]|""){4,}(?=")|(?<=@\$")(?:[^"\n]|""){4,}(?=")|[^"'`\n]{4,}|(?=(?:[^\s"'`]|(?!\2)["'`]){4})[^\s"'`]+(?!\2)["'`][^\s"'`]*)\2""",
     re.I | re.M)
+# `password=...` inside a value: a JDBC URL (`?user=app&password=...`, `;password=...`), an ADO.NET connection
+# string (`Server=db;Password=...;`) or libpq's (`host=db user=app password=... dbname=x`). Only after `?`, `&`,
+# `;` or a quote, or after another `name=value` and a space (also `Server=db; Password=...`), with no space around
+# `=`; that value has no space, `=`, `;`, `&` or quote and does not end in `,`, `(` or `)` (`Data Source=db,1433; `),
+# or is one word in parentheses (`Server=(local); `) or single-quoted (libpq's `dbname='app' `) - never a keyword
+# argument (`f(host=h, password=pw)`), a statement (`x=f(a); password=pw`), code in a string
+# (`"password = request.form[...]"`) or `password=>...`. One value: ODBC's brace-quoted value with a `;` in it,
+# spaces, `&`, `'`, backticks and `\"` included (`PWD={Str0ng;Pass}`; a raw `{` cuts it), and a value in escaped
+# quotes, which may hold `;`, spaces, the other quote, backticks and ADO.NET's doubled quote (`Password=\"...\"`,
+# `\"Hunt\"\"er\"`; never the code that builds them with its own quote: `"password=\"" + pw + "\""`)
+_SECRET_PARAM = re.compile(r"""((?:[?&;"'`]|(?<![\w.\-])\w+=(?:'[^'\n]*'|\([^\s=;&"'`()]*\)|[^\s=;&"'`]+(?<![,()]))"""
+                           r""";?[ \t]+)(?:password|passwd|pwd)=)(?![=>])"""
+                           r"""(\\(["'])(?:[^"'\\\n]|(?!\3)["']|\\\3\\\3|\\(?!\3)[^\n]){4,}\\\3"""
+                           r"""|\{(?:[^\n"{};]|\\"|\}\})*;(?:[^\n"{}]|\\"|\}\})*\}|[^\s&;"'`]{4,})""", re.I)
+# such a value is kept only when the whole of it is a placeholder: `{pw}`, `{{pw}}`, `<password>`, `%s`, `%(pw)s`,
+# `%2$s`, `%v`, `%DB_PASS%`, `$1`, a variable (`$DB_PASS`, `$password`, `$cfg->pw`, `$env:DB_PASS`, Perl's
+# `$ENV{DB_PASS}`), `$(DB_PASS)`, PowerShell's `$($env:DB_PASS)`, Ruby's and Elixir's `#{pw}`, Swift's `\(pw)`,
+# Ruby's `%{pw}` and `%<pw>s`, a mask (`*****`) or a regular expression's group
+# (`(.*)`, `(\S+)`, `(?P<pw>[^&]+)`, cut at the `&`: `(?P<pw>[^`, or at an escaped quote: `([^\`),
+# each also with `\n`, `\r` or `\t` after it (`f"password={pw}\n"`) and then `,`, `)`, `.` or `:`
+# (`password=***, host=db`); never a password that only starts with one of those characters
+# (`%40dm1n%21x`, `$uperS3cret!`, `*Hunter22*`, `@dmin2024`, `([Hunt3r!`)
+_REGEX_ATOM = r"(?:\.|\\\\?[A-Za-z]|\[(?:\\.|[^\]\\])+\])(?:(?:[*+?]|\{\d+(?:,\d*)?\})\??)?"
+_PARAM_PLACEHOLDER = re.compile(
+    r"(?:\{\{[^{}]*\}\}|\{[^{};]*\}|#\{[^{}]*\}|\\\([^()]*\)|%\{\w+\}|%<\w+>[sdrvqx]?|<[^<>]*>|%(?:\(\w+\)|\d+\$)?[-+# 0]*(?:[1-9]\d*)?(?:\.\d+)?[sdrvqx]|%[A-Za-z_]\w*%|\$\d+"
+    r"|\$(?:(?i:env):)?[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*)*(?:\{\w+\})?|\$\([\w.\-]+\)"
+    r"|\$\(\$(?:(?i:env):)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\)|\*+)(?:\\[nrt])*[,).:]*"
+    rf"|\((?:\?(?:P?<\w+>|:))?(?:{_REGEX_ATOM})+\)[*+?]?(?:\$|\\\\?[A-Za-z][*+?]?)*\\?[,).:]*"
+    rf"|\((?:\?(?:P?<\w+>|:))?(?:{_REGEX_ATOM})*\[\^(?:\\\\?[A-Za-z])*\\?")
+# or when a quote or a space cut the value inside a `{...}`, a `#{...}`, a `<...>` or a shell's `$(...)` whose closer
+# follows on the line: `password={os.environ['PW']}`, `password=#{ENV['PW']}`, `Password=<your password>;`,
+# `password=$(cat /run/secrets/pw)`; never when a `;` or `&` cut it (`PWD={Hunt3r;`, `password=<Hunt3r&ssl=1`)
+_PARAM_OPENED = re.compile(r"#?\{\{?[^{}]*|<[^<>]*|\$\([\w.\-]*")
+_PARAM_CLOSER = {"{": re.compile(r"[^\n{}]*\}"), "#": re.compile(r"[^\n{}]*\}"), "<": re.compile(r"[^\n<>]*>"),
+                 "$": re.compile(r"[^\n()]*\)")}
 _SECRET_SHAPES = [re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{8,}"),     # Stripe
                   re.compile(r"\b(?:ghp|gho|ghu|ghs|github_pat)_[0-9A-Za-z_]{20,}"),     # GitHub
                   re.compile(r"\bxox[abprs]-[0-9A-Za-z-]{10,}"),                          # Slack
@@ -328,9 +368,34 @@ def redact(text: str) -> str:
     # in backticks (a JavaScript template string) `${A-B}` is code, never a default: colonless=False
     text = _SECRET_LITERAL.sub(lambda m: f"{m.group(1)}{m.group(2)}{_redacted(m.group(3), m.group(2) != '`')}"
                                          f"{m.group(2)}", text)
+    text = _SECRET_PARAM.sub(_param_redacted, text)
     for pat in _SECRET_SHAPES:
         text = pat.sub(lambda m: "://<redacted>@" if m.group(0).startswith("://") else "<redacted>", text)
     return text
+
+
+def _param_redacted(m: re.Match) -> str:
+    """A connection-string password (a match of _SECRET_PARAM) as it is sent: a placeholder is kept
+    (`{pw}`, `<password>`, `$DB_PASS`: see _PARAM_PLACEHOLDER), and `password=${DB_PASSWORD}` as a quoted value's is;
+    escaped quotes around the value (`\\"...\\"`) are kept and what is inside them is read as the value."""
+    value = m.group(2)
+    quote = value[:2] if m.group(3) else ""
+    inner = value[len(quote):len(value) - len(quote)]
+    if not inner.startswith("${") and _param_placeholder(m, inner, bool(quote)):
+        return m.group(0)
+    return f"{m.group(1)}{quote}{_redacted(inner)}{quote}"
+
+
+def _param_placeholder(m: re.Match, value: str, quoted: bool) -> bool:
+    """A `password=` value in a connection string that is a placeholder, not a password (see _PARAM_PLACEHOLDER).
+    In escaped quotes, a value that a `;` or `&` cuts is a password, as it is unquoted: `\\"<Hunt3r;Pass>\\"`."""
+    end = m.end()
+    if quoted and re.search(r"[;&]", value):
+        return False
+    if _PARAM_PLACEHOLDER.fullmatch(value):
+        return True
+    return bool(not quoted and m.string[end:end + 1] in ("\"", "'", "`", " ", "\t") and _PARAM_OPENED.fullmatch(value)
+                and _PARAM_CLOSER[value[0]].match(m.string, end))
 
 
 _EDITOR_VARIABLES = ("env", "input", "config", "command", "workspaceFolder")     # VS Code's ${env:NAME} and co.
@@ -424,6 +489,18 @@ _CONFIG_LINE = re.compile(r"^(\s*(?:export\s+)?-?\s*)([\w.\-\[\]]+)(\s*[:=]\s*)(
 _CONFIG_QUOTED = re.compile(r"""^(\s*-?\s*)(["'])([\w.\-\[\]]+)\2(\s*[:=]\s*)(\S.*?)\s*$""")
 _PROPERTIES_SPACED = re.compile(r"^(\s*)([\w.\-\[\]]+)(\s+)([^\s=:].*?)\s*$")
 _BLOCK_SCALAR = re.compile(r"[|>][-+0-9]*(?:\s+#.*)?")          # `password: |` - the value is on the lines below
+# YAML `password:` with nothing after it (or only a comment): its value is on the lines below, a sequence
+# (`  - sk-...`) or a plain scalar - up to a key on one of those lines (`  - name: x`, `  type: string`): then the
+# value is a mapping, and each of its lines is read as a setting of its own; a quoted item is never a key, even
+# when it holds `: ` (`  - "admin: x"`), also after a tag or an anchor (`  - !!str "admin: x"`, `  - &a "admin: x"`)
+_BARE_KEY = re.compile(r"""^(\s*(?:-\s*)?)(["']?)([\w.\-\[\]]+)\2[ \t]*:[ \t]*(?:#.*)?$""")
+_YAML_KEY = re.compile(r"""^\s*(?:-\s+)*(?:[!&]\S*[ \t]+)*(?:(?:"[^"\n]*"|'[^'\n]*')[ \t]*"""
+                       r"""|(?!-\s)[^\s#'"\[\]{},!&](?:[^#:\n]|:(?![ \t]|$))*):(?:[ \t]|$)""")
+# a setting left in a comment, `#spring.datasource.password=...`, `# password: x`, `; password = x`: one word or
+# one quoted value, then at most a comment of its own (`# password: x  # old one`) - `# password: the one for the
+# test database` is a note, not a setting
+_COMMENTED = re.compile(r"""^(\s*(?:[#;]+|!)[ \t]*(?:export[ \t]+)?(?:-[ \t]*)?(["']?)([\w.\-\[\]]+)\2[ \t]*[:=][ \t]*)"""
+                        r"""("[^"\n]*"|'[^'\n]*'|[^\s"']+)((?:[ \t]+#.*)?[ \t]*)$""")
 
 
 def _goes_on(line: str) -> bool:
@@ -436,15 +513,30 @@ def redact_config_text(text: str, properties: bool = False) -> str:
     """Config files paired whole or by line range: redact secret settings line by line, quoted
     or not (`spring.datasource.password=hunter2`, `  password: hunter2`, `"password": hunter2`,
     in a .properties file also `db.password hunter2`), and every line of a secret's YAML block
-    value (`password: |`) or of its .properties value continued with `\\`. A line that continues
+    value (`password: |`), of its YAML value on the lines below a bare `password:` (sequence items
+    and plain scalars, up to the first key below it: a mapping is read line by line; a comment line between them ends
+    nothing, and a placeholder there is kept as on the key's line), of its TOML multi-line string
+    (`password = '''`, to the closing quotes) or of its .properties value continued with `\\`.
+    A secret setting left in a comment (`#password=x`, `# token: x`, `; password = x`, and `!` in a
+    .properties file) is redacted when its value is one word or one quoted string, with at most a
+    ` # comment` after it (kept, except in a .properties file, where it is part of the value). A line that continues
     a .properties value is that value, never a setting of its own (`...and \\` / `  password to
     continue`), except that a `password=...` on it is still redacted, as 1.7.6 did (the next part
     of a JDBC URL); a line after one with no key that can be read (`db.\\`, a lone `\\`) is read on
     its own. Placeholders are kept, a default written in one is not. Every line stays where it was,
     so a line range still names the same lines."""
+    if text[:1] == "\ufeff":       # a byte-order mark: line 1 is read as the line after it, and the mark kept
+        return "\ufeff" + redact_config_text(text[1:], properties=properties)
     out, block = [], -1            # block >= 0: inside a secret's block value, which is indented deeper
     goes_on = None                 # .properties: the line above goes on to this one (True: a secret's value)
+    bare, closer = -1, None        # under a bare secret key (its column); inside a secret's """ or ''' string
     for line in text.split("\n"):
+        if closer is not None:
+            if closer in line:
+                closer = None
+            indent = len(line) - len(line.lstrip())
+            out.append(line[:indent] + "<redacted>" if line.strip() else line)
+            continue
         if goes_on is not None:
             secret, goes_on = goes_on, (goes_on if _goes_on(line) else None)
             indent = len(line) - len(line.lstrip())
@@ -466,6 +558,21 @@ def redact_config_text(text: str, properties: bool = False) -> str:
                 out.append(line[:indent] + "<redacted>" if line.strip() else line)
                 continue
             block = -1
+        if bare >= 0:
+            indent, body = len(line) - len(line.lstrip()), line.strip()
+            if body.startswith("#"):
+                pass                       # a comment, at any column, ends nothing: it is read as a line of its own
+            elif body and (indent < bare or (indent == bare and not (body == "-" or body.startswith("- ")))
+                           or _YAML_KEY.match(line)):
+                bare = -1                  # a key below it: its value is a mapping, read line by line
+            elif body:
+                head = re.match(r"\s*(?:-(?:\s+|$))*", line).end()      # a sequence item keeps its `- `
+                # as on the key's line: a placeholder is kept (`- ${API_KEY}`), a default written in one is not
+                if (value := line[head:].strip()) and (sent := _redacted(value)) != value:   # a lone `-` is kept
+                    line = line[:head] + sent
+                out.append(line)
+                continue
+        raw = line
         m = _CONFIG_LINE.match(line)
         if properties and _goes_on(line) and not line.lstrip().startswith(("#", "!")):   # a comment never goes on
             key = m.group(2) if m else ((p := _PROPERTIES_SPACED.match(line)) and p.group(2))
@@ -480,11 +587,13 @@ def redact_config_text(text: str, properties: bool = False) -> str:
                 block = len(m.group(1))
             else:                          # `password=>Xk9q`, `token: |abc`: a value, not a block header
                 line = f"{m.group(1)}{m.group(2)}{m.group(3)}<redacted>"
+                closer = _toml_opener(value)
         elif m is None and (q := _CONFIG_QUOTED.match(line)) and _secret_key(q.group(3)):
             value = q.group(5)
             if _BLOCK_SCALAR.fullmatch(value):
                 block = len(q.group(1))
             else:
+                closer = _toml_opener(value)
                 v = re.fullmatch(r"""(["'])(.*)\1(,?)""", value)     # a quoted value keeps its quotes
                 sent = f"{v.group(1)}{_redacted(v.group(2))}{v.group(1)}{v.group(3)}" if v else _redacted(value)
                 if sent != value:
@@ -492,8 +601,136 @@ def redact_config_text(text: str, properties: bool = False) -> str:
         elif m is None and properties and (p := _PROPERTIES_SPACED.match(line)) and _secret_key(p.group(2)):
             if (sent := _redacted(p.group(4))) != p.group(4):
                 line = f"{p.group(1)}{p.group(2)}{p.group(3)}{sent}"
+        elif m is None and (c := _COMMENTED.match(line)) and _secret_key(c.group(3)) \
+                and (properties or not line.lstrip().startswith("!")):
+            value, rest = c.group(4), c.group(5)     # a comment never starts a block or a continued value
+            if properties and rest.strip():          # in a .properties file ` #prod` is part of the value
+                value, rest = value + rest.rstrip(), rest[len(rest.rstrip()):]
+            v = re.fullmatch(r"""(["'])(.*)\1""", value)
+            sent = f"{v.group(1)}{_redacted(v.group(2))}{v.group(1)}" if v else _redacted(value)
+            if sent != value:
+                line = f"{c.group(1)}{sent}{rest}"
+        if not properties and (b := _BARE_KEY.match(raw)) and _secret_key(b.group(3)):
+            bare = len(b.group(1))
         out.append(line)
     return "\n".join(out)
+
+
+_PEM_BEGIN, _PEM_END = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
+
+
+def _pem_line(line: str) -> tuple[str, str, str]:
+    """A line of a PEM key split as its indentation, its text, and its trailing backslashes (and `\\r`) - by string
+    methods, as a backtracking pattern takes time growing with the square of a long line's length."""
+    core = (line[:-1] if line.endswith("\r") else line).rstrip("\\")
+    text = core.lstrip(" \t")
+    return core[:len(core) - len(text)], text, line[len(core):]
+
+
+def _pem_spans(text: str) -> list[tuple[int, int, int, int]]:
+    """Where each PEM private key in `text` that spans lines starts and ends (characters), and its BEGIN and END line
+    (from 0), paired as redact()'s shape pairs them. A BEGIN with no END after it ends the search, so a whole file
+    is read in linear time."""
+    keys, i, at = [], 0, 0
+    while (b := _PEM_BEGIN.search(text, i)) and (e := _PEM_END.search(text, b.end())):
+        first = at + text.count("\n", i, b.start())
+        at = first + text.count("\n", b.start(), e.end())
+        if at > first:
+            keys.append((b.start(), e.end(), first, at))
+        i = e.end()
+    return keys
+
+
+def _pem_keys(text: str) -> list[tuple[int, int]]:
+    """The BEGIN and END line (from 0) of each PEM private key in `text` that spans lines (see _pem_spans)."""
+    return [(first, last) for _, _, first, last in _pem_spans(text)]
+
+
+def _redact_pem_keys(text: str) -> str:
+    """A PEM private key's inner lines redacted before the config rules read a file line by line: they would take
+    its BEGIN line away from the rest (`private-key: "-----BEGIN ...` over several quoted lines) and send the
+    others. Each inner line with text on it becomes `<redacted>`, keeping its indentation and its trailing
+    backslashes, so every line stays where it was and a value continued past the key's END line (`.properties`
+    `\\`, a YAML block's indentation) is still read as that value. The BEGIN and END lines stay as written; the
+    config rules' reading only decides which keys _config_lines hides (see there)."""
+    lines = text.split("\n")
+    _hide_inner_lines(lines, _pem_keys(text))
+    return "\n".join(lines)
+
+
+def _hide_inner_lines(lines: list[str], keys: list[tuple[int, int]]) -> None:
+    for first, last in keys:
+        for k in range(first + 1, last):
+            ws, key, tail = _pem_line(lines[k])
+            if key:
+                lines[k] = f"{ws}<redacted>{tail}"
+
+
+def _config_lines(text: str, properties: bool = False) -> tuple[list[str], list[tuple[int, int]]]:
+    """A config file's lines as they are read (the PEM pass, then the config rules), and its PEM keys' first and last
+    lines, for a line range that cuts one. A key the config rules leave as the PEM pass gave it gets its own lines
+    back, as in 1.7.7: redact()'s shape hides it whole, and the 2,600-character cap and a claim's share of it
+    measure what 1.7.7 measured. A key they took part of (its BEGIN line, as a quoted value) is not redact()'s
+    shape any more, and its BEGIN and END lines are hidden too."""
+    raw, keys = text.split("\n"), _pem_keys(text)
+    kept = _redact_pem_keys(text).split("\n")
+    lines = redact_config_text("\n".join(kept), properties=properties).split("\n")
+    for f, t in keys:
+        if lines[f:t + 1] == kept[f:t + 1]:
+            lines[f:t + 1] = raw[f:t + 1]
+    _hide_pem_lines(lines, [(f, t) for f, t in keys if lines[f:t + 1] != raw[f:t + 1]])
+    return lines, keys
+
+
+def _hide_pem_lines(lines: list[str], keys: list[tuple[int, int]]) -> None:
+    """Each of these keys sent as `<redacted>` lines, for a key that redact()'s shape will not see whole, as the
+    config rules took part of it or a cut splits it: its inner lines with text on them (see _redact_pem_keys), its
+    BEGIN line from its BEGIN on, and its END line but for its indentation, keeping their trailing backslashes.
+    A line the config rules already redacted stays."""
+    _hide_inner_lines(lines, keys)
+    for first, last in keys:
+        line = lines[first]
+        if b := _PEM_BEGIN.search(line, max((e.end() for e in _PEM_END.finditer(line)), default=0)):
+            lines[first] = line[:b.start()] + "<redacted>" + _pem_line(line[b.start():])[2]
+        if _PEM_END.search(lines[last]):
+            ws, _, tail = _pem_line(lines[last])
+            lines[last] = f"{ws}<redacted>{tail}"
+
+
+def _split_key(text: str, sent: int | set[int]) -> bool:
+    """Whether a cut that sends the first `sent` characters of `text`, or the lines of text.splitlines() numbered in
+    `sent`, sends part of a PEM private key that spans lines but not the whole key: redact()'s shape would not see
+    it, and its other lines would be sent."""
+    for start, end, _, _ in _pem_spans(text):
+        if isinstance(sent, int):
+            if start < sent < end:
+                return True
+        else:
+            span = set(range(len((text[:start] + "x").splitlines()) - 1, len((text[:end] + "x").splitlines())))
+            # a slice that keeps the key's BEGIN and END lines is hidden whole by redact()'s shape, as in 1.7.7
+            if sent & span and not span <= sent and not {min(span), max(span)} <= sent:
+                return True
+    return False
+
+
+def _hide_keys(text: str) -> str:
+    """`text` with every PEM private key that spans lines sent as `<redacted>` lines (see _hide_pem_lines)."""
+    lines = text.split("\n")
+    _hide_pem_lines(lines, _pem_keys(text))
+    return "\n".join(lines)
+
+
+def _head(text: str, limit: int = MAX_CODE_CHARS) -> str:
+    """The first `limit` characters of `text`; a cut that would split a PEM key that spans lines first hides every
+    such key (_hide_keys), so no part of one is sent."""
+    if len(text) > limit and _split_key(text, limit):
+        text = _hide_keys(text)
+    return text[:limit]
+
+
+def _toml_opener(value: str) -> str | None:
+    """The closing quotes a TOML multi-line string that starts here and goes on to the next lines needs."""
+    return value[:3] if value[:3] in ('"""', "'''") and value[:3] not in value[3:] else None
 
 
 def _is_config_file(path: Path) -> bool:
@@ -1990,6 +2227,13 @@ def index_code(root: Path, ignore: tuple[str, ...],
                             openapi.append(p)
             except OSError:
                 pass
+    # a file whose name is not valid UTF-8 cannot be named in a map, a reply or a request: set aside, and said.
+    # Its name within the root is what counts: a root that is not valid UTF-8 is the CLI's to refuse (see run)
+    if odd := [p for p in (*code, *configs, *openapi) if not _utf8(p.relative_to(root).as_posix())]:
+        code, configs, openapi = ([p for p in ps if p not in odd] for ps in (code, configs, openapi))
+        _NOTES.append(f"{len(odd)} code or config file(s) were left out because their names are not valid UTF-8, "
+                      f"so a map cannot name them: {', '.join(_readable(str(p)) for p in odd[:10])}"
+                      f"{' ...' if len(odd) > 10 else ''}. Rename them to check them.")
     code.sort(key=lambda p: (_is_test(str(p)), p.as_posix()))
     py_files = {str(p.resolve()) for p in code if p.suffix == ".py"}
     for f in py_files:
@@ -2815,21 +3059,22 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
     if target and (s := _BY_FILE.get((str(rp), target))):
         return s
     text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
+    lines, keys = text.split("\n"), []
     if _is_config_file(path):
-        text = redact_config_text(text, properties=path.suffix == ".properties")
-    lines = text.split("\n")
+        lines, keys = _config_lines(text, properties=path.suffix == ".properties")
     if m := re.fullmatch(r"(\d+)-(\d+)", target or ""):
         a, b = int(m.group(1)), int(m.group(2))
         if a < 1 or b < a or a > len(lines):
             fail(f"line range {a}-{b} is outside {file} ({len(lines)} lines)")
             return None
-        return Symbol(ref, "lines", _shown(path), a, tidy("\n".join(lines[a - 1:b]))[:MAX_CODE_CHARS])
+        _hide_pem_lines(lines, [(f, t) for f, t in keys if f < a - 1 or t > b - 1])    # nor is a key the range cuts
+        return Symbol(ref, "lines", _shown(path), a, _head(tidy("\n".join(lines[a - 1:b]))))
     if target:
         names = [n for (f, n) in _BY_FILE if f == str(rp)]
         fail(f"{target!r} not found in {file}." + (_close(target, names) or
              (f" It has: {', '.join(names[:8])}" if names else "")))
         return None
-    return Symbol(file, "file", _shown(path), 1, tidy("\n".join(lines))[:MAX_CODE_CHARS])
+    return Symbol(file, "file", _shown(path), 1, _head(tidy("\n".join(lines))))
 
 
 def _shown(path: Path) -> str:
@@ -2884,11 +3129,16 @@ def _code_page_of(data: bytes) -> tuple[str, str] | None:
 
 
 def load_map(path: Path) -> list:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+    try:                                                # utf-8-sig: a byte-order mark (Windows editors) is no error
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as e:
-        raise Stop(f"{path} is not valid JSON: {e.msg} at line {e.lineno}, column {e.colno}. "
-                   f"A trailing comma or a missing quote is the usual cause.") from None
+        # a trailing comma or a missing quote is what an editor leaves - not an empty file or extra text
+        # a string that runs into a line break is a missing closing quote too (a tab there is pasted text)
+        hint = (" A trailing comma or a missing quote is the usual cause." if e.doc.strip() and
+                (e.msg.startswith(("Expecting", "Illegal trailing comma", "Unterminated string")) or
+                 (e.msg.startswith("Invalid control character") and e.doc[e.pos:e.pos + 1] in ("\n", "\r")))
+                else "")
+        raise Stop(f"{path} is not valid JSON: {e.msg} at line {e.lineno}, column {e.colno}.{hint}") from None
     except UnicodeDecodeError as e:
         raw = b""
         with contextlib.suppress(OSError):
@@ -2974,7 +3224,7 @@ def map_specs(path: Path) -> tuple[list[str], str | None]:
     files - and what is wrong with it, or None). A map without "specs", or a bare list of entries,
     gives ([], None)."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return [], None                                     # load_map reports a map it cannot read
     if not isinstance(data, dict) or "specs" not in data:
@@ -3538,7 +3788,8 @@ def _git_list(root: Path, extra: list[str]) -> list[str]:
                         stdin=_subprocess.DEVNULL)
     if r.returncode != 0:
         err = r.stderr.decode(errors="replace")
-        if "not a git repository" in err:
+        # told by the folder, not by git's words alone: git prints them in the user's language
+        if "not a git repository" in err or not _in_git_worktree(root):
             raise LookupError(err)
         raise GitListError(err.strip())
     # os.fsdecode, not a decode that replaces bytes: a name that is not valid UTF-8 must still name
@@ -3631,8 +3882,13 @@ def _utf8(name: str) -> bool:
 
 
 def _readable(name: str) -> str:
-    """A file name as it can be shown: each byte that is not UTF-8 becomes the replacement mark."""
-    return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    """A file name as it can be shown: each byte that is not UTF-8 becomes the replacement mark, and so does a
+    lone UTF-16 surrogate in a Windows name (surrogateescape takes only the U+DC80-U+DCFF it made)."""
+    try:
+        return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    except UnicodeEncodeError:
+        return "".join("\ufffd" if "\ud800" <= c <= "\udfff" else c for c in name).encode(
+            "utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
 def _not_utf8_warning(names: list[str], where: str) -> str | None:
@@ -4141,7 +4397,9 @@ def update_map_lines(path: Path, src: Path | None = None) -> tuple[int, list[str
     replaced atomically: a crash leaves the old map or the new one, never half of each. Returns
     (entries changed, notes)."""
     entries = load_map(path)                                # first: it says so plainly when the file is not a map
-    text = path.read_bytes().decode("utf-8")
+    raw = path.read_bytes()
+    bom = codecs.BOM_UTF8 if raw.startswith(codecs.BOM_UTF8) else b""   # kept as it was, like every other byte
+    text = raw[len(bom):].decode("utf-8")
     spans = _entry_line_spans(text)
     bases = list({b.resolve(): b for b in [Path.cwd(), src or Path.cwd(), path.parent]}.values())
     indexes: dict[str, tuple] = {}
@@ -4185,7 +4443,7 @@ def update_map_lines(path: Path, src: Path | None = None) -> tuple[int, list[str
     fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(new.encode("utf-8"))
+            f.write(bom + new.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, target.stat().st_mode & 0o7777)
@@ -4509,6 +4767,31 @@ def reask_note(error: str) -> str:
     return f"not decided by agreement: asking again failed ({error[:120]}), so the label is the first answer's"
 
 
+def asked_alike(keys: list[str]) -> list[int]:
+    """For each item, the first item whose request is exactly the same (the same cache key): itself, or
+    an earlier one. Only that first item is asked, and the others share its answers - asked separately,
+    two such items would put their answers in one cached list, and one of them could then be decided by
+    agreement on its own answer counted twice. Used by check_claims and jevkit.screen."""
+    first: dict[str, int] = {}
+    return [first.setdefault(key, k) for k, key in enumerate(keys)]
+
+
+def shared_reply(reply: dict) -> dict:
+    """The reply of the item asked for this one (asked_alike): the same answer, which was paid for once."""
+    return {**reply, "usage": {"input_tokens": 0}}
+
+
+def share_answers(alike: list[int], ks: list[int], ask_each: Callable[[list[int]], list]) -> list:
+    """ask_each(the distinct items among `ks`), then each item of `ks` in order with what its first alike
+    item got back - as a shared_reply, or a list of them, for any other item."""
+    own = list(dict.fromkeys(alike[k] for k in ks))
+    got = dict(zip(own, ask_each(own)))
+
+    def share(v):
+        return [shared_reply(m) for m in v] if isinstance(v, list) else shared_reply(v)
+    return [got[k] if alike[k] == k else share(got[alike[k]]) for k in ks]
+
+
 def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[str], None] = print,
                  on_answer: Callable[[int, int], None] | None = None,
                  cancelled: Callable[[], bool] | None = None,
@@ -4521,9 +4804,10 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
 
     `on_answer(done, total)` is called as each answer arrives (from worker threads);
     once `cancelled()` returns true, no further claims are sent, and after a rejected key or
-    credits running out no new request starts (those already in flight finish).
+    credits running out no new request starts (those already in flight finish), and every answer that
+    came back counts, whatever its claim's place in the order.
 
-    Every claim is asked once. A claim the single-answer gate does NOT settle is then asked
+    Every claim is asked once (claims asked exactly alike share one request: asked_alike). A claim the single-answer gate does NOT settle is then asked
     `samples - 1` more times, and is decided only if every answer agrees and none is below
     `agree_floor`. Claims the first answer already settled are never asked again, so the extra
     cost falls only on the uncertain middle. `samples=1` restores the single-answer behaviour
@@ -4542,6 +4826,10 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
     questions = build_questions()
     store = load_cache() if use_cache else {}
     keys = [_cache_key(s, questions) for s in states]
+    alike = asked_alike(keys)                 # a claim asked exactly as an earlier one shares its answers
+    sharing = {k: 0 for k in alike}
+    for k in alike:
+        sharing[k] += 1
     cache_lock, replayed = threading.Lock(), [0]
     unreadable: set[str] = set()              # cache keys of answers that could not be read: never kept
 
@@ -4573,72 +4861,86 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
             return {"_error": "not sent: the run stopped early", "_halted": True}
         try:
             return answer_n(k, 0)
-        except Stop as e:                      # re-raised in order below
+        except Stop as e:                      # reported below, after every answer that came back
             stopped.set()
             return {"_stop": e}
         finally:
             if on_answer:
                 with done_lock:
-                    done[0] += 1
+                    done[0] += sharing[k]      # the claims that share this answer
                     n = done[0]
                 on_answer(n, len(claims))
 
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        answers = list(pool.map(one, range(len(claims))))
-    try:
-        for i, (c, state, ans) in enumerate(zip(claims, states, answers), 1):
-            if "_stop" in ans:
-                raise ans["_stop"]
-            if ans.get("_halted"):             # not sent after a Stop, which is reported below
-                continue
-            error = ans.get("_error") or (None if isinstance(ans.get("answers"), dict) else "the reply held no answers")
-            a = ans.get("answers")
-            if error is None:
-                try:
-                    action, conf, why = classify(a)
-                    row = {
-                        "label": {"act": "DRIFT", "review": "review", "unverifiable": "??", "clean": "ok"}[action],
-                        "action": action, "confidence": round(conf, 3), "why": why,
-                        "doc": c.doc, "line": c.line, "claim": c.text,
-                        "code_file": c.symbol.file, "code_line": c.symbol.line, "symbol": c.symbol.name,
-                        "code_refs": [f"{s.file}:{s.line} {s.name}" for s in c.symbols],
-                        "verdict": a["verdict"]["choice"],
-                        "probabilities": a["verdict"]["probabilities"],
-                        "severity": round(a["severity"]["score"], 2),
-                        "severity_legend": a["severity"]["legend"],
-                        "value_mismatch": a["value_mismatch"]["noul"],
-                        "code_sent": state["code"] + (f"\n\n[computed_values]\n{state['computed_values']}"
-                                                      if "computed_values" in state else ""),
-                        "request_id": ans.get("_request_id"),
-                        "upstream_ms": ans.get("_upstream_ms"),
-                        "samples": 1,
-                        "_k": i - 1, "_a": a,
-                    }
-                except (KeyError, TypeError, AttributeError, ValueError) as e:   # an answer missing a part
-                    error = f"the reply could not be read ({type(e).__name__}: {e})"
-                    unreadable.add(keys[i - 1])
-            tokens += _input_tokens(ans)
-            if error is not None:
-                vendor.append(f"{c.doc}:{c.line} was not checked - API error: {error[:120]}")
-                show(f"  [{i}/{len(claims)}] ERROR  {c.doc}:{c.line}  {error[:80]}")
-                continue
-            results.append(row)
-            flag = {"act": "DRIFT ", "review": "review", "unverifiable": "  ??  ", "clean": "  ok  "}[action]
-            show(f"  [{i}/{len(claims)}] {flag} {conf:.2f}  {c.doc}:{c.line}  {c.text[:64]}")
-    except VendorStop as e:
-        vendor.append(f"the run stopped early: {e}")
-    except Stop as e:
-        problems.append(f"the run stopped early: {e}")
 
+    def ask_each(ks: list[int]) -> list[dict]:
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            return list(pool.map(one, ks))
+    answers = share_answers(alike, list(range(len(claims))), ask_each)
+    # A stop (a rejected key, credits used up) sends nothing more, but every answer that came back
+    # before it counts, whatever its claim's place in the order: it is labelled and paid for.
+    stop: Stop | None = None
+    for i, (c, state, ans) in enumerate(zip(claims, states, answers), 1):
+        if "_stop" in ans:
+            stop = stop or ans["_stop"]
+            continue
+        if ans.get("_halted"):                 # not sent after a Stop, which is reported below
+            continue
+        error = ans.get("_error") or (None if isinstance(ans.get("answers"), dict) else "the reply held no answers")
+        a = ans.get("answers")
+        if error is None:
+            try:
+                action, conf, why = classify(a)
+                row = {
+                    "label": {"act": "DRIFT", "review": "review", "unverifiable": "??", "clean": "ok"}[action],
+                    "action": action, "confidence": round(conf, 3), "why": why,
+                    "doc": c.doc, "line": c.line, "claim": c.text,
+                    "code_file": c.symbol.file, "code_line": c.symbol.line, "symbol": c.symbol.name,
+                    "code_refs": [f"{s.file}:{s.line} {s.name}" for s in c.symbols],
+                    "verdict": a["verdict"]["choice"],
+                    "probabilities": a["verdict"]["probabilities"],
+                    "severity": round(a["severity"]["score"], 2),
+                    "severity_legend": a["severity"]["legend"],
+                    "value_mismatch": a["value_mismatch"]["noul"],
+                    "code_sent": state["code"] + (f"\n\n[computed_values]\n{state['computed_values']}"
+                                                  if "computed_values" in state else ""),
+                    "request_id": ans.get("_request_id"),
+                    "upstream_ms": ans.get("_upstream_ms"),
+                    "samples": 1,
+                    "_k": i - 1, "_a": a,
+                }
+            except (KeyError, TypeError, AttributeError, ValueError) as e:   # an answer missing a part
+                error = f"the reply could not be read ({type(e).__name__}: {e})"
+                unreadable.add(keys[i - 1])
+        tokens += _input_tokens(ans)
+        if error is not None:
+            vendor.append(f"{c.doc}:{c.line} was not checked - API error: {error[:120]}")
+            show(f"  [{i}/{len(claims)}] ERROR  {c.doc}:{c.line}  {error[:80]}")
+            continue
+        results.append(row)
+        flag = {"act": "DRIFT ", "review": "review", "unverifiable": "  ??  ", "clean": "  ok  "}[action]
+        show(f"  [{i}/{len(claims)}] {flag} {conf:.2f}  {c.doc}:{c.line}  {c.text[:64]}")
     # Ask again about what one answer did not settle. Measured on the graded corpus: this
     # takes the share of claims decided without a human from 4.3% to 18.3%, with no real
     # drift passed as `ok` and no accurate claim called drifted (tools/score_eval.py).
     undecided = [r for r in results if r["action"] not in ("act", "clean")]
+    if stop is not None:            # nothing is asked again: each claim it cut says so, and the line counts them
+        cut = undecided if samples > 1 else []
+        for r in cut:
+            r["note"] = reask_note("not asked: the run stopped early")
+        (vendor if isinstance(stop, VendorStop) else problems).append(
+            "the run stopped early" + (f" - {len(cut)} item(s) keep their first answer's label" if cut else "")
+            + f": {stop}")
     if samples > 1 and undecided and not problems and not vendor and not (cancelled and cancelled()):
         show(f"  asking again about {len(undecided)} claim(s) one answer did not settle "
              f"({samples - 1} more each)")
-        more, halted = ask_again(answer_n, [r["_k"] for r in undecided], samples, jobs, cancelled)
+        halted: list[Stop] = []
+
+        def again(ks: list[int]) -> list[list[dict]]:
+            more, stops = ask_again(answer_n, ks, samples, jobs, cancelled)
+            halted.extend(stops)
+            return more
+        more = share_answers(alike, [r["_k"] for r in undecided], again)
         vendor_lines, stop_lines = reask_failures(more, halted)
         vendor += vendor_lines
         problems += stop_lines
@@ -4770,12 +5072,21 @@ def _relevant_slice(source: str, claim: str, budget: int) -> tuple[str, bool]:
     Cutting at the first `budget` characters hands the model the top of a long function and
     calls it the whole thing - which is how 31 claims pointed at one big function came back
     "??" in this project's own audit. Keeping the lines that mention the claim's identifiers,
-    with a little context, puts the relevant part inside the budget instead.
+    with a little context, puts the relevant part inside the budget instead. A cut that would
+    split a PEM private key first hides every such key (_hide_keys), so no part of one is sent.
 
     Returns the text and whether anything was left out.
     """
+    out, cut, sent = _slice(source, claim, budget)
+    if cut and _split_key(source, sent):
+        out, cut, _ = _slice(_hide_keys(source), claim, budget)
+    return out, cut
+
+
+def _slice(source: str, claim: str, budget: int) -> tuple[str, bool, int | set[int]]:
+    """_relevant_slice's cut, and what it sends: the number of leading characters, or the numbers of the lines."""
     if len(source) <= budget:
-        return source, False
+        return source, False, len(source)
     lines = source.splitlines()
     wanted = {m.group(1) or m.group(2) for m in IDENT.finditer(claim)} - {None}
     keep: set[int] = set()
@@ -4783,18 +5094,18 @@ def _relevant_slice(source: str, claim: str, budget: int) -> tuple[str, bool]:
         if any(w in line for w in wanted):
             keep.update(range(max(0, i - 2), min(len(lines), i + 3)))
     if not keep:                                     # nothing to aim at: the head, honestly marked
-        return source[:budget].rstrip() + "\n# ... cut here: the rest of this code was not sent", True
-    out, last, used = [], -1, 0
+        return source[:budget].rstrip() + "\n# ... cut here: the rest of this code was not sent", True, budget
+    out, last, used, sent = [], -1, 0, set()
     for i in sorted(keep):
         gap = (last < 0 and i > 0) or (last >= 0 and i > last + 1)
         piece = ("# ... lines skipped ...\n" if gap else "") + lines[i]
         if used + len(piece) + 1 > budget:
             out.append("# ... lines skipped ...")
             break
-        out.append(piece); used += len(piece) + 1; last = i
+        out.append(piece); used += len(piece) + 1; last = i; sent.add(i)
     if 0 <= last < len(lines) - 1:
         out.append("# ... lines skipped ...")
-    return "\n".join(out), True
+    return "\n".join(out), True, sent
 
 
 def preflight(c: Claim) -> list[str]:
@@ -5332,6 +5643,9 @@ def run(args, inside_tool_folder: bool) -> int:
                    + " ".join(sys.argv[1:]))
     if not src.is_dir():
         raise Stop(f"no folder {args.src!r}. --src is the folder with your code; leave it out to use the current folder.")
+    if not _utf8(str(src)):           # every file in it would be named by a path a map or a request cannot hold
+        raise Stop(f"the --src path {_readable(str(src))} is not valid UTF-8, so the files in it cannot be named in a "
+                   f"map or a request. cd into the project and give --src as a path inside it (or leave it out).")
     if args.limit < 0:
         raise Stop("--limit must be 0 (all claims) or a positive number.")
     if args.draft_map and Path(args.draft_map).exists():
@@ -5453,9 +5767,12 @@ def run(args, inside_tool_folder: bool) -> int:
               + (f", up to ${estimate_cost(claims, args.samples):.4f} if every claim needs re-asking."
                  if getattr(args, "samples", 1) > 1 else "."))
         if args.out:
-            Path(args.out).write_text(json.dumps({"claims": plan, "problems": problems,
-                                                  "estimated_cost_usd": round(estimate_cost(claims), 5)},
-                                                 indent=1, ensure_ascii=False), encoding="utf-8")
+            # made whole before the file is opened: a plan that cannot be written leaves no empty file behind
+            body = json.dumps({"claims": plan, "problems": problems,
+                               "estimated_cost_usd": round(estimate_cost(claims), 5)},
+                              indent=1, ensure_ascii=False)
+            body.encode("utf-8")
+            Path(args.out).write_text(body, encoding="utf-8")
             print(f"plan -> {Path(args.out).resolve()}")
         if problems:
             print(f"INCOMPLETE: {len(problems)} problem(s) above - fix them before the real check. Exit code 2.")

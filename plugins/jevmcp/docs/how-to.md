@@ -666,8 +666,9 @@ The result is one reviewed file, `rule_map.json`, committed with the code. Every
 free; nothing is sent.
 
 1. **Draft the map.** It finds the project's rule files (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING`,
-   style and convention guides, `.github` and `.cursor/rules` instructions) and writes every rule
-   sentence to a new file. It never overwrites one.
+   style and convention guides, `.github` and `.cursor/rules` instructions, Claude Code's
+   `.claude/rules/` and Cline's `.clinerules`) and writes every rule sentence to a new file. It
+   never overwrites one.
 
    ```json
    {"name": "draft_rule_map", "arguments": {"project": "/absolute/path"}}

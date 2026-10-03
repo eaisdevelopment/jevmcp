@@ -93,22 +93,68 @@ RULE_NAME_WORDS = re.compile(r"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?
                              r"guideline|contribut|coding|standards(?![a-z])|code[-_ ]?review|developers?[-_ ]?guide)")
 DOC_SUFFIXES = {".md", ".mdx", ".rst", ".txt", ".adoc", ".mdc"}
 CURSOR_RULES = re.compile(r"(?:^|/)\.cursor/rules/[^/]+\.mdc?$")    # every file there is a rule file, whatever its name
+# So is every file the coding agent itself loads as rules: Claude Code's .claude/rules (subfolders too) and the
+# documents in Cline's .clinerules folder (not its workflows/ or hooks/), or .clinerules as one plain file.
+AGENT_RULE_DIRS = re.compile(r"(?:^|/)(?:\.claude/rules/(?:[^/]+/)*[^/]+\.md|\.clinerules/[^/]+)$")
+
+
+def _git_folder_on_gits_way_up(root: Path) -> Path | None:
+    """The first .git, from root up, that git looked at and is not an empty folder, or None. git looks no
+    higher than the deepest GIT_CEILING_DIRECTORIES entry above root, nor past a mount point unless
+    GIT_DISCOVERY_ACROSS_FILESYSTEM is set; an empty .git folder it passes by."""
+    start = Path(root).resolve()
+    ceilings = set()
+    for c in os.environ.get("GIT_CEILING_DIRECTORIES", "").split(os.pathsep):
+        if c and os.path.isabs(c):
+            ceilings |= {Path(os.path.normpath(c)), Path(c).resolve()}
+    ceiling = max((c for c in ceilings if c in start.parents), key=lambda c: len(c.parts), default=None)
+    across = os.environ.get("GIT_DISCOVERY_ACROSS_FILESYSTEM", "").lower() in {"1", "true", "yes", "on"}
+    try:
+        device = os.stat(start).st_dev
+    except OSError:
+        return None
+    for d in (start, *start.parents):
+        if d == ceiling:
+            return None
+        g = d / ".git"
+        try:
+            if d != start and not across and os.stat(d).st_dev != device:
+                return None
+            if g.is_dir():
+                if next(g.iterdir(), None) is not None:
+                    return g
+            elif g.exists():                                 # a dangling .git link: git walks past it
+                return g
+        except OSError:                                      # a .git it cannot open counts as one
+            return g
+    return None
 
 
 def tracked_files(root: Path) -> list[str]:
     """Files git would commit (tracked + untracked-not-ignored), relative. Ignored local files - build
     output, a developer's .env, credentials - are never candidates for an audit."""
     try:
+        # LC_ALL=C: git's messages in English, which the check below reads. A translated git ("kein
+        # Git-Repository") stopped every audit of a folder outside git.
         out = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"),
-                             capture_output=True, timeout=60, check=True,
+                             capture_output=True, timeout=60, check=True, env={**os.environ, "LC_ALL": "C"},
                              stdin=subprocess.DEVNULL).stdout.decode(errors="replace")
         return [p for p in out.split("\0") if p]
     except subprocess.CalledProcessError as e:
         # Only a folder that is not a git repository falls back to every file. In a repository git
         # could not read (dubious ownership, a broken index) that would take ignored files too.
         err = (e.stderr or b"").decode(errors="replace")
-        if "not a git repository" not in err:
+        # Read by its form: "not a git repository (or any of the parent directories | or any parent up to mount
+        # point ...)" is git finding no repository on its way up - past an empty .git folder, a ceiling, a
+        # mount. A worktree whose repository is gone gives "not a git repository: <its gitdir>", and stops.
+        if "not a git repository (or any" not in err:
             raise Stop(f"git could not list this project's files, so none was read: {err.strip()[:200]}") from None
+        # git also says so for a repository it cannot read any more (its HEAD or refs gone, as a sync tool that
+        # drops empty folders leaves it): a .git folder that holds something is the project's own.
+        if (gitdir := _git_folder_on_gits_way_up(root)) is not None:
+            raise Stop(f"git could not list this project's files, so none was read: {gitdir} holds a repository "
+                       f"git cannot read, whose ignored files (a local .env, build output, credentials) cannot "
+                       f"be told apart. git said: {err.strip()[:200]}") from None
     except subprocess.TimeoutExpired:
         raise Stop("git took more than 60 s to list this project's files, so none was read.") from None
     except FileNotFoundError:
@@ -117,7 +163,29 @@ def tracked_files(root: Path) -> list[str]:
         if dd._in_git_worktree(root):
             raise Stop(f"{dd.GIT_MISSING}, so which files git ignores (a local .env, build output, credentials) "
                        f"cannot be told apart, and no code was read. Install git.") from None
-    return [str(p.relative_to(root)) for p in dd._discover(root, tuple(dd.DEFAULT_IGNORE))]
+    # with / on every OS, as git lists them: draft_map, preview and check compare names with /
+    out = [p.relative_to(root).as_posix() for p in dd._discover(root, tuple(dd.DEFAULT_IGNORE))]
+    # .claude and .cursor are pruned as agent tooling (.claude/worktrees holds copies of the code), but the
+    # rules folders in them hold what coding agents load as rules. Never through a link, as os.walk follows none: a
+    # linked .claude listed files outside the project as rule files "in the project".
+    ign, real = set(dd.DEFAULT_IGNORE), root.resolve()
+
+    def inside(p: Path) -> bool:
+        # resolved, it is where it seems: no link, Windows junction or mount point between the root and it, on any
+        # Python (is_junction is 3.12+, and os.walk walks into a junction)
+        try:
+            return p.resolve() == real / p.relative_to(root)
+        except (OSError, RuntimeError, ValueError):         # a link loop
+            return False
+    for dirpath, dirnames, _ in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in ign)
+        for agent in (".claude", ".cursor"):
+            rules = Path(dirpath) / agent / "rules"
+            # os.path: a folder that cannot be searched is no rules folder, not an error (1.7.7 never looked in)
+            if os.path.isdir(rules) and inside(rules):
+                out += [p.relative_to(root).as_posix() for p in dd._discover(rules, ())
+                        if p.suffix in (".md", ".mdc") and inside(p)]
+    return out
 
 
 def find_rule_files(root: Path, files: list[str] | None = None) -> list[str]:
@@ -126,12 +194,13 @@ def find_rule_files(root: Path, files: list[str] | None = None) -> list[str]:
     for f in files or tracked_files(root):
         p = Path(f)
         if p.suffix.lower() not in DOC_SUFFIXES:
-            if not p.suffix and p.name.upper() in PLAIN_RULE_FILES:
+            if not p.suffix and (p.name.upper() in PLAIN_RULE_FILES or p.name == ".clinerules"):
                 out.append(f)
             continue
-        folder = RULE_DIRS.search(f)
-        if RULE_FILE_NAMES.search(p.name) or RULE_ONLY_DIRS.search(f) or CURSOR_RULES.search(f) \
-                or (folder and RULE_NAME_WORDS.search(f[folder.end():])):
+        g = p.as_posix()                # folders are matched with /: outside git, a Windows name holds \
+        folder = RULE_DIRS.search(g)
+        if RULE_FILE_NAMES.search(p.name) or RULE_ONLY_DIRS.search(g) or CURSOR_RULES.search(g) \
+                or AGENT_RULE_DIRS.search(g) or (folder and RULE_NAME_WORDS.search(g[folder.end():])):
             out.append(f)
     return sorted(set(out))
 
@@ -268,7 +337,8 @@ def guess_scope(text: str, source: str, languages: set[str]) -> list[str]:
             globs += g
     if not globs:
         globs = [f"**/*{s}" for s in sorted(languages)] or ["**/*"]
-    base = str(Path(source).parent) if AGENT_RULE_FILES.match(Path(source).name) else ""
+    # with / on every OS: a map is committed with the code, and services\api/**/*.py matches no file off Windows
+    base = Path(source).parent.as_posix() if AGENT_RULE_FILES.match(Path(source).name) else ""
     if base and base != ".":
         globs = [f"{base}/{g}" for g in globs]          # a nested AGENTS.md rules its own directory
     if TEST_WORDS.search(text) and not NOT_TEST_ONLY.search(text):
@@ -380,18 +450,46 @@ def _unbold(text: str) -> str:
 # RST's auto-numbered list item, "#. Every function must have a docstring.": read as the numbered item it is
 # ("1." is as wide, so no column moves). As a '#' line it was skipped, and its wrapped lines were not joined on.
 _RST_ITEM = re.compile(r"^([ \t]*)#\.(?=[ \t])", re.M)
+# A line of YAML front matter: a key, a list item or a line that goes on with one, a comment.
+_YAML_LINE = re.compile(r"^(?:[\w.-]+\s*:|\s|-(?:\s|$)|#|$)")
+_YAML_KEY = re.compile(r"[\w.-]+\s*:")
+# A key with nothing after its colon ("paths:"), or with a list begun on its line ("allowed-tools: - Read")
+_YAML_OPEN = re.compile(r"[\w.-]+\s*:\s*(?:#.*|-\s.*)?$")
+
+
+def _front_matter(lines: list[str]) -> bool:
+    """Do the lines between the --- marks read as YAML front matter: a key, and every other line a list item, a
+    line that goes on with one, a # comment or blank. A list item at the left margin goes under a key with
+    nothing after its colon ("paths:" / "- src/**"), or under another item; after "Note: you must sign the CLA.",
+    or under nothing ("---" / "- Never push to main."), it is Markdown's, and so is an indented line under nothing
+    that is not a comment."""
+    last = ""                                       # the last line at the left margin that is not a comment
+    for line in lines:
+        if not _YAML_LINE.match(line) or (line[:1] == "-" and not (_YAML_OPEN.match(last) or last[:1] == "-")) \
+                or (not last and line[:1] in (" ", "\t") and line.strip()[:1] not in ("", "#")):
+            return False
+        if line[:1] not in ("", "#", " ", "\t"):
+            last = line
+    return any(_YAML_KEY.match(line) for line in lines)
 
 
 def _rule_blocks(doc: Path) -> list[tuple[int, str]]:
-    """dd.prose_blocks, except for RST '#.' items and a file that starts with a byte-order mark. One saved as
-    UTF-16 - what `>` and Out-File write in Windows PowerShell 5.1 - is read as UTF-16: read as UTF-8, every
-    character of it comes with a NUL and no sentence can be read. A UTF-8 mark does not stick to the first
-    heading."""
+    """dd.prose_blocks, except for RST '#.' items, YAML front matter and a file that starts with a byte-order
+    mark. One saved as UTF-16 - what `>` and Out-File write in Windows PowerShell 5.1 - is read as UTF-16: read
+    as UTF-8, every character of it comes with a NUL and no sentence can be read. A UTF-8 mark does not stick to
+    the first heading. The front matter of a .claude/rules or .cursor/rules file is settings, not rules: its
+    "description: Rules that must always be followed ... paths:" was drafted as one."""
     if doc.suffix == ".py":
         return dd.prose_blocks(doc)
     data = doc.read_bytes()
     enc = "utf-16" if data[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
     text = data.decode(enc, errors="replace").replace("\r\n", "\n").replace("\r", "\n")     # as read_text reads it
+    lines = text.split("\n")
+    end = dd._front_matter_end(lines) if doc.suffix.lower() in (".md", ".mdc", ".mdx") else 0
+    # Front matter has a key: a document that opens with a --- rule above its rule list has none (its heading
+    # read as a comment, its items as a list, and every rule up to the next --- was dropped)
+    if end and _front_matter(lines[1:end]):
+        text = "\n" * (end + 1) + "\n".join(lines[end + 1:])      # blank, so every line keeps its number
     return dd._paragraphs(_RST_ITEM.sub(r"\g<1>1.", text))
 
 
@@ -486,8 +584,18 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
         if not path.is_file() or real in seen or not real.is_relative_to(top):
             continue
         seen.add(real)
+        try:
+            sentences = rule_sentences(path, keep_all=bool(docs))
+        except OSError as e:
+            if docs:                                         # a file the user named: they should hear why
+                raise
+            # a found one (a .claude/rules file left root-owned, say) is left out, as 1.7.7 never read it
+            if warnings is not None:
+                warnings.append(f"{dd._readable(src)} could not be read ({e.strerror}), so it was left out; fix "
+                                f"its permissions if it holds rules.")
+            continue
         read.add(src)
-        for line, sentence, own, whole in rule_sentences(path, keep_all=bool(docs)):
+        for line, sentence, own, whole in sentences:
             # An item's own words count without its heading, and the parts of a sentence cut at a bold full stop
             # stand or fall together: in "**Flag any X.** Y is only ..." the rule word is in the explanation.
             cue = _rule_cue(sentence) or _rule_cue(own) or _rule_cue(whole)
@@ -570,7 +678,8 @@ def _code_page_of(data: bytes) -> tuple[str, str] | None:
 
 def load_map(path: Path) -> list[dict]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: a map saved with a byte-order mark (Windows PowerShell 5.1, "UTF-8 with signature") loads too
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as e:
         raise Stop(f"{path} is not a readable rule map: {e}")
     except UnicodeDecodeError as e:
