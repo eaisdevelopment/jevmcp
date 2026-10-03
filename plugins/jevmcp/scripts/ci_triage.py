@@ -99,11 +99,16 @@ _TS = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
 # Each CI's default workspace folder. GitHub Actions (and Azure Pipelines' hosted agents, whose
 # vsts/work/1/s/ under /home and D:\a\1\s\ have the same shape), GitLab (/builds/ only at the start of a path:
 # unanchored it cut the middle out of other paths, such as Buildkite's), Jenkins, CircleCI, Travis,
-# GitLab's shell executor, Buildkite and TeamCity. The runner's own folders beside the workspace (_actions:
-# an action's own code, _temp, _tool: a Python or Node it installed) are not the project's.
+# GitLab's shell executor, Buildkite and TeamCity; a GitHub container job's /__w/ and a self-hosted runner's
+# (or Azure agent's) <install folder>/_work/. The runner's own folders beside the workspace (_actions: an
+# action's own code, _temp, _tool: a Python or Node it installed, Azure's _tasks) are not the project's.
 _RUNNER_ROOTS = [re.compile(p) for p in (
-    r"/(?:home|Users)/[^/\s]+/work/(?!_(?:actions|temp|tool)/)[^/\s]+/[^/\s]+/",
-    r"[A-Za-z]:\\a\\(?!_(?:actions|temp|tool)\\)[^\\\s]+\\[^\\\s]+\\",
+    r"/(?:home|Users)/[^/\s]+/work/(?!_(?:actions|temp|tool|tasks)/)[^/\s]+/[^/\s]+/",
+    r"[A-Za-z]:\\a\\(?!_(?:actions|temp|tool|tasks)\\)[^\\\s]+\\[^\\\s]+\\",
+    r"(?<![\w.~-])/__w/(?!_(?:actions|temp|tool|tasks)/)[^/\s]+/[^/\s]+/",
+    # Up to the first _work only (lazy), and never from inside a URL's '//' (a '/' before the start).
+    r"(?<![\w.~/-])(?:[A-Za-z]:)?(?:/[\w.~-]+)*?/_work/(?!_(?:actions|temp|tool|tasks)/)[^/\s]+/[^/\s]+/",
+    r"(?<![\w.~-])[A-Za-z]:\\(?:[\w.~-]+\\)*?_work\\(?!_(?:actions|temp|tool|tasks)\\)[^\\\s]+\\[^\\\s]+\\",
     r"/github/workspace/", r"(?<![\w.~-])/builds/[^/\s]+/[^/\s]+/", r"/var/lib/jenkins/workspace/[^/\s]+/",
     r"/(?:home|Users)/circleci/project/", r"^/workspace/",
     r"/(?:home|Users)/travis/build/[^/\s]+/[^/\s]+/", r"[A-Za-z]:\\Users\\travis\\build\\[^\\\s]+\\[^\\\s]+\\",
@@ -443,7 +448,9 @@ def _split_steps(job: str, raw_lines: list[str], failed_names: list[str], cut: b
     if not any(s.failed for s in steps):
         marked = [s for s in steps if any("##[error]" in ln for ln in s.lines)]
         if own_failure:      # an action's ##[error] with no exit code, then a later step stopped by the cancel
-            marked = [s for s in marked if any("##[error]" in ln and not _RUNNER_CANCEL.match(ln.strip())
+            # (the runner's cancel and time-limit lines are not a step's own error)
+            marked = [s for s in marked if any("##[error]" in ln and not (_RUNNER_CANCEL.match(ln.strip())
+                                                                          or _TIME_LIMIT.search(ln))
                                                for ln in s.lines)] or marked
         (marked[-1] if marked else ([s for s in steps if not s.post] or steps)[-1]).failed = True
     for s, display in zip([s for s in steps if s.failed], failed_names):
@@ -595,17 +602,21 @@ _MASK = [(re.compile(r"(?i)\b(?:ubuntu|macos|windows)(?:-latest|-\d+[.\d]*)?\b")
          (re.compile(r"\\"), "/"), (re.compile(r"\s+"), " ")]
 
 
+def _masked(text: str) -> str:
+    text = text.lower()
+    for pat, rep in _MASK:
+        text = pat.sub(rep, text)
+    return text
+
+
 def _signature(f: Failure) -> str:
     first = f.candidates[0] if f.candidates else (f.tail[-1] if f.tail else "")
-    sig = first.lower()
-    for pat, rep in _MASK:
-        sig = pat.sub(rep, sig)
-    return f"{f.kind}|{sig[:160]}"
+    return f"{f.kind}|{_masked(first)[:160]}"
 
 
 def failures_from_steps(steps: list[Step]) -> list[Failure]:
     """Every failed step, merged when several jobs failed the same way (a matrix): one cause x N jobs."""
-    merged: dict[str, Failure] = {}
+    merged: dict[tuple[str, str], Failure] = {}
     for s in steps:
         if not s.failed:
             continue
@@ -620,13 +631,16 @@ def failures_from_steps(steps: list[Step]) -> list[Failure]:
         f.cancelled_running = any(_RUNNER_CANCEL.match(ln.strip()) for ln in end)
         f.time_limit = next((m.group(1) for ln in end if (m := _TIME_LIMIT.search(ln))), None)
         f.signature = _signature(f)
-        if f.signature in merged:
-            m = merged[f.signature]
+        # The same first error at another step is another failure; a step name that differs only by a
+        # matrix value ('Set up Python 3.12') or an OS is masked the way the first error is.
+        key = (_masked(f.step), f.signature)
+        if key in merged:
+            m = merged[key]
             m.jobs.append(job)
             m.tests.extend(t for t in f.tests if t not in m.tests)
             m.files.extend(p for p in f.files if p not in m.files)
         else:
-            merged[f.signature] = f
+            merged[key] = f
     return list(merged.values())
 
 
@@ -1187,8 +1201,9 @@ def assemble(info: dict, log: str, diff: str | None, source: str = "github", not
     # time limit, a person, a newer run: named, never explained.
     cancelled = [j for j in jobs if j.get("conclusion") == "cancelled" and j["name"] not in failed_steps]
     ends: dict[str, list[int]] = {}
-    for j in bad:
-        ends.setdefault(_matrix_base(j["name"]), []).extend(t for t in [_ended(j)] if t is not None)
+    for j in jobs:          # every job that failed, triaged or not: a cancelled job given by its URL is no failure
+        if j.get("conclusion") in ("failure", "timed_out"):
+            ends.setdefault(_matrix_base(j["name"]), []).extend(t for t in [_ended(j)] if t is not None)
 
     def by_fail_fast(j: dict) -> bool:
         base, end = ends.get(_matrix_base(j["name"])), _ended(j)
@@ -1221,7 +1236,9 @@ def _limit_seconds(limit: str) -> int | None:
 
 
 def _matrix_base(job: str) -> str:
-    """A matrix job's name without its values: 'server-starts (windows-latest)' -> 'server-starts'."""
+    """A matrix job's name without its values: 'server-starts (windows-latest)' -> 'server-starts'. GitHub's
+    record of a job (and of its check run) names no matrix, so a matrix whose jobs set their own `name:`
+    ('ubuntu-latest @ Go 1.25') is not known as one: each of its jobs is a matrix of its own."""
     return job.split(" (", 1)[0]
 
 
@@ -1280,7 +1297,7 @@ def _job_facts(fails: list[Failure], jobs: list[dict], time_limits: dict) -> Non
 
 def safe_file(p: Path, root: Path | None, inbox: Path | None = None) -> Path:
     """A log or report the tool may read: a regular file owned by this user, not a symlink, inside
-    the project (not under .git, not a secret file) or inside the server's private inbox."""
+    the project (not under any .git folder, not a secret file) or inside the server's private inbox."""
     if p.is_symlink():
         raise Stop(f"{p.name} is a symbolic link; pass the file itself.")
     try:
@@ -1296,8 +1313,9 @@ def safe_file(p: Path, root: Path | None, inbox: Path | None = None) -> Path:
     if not any(real == b or b in real.parents for b in bases):
         raise Stop(f"{p} is outside the project" + (" and the jevmcp inbox" if inbox else "")
                    + "; save the log inside the project" + (f" or in {inbox}" if inbox else "") + ".")
-    rel = str(real.relative_to(root.resolve())) if root and root.resolve() in real.parents else real.name
-    if rel.startswith(".git/") or _is_secret_path(rel):
+    # '/' on every OS: the .git/ and secret-file patterns below are written with '/'
+    rel = real.relative_to(root.resolve()).as_posix() if root and root.resolve() in real.parents else real.name
+    if re.search(r"(?:^|/)\.git/", rel) or _is_secret_path(rel):     # any .git folder: a vendored repo's too
         raise Stop(f"{rel} is not a log a check may read.")
     return real
 

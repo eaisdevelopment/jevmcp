@@ -134,10 +134,16 @@ structured fields, so its text points only at files: when claims were left out, 
 the results file's private folder (`last-check-groups-<project>-<tag>.json`) that lists every
 place, most likely first, each with `code`, `claims`, `p_drifted_max` and `at` (the `doc:line` of
 each of its claims), and its `MAP HEALTH` line says that each `??` result in the results file
-carries its reasons and `try_pairing_with`.
-When TypeSafe's credits run out part way (HTTP 402), the reply is not an error: it keeps its
-structured fields, `complete` is false, and `not_checked` has a line saying that the run, or the
-re-asking pass, stopped early.
+carries its reasons and `try_pairing_with`. After a rejected key, the results file still holds
+every answer that came back, and the text says `checked N`.
+When TypeSafe's credits run out (HTTP 402) after any claim was answered, whatever that claim's
+place in the order, the reply is not an error: it keeps its structured fields, `complete` is false,
+and `not_checked` starts with a line saying that the run, or the re-asking pass, stopped early.
+The `MAP PROBLEMS` block lists the first 20 problem lines; past 20 it ends with
+`... and N more lines (all M lines are listed in <file>)`, a file in the results file's private
+folder (`last-check-map-problems-<project>-<tag>.json`) that is written whether or not the reply is
+an error. A broken entry usually gives two lines (what is wrong, and that it was NOT checked), so
+597 renamed entries give 1,194 lines.
 `review` below 0.3 is a count with up to ten locations. `??` is counted by reason — the first cause
 the map's own check names, else the model's — with up to five locations each. `ok` is a count,
 listing up to ten whose `value_mismatch` is 0.5 or more. Everything the reply leaves out is in the
@@ -157,8 +163,10 @@ it as a second text block of JSON for clients that do not read structured output
 | `cost_usd` | number | What this call cost, to 6 decimal places. |
 | `complete` | boolean | True only when nothing was skipped: no map problems, nothing stopped, nothing failed — asking a claim again included. |
 | `results_file` | string or null | Path to the full results, **including the exact code that was sent**. A `??` result in it also carries `reasons` when the map's own check names a cause, and `try_pairing_with` when the sentence's words suggest a better pairing, each worked out from that result's own claim. |
-| `map_problems` | array of strings | Entries that could not be used, so were **not** checked. |
-| `not_checked` | array of strings | What stopped or failed: one line per claim whose request failed (`<doc>:<line> was not checked - API error: ...`), one line per claim that could not be asked again, a reply that could not be read included (it keeps its first answer's label), or one line for a run or a re-asking pass that stopped early. The claims a stopped run never reached are not named; `claims_selected` minus `checked` counts them. The text lists the first 20 lines; this array has them all. When TypeSafe rejected the key or no claim was answered, the reply is an error and has no structured fields: its text lists the first 20 lines and, when there are more, names a file in the results file's private folder (`last-check-not-checked-<project>-<tag>.json`) that lists them all. |
+| `map_problems` | array of strings | Problems with entries that could not be used, so were **not** checked; one entry can give more than one line. Cut to fit, about 10,000 characters; past 20 lines the text names a file that lists every one. |
+| `map_problems_total` | integer | Every problem line, listed or not: lines, not entries. |
+| `not_checked` | array of strings | What stopped or failed. A line saying why the run stopped (the run, or the re-asking pass, stopped early, or the re-asking was cancelled), when it did, comes first; then one line per claim whose request failed (`<doc>:<line> was not checked - API error: ...`), and one line per claim that could not be asked again, a reply that could not be read included (it keeps its first answer's label). The claims that got no answer after a stop are not named one by one; `claims_selected` minus `checked` counts every claim without an answer. The text lists the first 20 lines, then `... and N more (...)`; this array has the same order and is cut to fit, about 10,000 characters. Past 20 lines, when the reply is an error or this array was cut, the text names a file in the results file's private folder (`last-check-not-checked-<project>-<tag>.json`) that lists every line; otherwise it points at `structuredContent.not_checked`. |
+| `not_checked_total` | integer | Every `not_checked` line, listed or not. |
 | `map_health` | object | What the run says about the **map**: how many claims came back `??`, which symbol they were paired with most often, and for each one (`entries_to_fix`, cut to fit; `entries_to_fix_total` counts them all) why it could not be settled and what the sentence's own words suggest pairing it with instead. A `??` is a map problem to fix, not a pass, and such claims often hold real problems. |
 | `flagged` | array of objects | The claims to read, in reading order: every DRIFT by severity, then `review` from P(drifted) 0.3 up group by group, then `??`, then the rest of `review`. Cut to fit, a group whole or not at all, except the first group, the most likely place, which lists as many of its claims as fit after the DRIFT rows (`review_groups[0].shown` says how many). |
 | `flagged_total` | integer | Every DRIFT, `review` and `??` claim, listed or not. |
@@ -178,7 +186,12 @@ decided by agreement only when every one of those answers came back, all agree, 
 one that cannot be read, credits used up — the claim keeps its first answer's label and why, gets
 a `note`, and the failure is listed in `not_checked`, so the check is not complete. After a
 cancellation, a rejected key or credits running out, no new request starts, for a first answer or
-for asking again; requests already in flight finish.
+for asking again; requests already in flight finish. Every answer that came back counts, whatever
+its claim's place in the order: it is labelled, counted in `checked` and `counts`, paid for in
+`cost_usd` and kept in the results file. Claims whose requests are exactly the same (the same
+sentence and the same code) are asked once and share the answers, each keeping its own result: the
+agreement never counts one answer twice, and the shared answers cost nothing more. The same holds
+for CI triage and code audit.
 
 **Every reply is read before it is used.** In all three tools that send, each question asked has
 an answer, a choice is one of the options offered, its confidence and probabilities are numbers,
@@ -225,7 +238,7 @@ Measured runs:
 |---|---|
 | `No TypeSafe API key is set for this server, so nothing was sent.` | Nothing was sent. Pass the stored-key command on to the user to run **in their own terminal**. Never ask for the key in chat, never put it in a command you run. See [install.md](install.md). |
 | `TypeSafe rejected the API key (HTTP 401/403)` | The key is wrong or revoked. Tell the user to check it at <https://console.typesafe.ai> and store it again. |
-| `TypeSafe's credits are used up (HTTP 402)` | Not a fault in the code. Report it, carry on without the check, and never report "no drift". It is an error only when no claim was answered; when the credits run out part way, the same words come in an `INCOMPLETE` line of a successful result. |
+| `TypeSafe's credits are used up (HTTP 402)` | Not a fault in the code. Report it, carry on without the check, and never report "no drift". It is an error only when no claim was answered; when any claim was answered, whatever its place in the order, the same words come first in the `INCOMPLETE` block of a successful result. |
 | `rate limit: at most 20 paid calls a minute` | Wait the stated seconds, or check more files in one call instead of looping. The budget is shared by the three tools that send. |
 | `rate limit: at most 120 tool calls a minute` | You are calling too fast. Wait the stated seconds. |
 | `this project (...) has no spec map yet (no *spec_map.json)` | If the user named the spec, run `draft_spec_map` with exactly what they named; otherwise run it without `docs` to list the candidate spec files and let the user choose. Then review every entry. Do not invent a map by hand. |
@@ -237,8 +250,8 @@ Measured runs:
 | `project must be an absolute path` / `project folder not found` / `is a home or root folder, not a project` | Pass the project's own folder, absolute. |
 | `check_spec_drift does not take X; it takes: ...` / `needs X` / `X must be a list of strings` | Fix the arguments and call again. |
 | `INCOMPLETE - not everything was checked:` (inside a successful result) | Part of the run did not happen. Say so; never present the run as a clean result. |
-| `<map> is not valid JSON: ... A trailing comma or a missing quote is the usual cause.` | Fix the JSON. |
-| `<map> is not UTF-8 text: it reads as this system's code page cp1252, as jevmcp 1.7.6 and earlier wrote maps on Windows` | Maps are read only as UTF-8. The message names the system's own code page when the map reads right in it, shows the first line that is not plain ASCII read that way, from 60 characters before its first such character to 60 after (the characters to check), and gives a one-line command that rewrites the map as UTF-8, `uv run --no-project --quiet python -c "..."` (uv is there wherever jevmcp runs, while a bare `python` is often missing on Windows or is the Microsoft Store's stub, and `--no-project` keeps uv from creating anything in the project), with the map's path as its argument, in forward slashes, so bash (Claude Code's shell on Windows) passes it unchanged: run it once, with the user's approval, then check that the entries read as written. A path holding a `"`, a `$`, a backtick, a line break or a doubled or final backslash, which a shell would change, gets the Python statement to run with uv instead of a command. When the map does not read right in the system's code page (a Cyrillic map on a Western system), or the system is UTF-8 (Linux CI), no code page is named and no command is given: cp1252 reads nearly any bytes, so a map must be converted on the system that wrote it, or with its own code page named. Never re-save the map from an editor that opened it as UTF-8: every character it could not read is lost. |
+| `<map> is not valid JSON: <what> at line L, column C.` | Fix the JSON. Where a trailing comma or a missing quote can be the cause (an unexpected character, a trailing comma, a string left open), the message adds `A trailing comma or a missing quote is the usual cause.`; it never does for an empty file. |
+| `<map> is not UTF-8 text: it reads as this system's code page cp1252, as jevmcp 1.7.6 and earlier wrote maps on Windows` | Maps are read only as UTF-8, with or without a byte-order mark. The message names the system's own code page when the map reads right in it, shows the first line that is not plain ASCII read that way, from 60 characters before its first such character to 60 after (the characters to check), and gives a one-line command that rewrites the map as UTF-8, `uv run --no-project --quiet python -c "..."` (uv is there wherever jevmcp runs, while a bare `python` is often missing on Windows or is the Microsoft Store's stub, and `--no-project` keeps uv from creating anything in the project), with the map's path as its argument, in forward slashes, so bash (Claude Code's shell on Windows) passes it unchanged: run it once, with the user's approval, then check that the entries read as written. A path holding a `"`, a `$`, a backtick, a line break or a doubled or final backslash, which a shell would change, gets the Python statement to run with uv instead of a command. When the map does not read right in the system's code page (a Cyrillic map on a Western system), or the system is UTF-8 (Linux CI), no code page is named and no command is given: cp1252 reads nearly any bytes, so a map must be converted on the system that wrote it, or with its own code page named. Never re-save the map from an editor that opened it as UTF-8: every character it could not read is lost. |
 | `<map> is not UTF-8 text (byte N cannot be read), so it is not a map.` | It is neither UTF-8 nor a map in any single-byte code page. Save it as UTF-8. |
 | `the server is shutting down` | The session is ending. Do not retry. |
 
@@ -556,7 +569,9 @@ the commit message, the pull request's title or its description to what is sent;
 prints one is sent like any other log line.
 
 **Log files from another CI.** A file is read only if it is a regular file you own, not a symbolic
-link, not under `.git`, not a secret file, and inside the project or the server's private inbox.
+link, not under a `.git` folder (a vendored repository's too), not a secret file, and inside the
+project or the server's private inbox, on Windows as on Linux and macOS; one under a `.git` folder,
+or a secret file, is refused with `<path> is not a log a check may read.`, the path written with `/`.
 Files in the server's own results folder, or in another session's `jevmcp-*` or `claude-*`
 temporary folder, are refused. At most the last 25 MB of a log is read. A log or JUnit report
 saved as UTF-16 with a byte-order mark (what `>` and `Out-File` write in Windows PowerShell 5.1) is
@@ -587,14 +602,24 @@ Sending them would be 1 request(s) to TypeSafe, about $0.00007. To send exactly 
 ```
 
 A failure is one failed step. Jobs that failed at the same step with the same first error (a
-matrix) are merged into one failure with several jobs, so they cost one request. On a GitHub run,
-a job cancelled next to a failed one is named in a note and not triaged: one of the failed job's
-matrix that ended between 5 seconds before and 5 minutes after a failed job of that matrix (or
-when an end time is not known) as cancelled after the failure (fail-fast); any other, one of the
-same matrix that ran on for longer included, with how long it ran and no cause, since GitHub also
-cancels a job that reaches its time limit (pass that job's own URL to triage it). In 73 real
-runs, the 100 jobs cancelled in the matrix of a failed job ended 0 to 105 seconds after it. The
-runner's own work after the steps
+matrix) are merged into one failure with several jobs, so they cost one request. The step's name is
+compared the way the first error is, with case, numbers, hex ids and OS names ignored, so a matrix
+whose step name carries its value (`Set up Python 3.12`, `Run tox -e py312`) is still one failure;
+steps whose names differ in words (`Install Valgrind` and `Install system dependencies`, or a
+matrix value that is a word) are separate failures, each sent as its own request. A merged failure
+shows the first job's step name, run time and cancel facts. On a GitHub run,
+a job cancelled next to a failed one is named in a note and not triaged: one of the matrix of a
+job that GitHub reports as failed or timed out, that ended between 5 seconds before and 5 minutes
+after such a job (or when an end time is not known), as cancelled after the failure (fail-fast);
+any other, one of the same matrix that ran on for longer included, with how long it ran and no
+cause, since GitHub also cancels a job that reaches its time limit (pass that job's own URL to
+triage it). Whether that failed job is the one being triaged does not matter: a cancelled job
+triaged by its own URL is never the failure its siblings are measured from. Two jobs count as one
+matrix only when both have GitHub's default job names, `name (values)`, with the same name before
+` (`, because GitHub's record of a job names no matrix; so the jobs of a matrix that sets its own
+`name:` (`ubuntu-latest @ Go 1.25`) are not seen as one, and their cancelled jobs get the note with
+how long they ran. In 73 real runs, the 100 cancelled jobs named as the failed job's matrix ended 0 to
+105 seconds after it. The runner's own work after the steps
 (`Post job cleanup.`, `Cleaning up orphan processes`) is not part of the failed step's output. A
 log with no step markers, as other CIs write them, is read as one step named `(whole log)`, and
 the first fact says so.
@@ -619,10 +644,12 @@ The facts also say, where the log or GitHub's record of the jobs shows it:
 - none of these when GitHub reports the job as cancelled but its record of the failed step says
   the step failed: the step ended on its own, and a later one (`if: always()`, a debug session)
   ran on until the cancel or the time limit. The failed step keeps its own lines and run time, an
-  action that printed only an `##[error]` line and no exit code too. The facts then name the
+  action that printed only an `##[error]` line and no exit code too, also when the log then prints
+  the runner's cancel or time-limit line. The facts then name the
   failed step and its exit code, if it printed one, and say `GitHub reports the job as cancelled
   later; its record says this step had already failed.`, with no time limit and no hang;
-- the other jobs of the same matrix where the same step passed, with how long it took there;
+- the other jobs of the same matrix (by GitHub's default job names, as above) where the same step
+  passed, with how long it took there;
 - that an error line offered to the model contains a name or a message that the change adds or
   removes, and in which file.
 
@@ -640,10 +667,17 @@ words.
 
 A GitHub log's paths are made relative by removing the runner's workspace folder; a log or JUnit
 report from a file has the project folder removed from the start of its paths, so the facts can
-name the project's files. The runner's own folders beside the workspace (`_actions`, which holds
-an action's own code, `_temp` and `_tool`, which hold a Python or Node it installed) are not the
-project's: their paths are kept whole, a home folder in them shown as `<user>`, and they are
-neither offered as the project's traceback frame nor named among the files the errors name.
+name the project's files. The workspace of a GitHub container job (`/__w/<a>/<b>/`) and of a
+self-hosted runner or Azure Pipelines agent (`<install folder>/_work/<a>/<b>/` on Linux and macOS,
+`X:\...\_work\<a>\<b>\` or `X:/.../_work/<a>/<b>/` on Windows) is removed too. Such a path is cut
+below its first `_work/<a>/<b>/`, so a project's own `_work` folder further down keeps its path;
+the install folder must be written in plain path characters (letters, digits, `.`, `_`, `~`, `-`,
+no spaces); a relative path or a URL with `_work/` in it is not touched. The runner's own folders
+beside the workspace (`_actions`, which holds an action's own code, `_temp` and `_tool`, which
+hold a Python or Node it installed, and Azure Pipelines' `_tasks`, which holds a task's own
+script) are not the project's, under each of these workspaces: their paths are kept whole, a home
+folder in them shown as `<user>`, and they are neither offered as the project's traceback frame
+nor named among the files the errors name.
 
 **Structured fields:**
 
@@ -723,7 +757,7 @@ The fields:
 | Field | What it holds |
 |---|---|
 | `a_facts` | Sentences computed in code: the failed step, its kind, its jobs and exit code, whether GitHub reports the job cancelled (or cancelled only after the step had failed) or stopped at its time limit, how long the step ran and how long it was silent, the other jobs of the run where the same step passed, the failing tests named, the files the errors name, the files the change edits and where the two meet, which error lines contain a name or message the change adds or removes, whether the change edits CI configuration, dependency manifests or tests, whether a later attempt passed, and how this failure's own job fared in the last run on the default branch before this one (for several jobs, failed when any of them failed there), with how long before. A fact that is not known is stated as not known. |
-| `b_error_lines` | Up to 30 lines of the failed step's output that look like errors, labelled L1..Ln, each at most 240 characters: error markers, an exception named on a line of its own (`KeyboardInterrupt`), `Caused by:` lines, and for each Python traceback the innermost frame in the project's own code with its source line (`tests/smoke.py:58 in call: line = p.stdout.readline()`), never one in the runner's `_actions`, `_temp` or `_tool` folder. |
+| `b_error_lines` | Up to 30 lines of the failed step's output that look like errors, labelled L1..Ln, each at most 240 characters: error markers, an exception named on a line of its own (`KeyboardInterrupt`), `Caused by:` lines, and for each Python traceback the innermost frame in the project's own code with its source line (`tests/smoke.py:58 in call: line = p.stdout.readline()`), never one in the runner's `_actions`, `_temp`, `_tool` or `_tasks` folder. |
 | `c_output_end` | The end of the failed step's output, at most 5,000 characters, without download and progress noise and without the runner's post-job lines. |
 | `d_change` | The change under test, at most 5,000 characters: hunks of the files the errors name first, then the rest. `(the change under test edits no file)` when it is known and empty; `(the change under test is not known)` when it could not be read. |
 
@@ -764,7 +798,8 @@ block.
 | `counts` | object | `CHANGE`, `review`, `??` — a count each. |
 | `cost_usd` | number | What this call cost. |
 | `complete` | boolean | True only when every failure was checked and every failed job's log was read. |
-| `not_checked` | array of strings | Failures that were not checked, and why. |
+| `not_checked` | array of strings | Failures that were not checked, and why: why the run stopped first, then one line per failure; cut to fit, about 10,000 characters. |
+| `not_checked_total` | integer | Every `not_checked` line, listed or not. |
 | `jobs_not_checked` | array of strings | Failed jobs whose logs were not read: nothing was sent for them and they are not triaged. Not a pass. |
 | `results_file` | string | Every result with the exact state sent, in the server's private folder. |
 | `results` | array of objects | CHANGE, then review by P(caused by the change), then `??`, then anything not checked, cut to about 30,000 characters. |
@@ -772,8 +807,22 @@ block.
 
 When TypeSafe rejected the key, or no failure got an answer, the reply is an error and has no
 structured fields: its text lists the first 15 results and names only the results file for the
-rest. When the credits run out part way, the reply is not an error: it has `complete` false and a
-line in `not_checked` saying that the run stopped early.
+other results. When the credits run out after any failure was answered, whatever its place in the
+order, the reply is not an error: it has `complete` false, `not_checked` starts with a line saying
+that the run stopped early, and each failure that got no answer is a `not checked` result
+(`not checked: the run stopped early`). In both, every answer that came back is in the results
+file and counted in the cost.
+
+The `INCOMPLETE` block, in all three tools that send, starts with why the run stopped (the run
+stopped early, the re-asking stopped early or was cancelled), so the reason, such as credits to
+top up, is never cut; then it lists the first 20 lines and `... and N more (...)`. Past 20 lines,
+when the reply is an error or `structuredContent.not_checked` was cut, it names a file in the
+results file's private folder that lists every line (`last-ci-triage-not-checked-<project>-<tag>.json`
+here, `last-code-audit-not-checked-<project>-<tag>.json` for code audit,
+`last-check-not-checked-<project>-<tag>.json` for spec drift); otherwise it points at
+`structuredContent.not_checked`. In CI triage the logs not read and the jobs not checked are then
+all listed. So the reply stays bounded in an outage, full or partial: with 1 of 3,486 requests
+answered, a code audit's reply was about 46,000 characters, measured offline.
 
 Each result has the preview's `step`, `kind`, `jobs`, `job_count`, `exit_code`, `failing_tests`
 (`failing_test_count` for the full number), `files_in_errors` and `facts`. Its other fields:
@@ -889,9 +938,14 @@ Without `docs`, it looks for these files, among those git tracks or would commit
   files in `.cursor/rules`), every document in a contributing or style-guide folder, and a
   document under `.github`, `docs` or a similar folder whose own name, or the name of a folder
   below that one, has a rule word — never a word elsewhere in the path
-  (`docs/claude-desktop-setup.md` is not a rule file).
+  (`docs/claude-desktop-setup.md` is not a rule file);
+- the rule files Claude Code and Cline load: every `.md` file under a `.claude/rules/` folder, its
+  subfolders included, at the project's root or in any folder of it; every document directly in a
+  `.clinerules/` folder (not in its subfolders, such as `workflows/`); and a `.clinerules` file.
 
-These are guesses from names: a file that holds rules and is not found can be named in `docs`.
+These are guesses from names: a file that holds rules and is not found can be named in `docs`. The
+folders are matched with `/` on every system, so a file list with `\`, as Windows gives outside
+git, finds them too.
 
 A sentence becomes an entry when it reads as a rule: it has a rule word (must, should, avoid,
 prefer, and some Chinese, Japanese and Korean ones such as 必须, 必ず or 해야), starts with an
@@ -909,7 +963,20 @@ while one that opens a sentence (`**kwargs must not be logged`) loses its `**`, 
 mask of stars stays too: no mark opens right before a full-width comma or stop
 (`密码显示为***，令牌显示为***`), nor right after a Chinese, Japanese or Korean letter when an ASCII
 comma or stop follows, nor right before ASCII punctuation that ends the word (`sk-***,`, `"***"`,
-`(***)`), and a run of four stars or more opens none. Which marks to take out is a guess too, and
+`(***)`), and a run of four stars or more opens none. A splat, a power (`x**2`) or a mask (`sk-***`,
+`显示为***。`) that ends a sentence keeps its stars, also when the next sentence of the paragraph
+holds a bold word, a power or a mask; a bold span that a sentence cut splits
+(`**CRITICAL: Disk at >95%**` is cut at its colon) comes off whole, whatever mark ends it, for
+every such span of the paragraph. A pair of `**` or `***` around nothing but separators (dashes,
+dots, `@`, colons, slashes, underscores) is a mask and stays as written wherever it stands, inside
+a bold sentence too (`**Mask phones as ***-***-1234** in logs.` reads
+`Mask phones as ***-***-1234 in logs.`): `***-***-1234`, `192.168.***.***`, `***@***.com`,
+`10.0.**.**`, and so also `**...**`, `**@**` and `**-**`, while `***must not***` and `**??**`
+still come off. Two shapes are read the other way: a splat followed in the next sentence by a
+Chinese, Japanese or Korean bold word glued to letters (`accept **kwargs. 所有输入**必须**校验。`)
+loses its stars, as in 1.7.6, and one followed in the next sentence by a `**` after a sign such as
+`%` and before a space (`accept **kwargs. Discount is 50%** off.`) is read as a bold span cut by
+the sentence end, so both lose their stars. Which marks to take out is a guess too, and
 some shapes still leave a mark behind (an item that opens with an italic word, `*Don't* restrict`,
 reads `Don't* restrict`), while a mask written between two letters with no space
 (`用户名***和密码***`) is read as bold-italic and taken out, and so is a lone two-star mask right
@@ -917,6 +984,9 @@ after a letter or a digit (`显示为**，`, `12**,`), read as the closing mark 
 that ends a rule's text with no stop after it (`print as sk-***`) loses its stars, and a `-`
 before them, with the list marks, as in 1.7.6: review the text. A rule file saved as UTF-16 (as
 `>` and `Out-File` write it in Windows PowerShell 5.1) or with a UTF-8 byte-order mark is read.
+A rule file's YAML front matter (a first `---` line, closed by `---` or `...`, with `key: value`
+lines between, in a `.md`, `.mdc` or `.mdx` file) is not read for rules, so its `description:` is
+never drafted as one; its `paths:` (or Cursor's `globs:`) is not used as the scope either.
 
 Each entry is flagged where its wording needs care, with `negation`, `exception`, `compound`,
 `conditional` ("When X, ...", "a function that needs X ..."), `process`, `linter`, `comments`,
@@ -934,8 +1004,9 @@ that says "in the conversation" or "in this conversation" starts excluded unless
 comes before those words in their clause, even when they are part of its own subject ("Every
 message in the conversation must be persisted before it is rendered."). A rule about comments or
 docstrings gets `keep_comments: true`. The scope is guessed from the rule's words (a language
-named in it, else every code file type in the project); a rule in a nested `AGENTS.md` or
-`CLAUDE.md` is limited to its own folder; and a rule about test code gets `tests-only` ("Don't
+named in it, else every code file type in the project), never from a rule file's front matter; a
+rule in a nested `AGENTS.md` or `CLAUDE.md` is limited to its own folder, written with `/` on every
+system; and a rule about test code gets `tests-only` ("Don't
 add tests that only check a mock"), while one that asks for tests of other code ("Every bug fix
 adds a regression test") does not, nor does one with words about production code, CI or build
 logs, jobs, runs or failures, or test logs, output, results, runs, reports, jobs or steps, even
@@ -1104,7 +1175,9 @@ first: the skill says how.
 | `project` | string | see above | Absolute path of the project. |
 
 **Which code is audited.** Only files git tracks or would commit — in a folder that is not a git
-repository, every code file outside the skipped folders — and only code files (Python,
+repository, every code file outside the skipped folders, whatever language git prints its
+messages in; a repository git cannot read (dubious ownership, a broken index, a worktree whose
+repository folder is gone) stops the audit with git's message — and only code files (Python,
 JavaScript, TypeScript, Go, Rust, Java, Kotlin, Scala, Ruby, PHP, C#, C and C++, Swift, shell, SQL
 and similar); symbolic links, secret files and files over 1.5 MB are skipped. A rule
 covers the files its `scope` matches. A file is split into units at its definitions, at the top
@@ -1153,14 +1226,17 @@ BREAKS - investigate each (is the code or the rule wrong?):
 | `summary`, `project`, `map`, `scope` | The first line of the report, the project, the map and the scope. |
 | `rules_reviewed`, `units`, `files`, `requests`, `checked` | What was audited, and how many requests got an answer. |
 | `counts` | `BREAKS`, `review`, `??`, `ok`, `n/a` — a count each. |
-| `cost_usd`, `complete`, `not_checked` | What it cost, whether every request was answered, and what was not. |
+| `cost_usd`, `complete`, `not_checked`, `not_checked_total` | What it cost, whether every request was answered, what was not (why the run stopped first; cut to fit, about 10,000 characters), and how many `not_checked` lines there are in all. |
 | `results_file` | Every result with the exact code sent, in the server's private folder. |
 | `flagged`, `flagged_total` | BREAKS, then review from P(breaks) 0.3 up, then `??` and anything not checked, then the rest of review, cut to about 30,000 characters; and how many there are in all. |
 
 When TypeSafe rejected the key, or no request got an answer, the reply is an error and has no
 structured fields: its text lists the first 20 flagged items and names only the results file for
-the rest. When the credits run out part way, the reply is not an error: it has `complete` false
-and a line in `not_checked` saying that the run, or the re-asking pass, stopped early.
+the other items. When the credits run out after any request was answered, whatever its place in
+the order, the reply is not an error: it has `complete` false, `not_checked` starts with a line
+saying that the run, or the re-asking pass, stopped early, and each request that got no answer is
+a `not checked` item (`not checked: the run stopped early`). The `INCOMPLETE` block is cut as in
+`triage_ci_failure`.
 
 Each flagged item has `file`, `lines`, `rule`, `rule_source` (the rule file and line), `label`,
 `confidence`, `why`, `p_breaks`, `verdict`, `probabilities`, `samples` and `request_id`. An item
@@ -1350,6 +1426,13 @@ are sent with it.
 Named symbols are found by name in Python, Java, JavaScript and TypeScript; every other language
 is paired by line range.
 
+A code, config or OpenAPI file whose name (its path inside the folder checked) is not valid UTF-8
+cannot be named in a map or a request, so it is left out of the index, with a note that names it
+(the bytes that are not UTF-8 shown as `�`; the command line prints the note, the MCP tools do
+not), and a check, a dry run or a draft goes on without it. On the command line, a `--src` path
+that is itself not valid UTF-8 stops a check, a dry run or a draft at once (exit 2): cd into the
+project and give `--src` as a path inside it, or leave it out.
+
 ### What `--strict` and `validate_spec_map` enforce
 
 Both run the same checks. These make the map "not ready":
@@ -1386,7 +1469,9 @@ apply to it.
 
 **Who writes it.** `draft_rule_map` (or `code_audit.py --draft-map`) writes it. The user never
 writes it by hand. Every entry must then be reviewed by you and the user; only reviewed entries are
-ever sent. The file is written and read as UTF-8 on every system.
+ever sent. The file is written and read as UTF-8 on every system; one saved with a UTF-8
+byte-order mark (Windows PowerShell 5.1's `Set-Content -Encoding UTF8`, Visual Studio's "UTF-8
+with signature") is read too, and the drafter writes none.
 
 ### Rule map file shape
 
@@ -1539,8 +1624,9 @@ checked.
 Every command line prints UTF-8, to a terminal, a pipe or a file, whatever the system's code page,
 and never crashes on the text it prints. A console or viewer set to another code page may show
 non-ASCII text garbled; only a character that cannot be written at all (part of a file name that is
-not valid UTF-8) becomes `?`. Maps, results and plans are read and written as UTF-8; a map saved
-in the system's code page (as 1.7.6 and earlier wrote rule maps on Windows) is refused with the
+not valid UTF-8) becomes `?`. Maps, results and plans are read and written as UTF-8; a spec or
+rule map saved as UTF-8 with a byte-order mark is read too, and `--update-lines` keeps the mark
+and changes only the digits; a map saved in the system's code page (as 1.7.6 and earlier wrote rule maps on Windows) is refused with the
 one-line command that converts it; a rule map that does not read as text in this system's code
 page is refused with no command (see `validate_rule_map`'s errors). A key file, and the `.env`
 `spec_drift.py` reads, is read when saved as UTF-8
@@ -1593,7 +1679,7 @@ uv run --script <plugin>/scripts/ci_triage.py --log build.log --junit report.xml
 | `--run URL` | A GitHub Actions run, job or pull-request URL, read with your own `gh` login. |
 | `--repo OWNER/NAME` | With a bare run id instead of a URL. |
 | `--any-repo` | Read a run of a repository that is not a GitHub remote of `--src`. The MCP tools have no such option. |
-| `--log FILE [FILE ...]` | Log files from any CI. Each must be inside `--src`: copy the log into the project first. A file outside `--src` is refused (exit 2), and so are symbolic links, files under `.git`, secret files such as `.env`, and other users' files. A relative path is read from the current folder, not from `--src`. |
+| `--log FILE [FILE ...]` | Log files from any CI. Each must be inside `--src`: copy the log into the project first. A file outside `--src` is refused (exit 2), and so are symbolic links, files under a `.git` folder, secret files such as `.env`, and other users' files. A relative path is read from the current folder, not from `--src`. |
 | `--junit FILE [FILE ...]` | JUnit XML reports, under the same rules as `--log`. |
 | `--base REF` | With `--log`/`--junit`: the git ref the change under test is compared against. |
 | `--src DIR` | The project checkout. Default: the current folder. |

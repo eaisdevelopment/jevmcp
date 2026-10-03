@@ -71,8 +71,10 @@ from exit 3**, nor from a result that says `INCOMPLETE`.
 ## A. Setting up a project that has no rule map
 
 1. **Draft it (free).** `draft_rule_map` finds the project's rule files (CLAUDE.md, AGENTS.md,
-   CONTRIBUTING, style and convention guides, `.github` and `.cursor/rules` instructions), or takes
-   the files you name in `docs`. It writes every sentence that states a rule, and never overwrites
+   CONTRIBUTING, style and convention guides, `.github` and `.cursor/rules` instructions, Claude
+   Code's `.claude/rules/` and Cline's `.clinerules`), or takes the files you name in `docs`. A rule
+   file's YAML front matter is not drafted, and its `paths:` or `globs:` is not used as the scope:
+   set `scope` yourself in review. It writes every sentence that states a rule, and never overwrites
    a file; from a file you name it writes every sentence, flagging those with no rule wording
    `descriptive`. Sentences about process (commits, pull requests, changelogs), about what a linter
    checks, or addressed to the assistant (ask the user, get their consent: `conduct`) start

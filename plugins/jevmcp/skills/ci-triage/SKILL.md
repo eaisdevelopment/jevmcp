@@ -131,8 +131,9 @@ it. `complete: false` means not every failure was checked, or a failed job's log
    `is not recognized as ...` in cmd or PowerShell) or on
    `executable file not found`; a bare `Not Found` (an HTTP 404, a Docker image) is not, and gets
    the re-run advice.
-4. **Different causes behind one first error.** Jobs are merged by their first error line. Check
-   the job list of a merged failure when the jobs differ (another OS, another version).
+4. **Different causes behind one first error.** Jobs are merged by their failed step and first
+   error line (numbers and OS names in either do not count). Check the job list of a merged
+   failure when the jobs differ (another OS, another version).
 5. **Summary jobs.** A job that only reports that other jobs failed (an "all green" check, a
    "Conclusion" job) comes back as its own failure with `??` or an unknown lean. The cause is in the
    other failures.

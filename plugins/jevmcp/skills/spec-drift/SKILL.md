@@ -185,11 +185,15 @@ groups and claims the reply does not show are in the results file; when `review_
 cut, the text says "lists the first K of N places", and `to_read.groups` still counts them all. When
 TypeSafe rejected the key, or no claim was answered, the reply is an error with no structured fields:
 when it leaves places out, its text names a file that lists every place instead. Credits running out
-part way give a normal reply that is not complete. One reply beats twenty minutes of silence.
+after any claim was answered give a normal reply that is not complete; its `INCOMPLETE` block says
+first why the run stopped. Every answer that came back counts. One reply beats twenty minutes of
+silence.
 
 ## Keeping the map honest
 
-- **Code renamed or moved:** the tool names the broken entry and suggests the closest name.
+- **Code renamed or moved:** the tool names the broken entry and suggests the closest name. Past
+  20 problem lines (a broken entry usually gives two), `check_spec_drift`'s reply names a file that
+  lists them all.
 - **"the spec changed since this entry was reviewed":** re-read the entry against the current
   spec, update `text` if the requirement changed, and paste the current paragraph into
   `spec_text` (markdown and line breaks are fine).

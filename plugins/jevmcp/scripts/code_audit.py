@@ -93,21 +93,27 @@ RULE_NAME_WORDS = re.compile(r"(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?
                              r"guideline|contribut|coding|standards(?![a-z])|code[-_ ]?review|developers?[-_ ]?guide)")
 DOC_SUFFIXES = {".md", ".mdx", ".rst", ".txt", ".adoc", ".mdc"}
 CURSOR_RULES = re.compile(r"(?:^|/)\.cursor/rules/[^/]+\.mdc?$")    # every file there is a rule file, whatever its name
+# So is every file the coding agent itself loads as rules: Claude Code's .claude/rules (subfolders too) and the
+# documents in Cline's .clinerules folder (not its workflows/ or hooks/), or .clinerules as one plain file.
+AGENT_RULE_DIRS = re.compile(r"(?:^|/)(?:\.claude/rules/(?:[^/]+/)*[^/]+\.md|\.clinerules/[^/]+)$")
 
 
 def tracked_files(root: Path) -> list[str]:
     """Files git would commit (tracked + untracked-not-ignored), relative. Ignored local files - build
     output, a developer's .env, credentials - are never candidates for an audit."""
     try:
+        # LC_ALL=C: git's messages in English, which the check below reads. A translated git ("kein
+        # Git-Repository") stopped every audit of a folder outside git.
         out = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"),
-                             capture_output=True, timeout=60, check=True,
+                             capture_output=True, timeout=60, check=True, env={**os.environ, "LC_ALL": "C"},
                              stdin=subprocess.DEVNULL).stdout.decode(errors="replace")
         return [p for p in out.split("\0") if p]
     except subprocess.CalledProcessError as e:
         # Only a folder that is not a git repository falls back to every file. In a repository git
         # could not read (dubious ownership, a broken index) that would take ignored files too.
         err = (e.stderr or b"").decode(errors="replace")
-        if "not a git repository" not in err:
+        # told by the folder too: in a worktree whose repository is gone git says "not a git repository" as well
+        if "not a git repository" not in err or dd._in_git_worktree(root):
             raise Stop(f"git could not list this project's files, so none was read: {err.strip()[:200]}") from None
     except subprocess.TimeoutExpired:
         raise Stop("git took more than 60 s to list this project's files, so none was read.") from None
@@ -126,12 +132,13 @@ def find_rule_files(root: Path, files: list[str] | None = None) -> list[str]:
     for f in files or tracked_files(root):
         p = Path(f)
         if p.suffix.lower() not in DOC_SUFFIXES:
-            if not p.suffix and p.name.upper() in PLAIN_RULE_FILES:
+            if not p.suffix and (p.name.upper() in PLAIN_RULE_FILES or p.name == ".clinerules"):
                 out.append(f)
             continue
-        folder = RULE_DIRS.search(f)
-        if RULE_FILE_NAMES.search(p.name) or RULE_ONLY_DIRS.search(f) or CURSOR_RULES.search(f) \
-                or (folder and RULE_NAME_WORDS.search(f[folder.end():])):
+        g = p.as_posix()                # folders are matched with /: outside git, a Windows name holds \
+        folder = RULE_DIRS.search(g)
+        if RULE_FILE_NAMES.search(p.name) or RULE_ONLY_DIRS.search(g) or CURSOR_RULES.search(g) \
+                or AGENT_RULE_DIRS.search(g) or (folder and RULE_NAME_WORDS.search(g[folder.end():])):
             out.append(f)
     return sorted(set(out))
 
@@ -268,7 +275,8 @@ def guess_scope(text: str, source: str, languages: set[str]) -> list[str]:
             globs += g
     if not globs:
         globs = [f"**/*{s}" for s in sorted(languages)] or ["**/*"]
-    base = str(Path(source).parent) if AGENT_RULE_FILES.match(Path(source).name) else ""
+    # with / on every OS: a map is committed with the code, and services\api/**/*.py matches no file off Windows
+    base = Path(source).parent.as_posix() if AGENT_RULE_FILES.match(Path(source).name) else ""
     if base and base != ".":
         globs = [f"{base}/{g}" for g in globs]          # a nested AGENTS.md rules its own directory
     if TEST_WORDS.search(text) and not NOT_TEST_ONLY.search(text):
@@ -294,6 +302,9 @@ _MASK_END = "\uff0c\u3002\u3001\uff1b\uff1a\uff01\uff1f"                        
 # "\"***\" ... \"***\"" were taken for a bold-italic pair and lost their stars - the rule asked to print nothing.
 # "***.env***", "**??**" and "**\"quoted\"**" go on with a word and still come off.
 _MASK_PUNCT = r"(?![,.;:!?)\]}'\"]+(?:\s|$))"
+# Nor does a ** close where it starts a mask that ends the word: "Accept **kwargs ... 显示为***。" lost the splat's
+# stars and two of the mask's.
+_STAR_MASK = r"(?!\*(?:[" + _MASK_END + r"]|[,.;:!?)\]}'\"]*(?:\s|$)))"
 # Any character but a space opens bold ("**@zulipbot**"): the closer comes off every such word anyway. After one
 # of those letters a ** closes whatever follows: "**注意**API密钥…", "…として**misskey.jsの…". A pair never spans
 # another mark of its kind - CommonMark closes the nearest opener - so "Call f(**opts) and **must** pass" keeps
@@ -301,7 +312,8 @@ _MASK_PUNCT = r"(?![,.;:!?)\]}'\"]+(?:\s|$))"
 _BOLD = re.compile(r"(?:(?<=[" + _CJK_B + _CJK_P + r"])(?=\*\*[^,.;:!?])|(?<![\w*/]))(\*\*|__)(?![" + _MASK_END +
                    r"])" + _MASK_PUNCT + r"(?=[^\s*/]|[" + _CJK_P + r"])((?:(?!\1).)+?)(?<=[\w`\"')\].!?:;,\0" +
                    _CJK_P + r"])\1"
-                   r"(?:(?<=\*\*)(?=[" + _CJK_B + _CJK_P + r"])|(?<=[" + _CJK_B + _CJK_P + r"]\*\*)|(?![\w*/]))")
+                   r"(?:(?<=\*\*)(?=[" + _CJK_B + _CJK_P + r"])|(?<=[" + _CJK_B + _CJK_P + r"]\*\*)" + _STAR_MASK +
+                   r"|(?![\w*/]))")
 _BOLD_CLOSE = re.compile(r"(?<=[\w`\"')\].!?:;,\0" + _CJK_P + r"])(?:\*\*(?=[" + _CJK_B + _CJK_P + r"])|"
                          r"(?:\*\*|__)(?=[\s,.;:!?)\]]|$))")
 _BOLD_OPEN = re.compile(r"^(?:\*\*|__)(?=[\w`\"'(\0])")
@@ -326,6 +338,16 @@ _UNDER_ITALIC = re.compile(r"(?<![\w*/])__\*(?=[^\s*])(.+?)(?<=[^\s*])\*__(?![\w
 # closing mark stays with the first, so the pair comes off whole: "uses **clear names.** Every ..." kept its opener.
 _BOLD_STOP = re.compile(r"(?<=[.!?])(\*\*|__)\s+(?=[A-Z`\d])")
 _CAN_OPEN = re.compile(r"\*\*(?=[^\s*" + _MASK_END + r"])" + _MASK_PUNCT)
+# A ** that _BOLD would take for a closer: after a word, quote or stop, and before no word - unless next to one of
+# those letters. x**2, sk-*** and **kwargs close nothing.
+_CAN_CLOSE = re.compile(r"(?<=[\w`\"')\].!?:;,\0" + _CJK_P + r"])\*\*(?:(?=[" + _CJK + r"])|(?<=[" + _CJK +
+                        r"]\*\*)" + _STAR_MASK + r"|(?![\w*/]))")
+# Across sentences a ** after any other mark closes too, as one before no word: "**CRITICAL: Disk at >95%**" and
+# "**ROI: 29,351%** | **Payback: ...**" kept their openers. Not after a separator - sk-**, a mask - nor a space.
+_CAN_CLOSE_CUT = re.compile(r"(?<=[^\s*\-@/])\*\*(?![\w*/])")
+# A pair around nothing but separators is a mask, not emphasis: ***-***-1234, 192.168.***.***, ***@***.com, ***...***
+_MASK_ONLY = re.compile(r"[-.@:/_]+")
+_MASK_PAIR = re.compile(r"(?<!\*)\*{2,3}[-.@:/_]+\*{2,3}(?!\*)")
 
 
 def _bold_sentences(text: str) -> list[str]:
@@ -340,19 +362,23 @@ def _mend_bold_cuts(sentences: list[str]) -> list[str]:
     _BOLD_STOP to cut at and _BOLD_CLOSE to take off - unless a word follows it, where neither can
     ("**不要硬编码密钥。必须使用**API网关"): then it comes off here too. Code spans are left as written. A mask
     or a splat is no cut ("Secrets print as ***. **Never** log them." and "Forward **kwargs. **Never** add
-    keys." lost their stars): the last ** of a sentence opens nothing before a stop ("***.", "***。"), and a **
-    at the next one's start, or after a space or bracket and before a word, opens bold there - it closes nothing."""
+    keys." lost their stars, and so did "Accept **kwargs. Use x**2 ...", the x**2 too): the last ** of a sentence
+    opens nothing before a stop ("***.", "***。"), and the next one's first ** closes the span only where _BOLD
+    would take it for a closer (_CAN_CLOSE), or after a mark such as % (_CAN_CLOSE_CUT) - a **Never**, an x**2 or
+    an sk-*** there closes nothing. A closer _BOLD_CLOSE cannot take ("95%**") comes off here too, and a mask
+    (***-***-1234) is neither."""
     closes = False                  # the sentence starts inside a bold span, which its first ** closes
     for k in range(len(sentences) - 1):
-        a, b = (_HELD.sub(lambda m: "\0" * len(m.group(0)), s) for s in sentences[k:k + 2])   # same positions
+        a, b = (_MASK_PAIR.sub(lambda m: "\0" * len(m.group(0)), _HELD.sub(lambda m: "\0" * len(m.group(0)), s))
+                for s in sentences[k:k + 2])                                                # same positions
         if closes:
             a = a.replace("**", "\0\0", 1)
         i, j = a.rfind("**"), b.find("**")
         closes = bool(a.count("**") % 2 and j >= 0 and _CAN_OPEN.match(a, i)
-                      and not ((j == 0 or b[j - 1].isspace() or b[j - 1] in "([{") and b[j + 2:j + 3].strip()))
+                      and (_CAN_CLOSE.match(b, j) or _CAN_CLOSE_CUT.match(b, j)))
         if closes:
             sentences[k] = sentences[k][:i] + sentences[k][i + 2:]
-            if j and re.match(r"\w\*\*[\w\0]", b[j - 1:j + 3]):
+            if re.match(r"\w\*\*[\w\0]", b[j - 1:j + 3]) or not _BOLD_CLOSE.match(b, j):
                 sentences[k + 1] = sentences[k + 1][:j] + sentences[k + 1][j + 2:]
                 closes = False
     return sentences
@@ -367,8 +393,12 @@ def _unbold(text: str) -> str:
     def hold(m: re.Match) -> str:
         held.append(m.group(0))
         return f"\0{len(held) - 1}\0"
-    t = _UNDER_ITALIC.sub(r"\1", _ITALIC_BOLD.sub(r"\3", _BOLD_ITALIC.sub(r"\1", _HELD.sub(hold, text))))
-    t = _BOLD.sub(lambda m: m.group(2) if m.group(1) == "**" or not m.group(2).isidentifier() else m.group(0), t)
+    def word(m: re.Match, k: int) -> str:
+        # a mask is held, as a code span is: as text, "**Mask phones as ***-***-1234** in logs" kept its closer
+        return hold(m) if _MASK_ONLY.fullmatch(m.group(k)) else m.group(k)
+    t = _UNDER_ITALIC.sub(r"\1", _ITALIC_BOLD.sub(lambda m: word(m, 3),
+                                                  _BOLD_ITALIC.sub(lambda m: word(m, 1), _HELD.sub(hold, text))))
+    t = _BOLD.sub(lambda m: word(m, 2) if m.group(1) == "**" or not m.group(2).isidentifier() else m.group(0), t)
     # _BOLD_CLOSE and _BOLD_OPEN take a mark a cut left alone. Where _BOLD left a pair, they took one of it:
     # "变量x_**必须**_中" lost its opener, read as a closer, and "- __must not__为…" its opener too.
     lone = {mark for mark in ("**", "__") if t.count(mark) % 2}
@@ -377,21 +407,36 @@ def _unbold(text: str) -> str:
     return re.sub(r"\0(\d+)\0", lambda m: held[int(m.group(1))], t)
 
 
+def _trim(text: str) -> str:
+    """text.strip(" -*|#>"), except into a mask: "***-***-1234 is the only phone format ..." lost all but 1234."""
+    a, b = len(text) - len(text.lstrip(" -*|#>")), len(text.rstrip(" -*|#>"))
+    for m in _MASK_PAIR.finditer(text):
+        a, b = min(a, m.start()), max(b, m.end())
+    return text[a:b]
+
+
 # RST's auto-numbered list item, "#. Every function must have a docstring.": read as the numbered item it is
 # ("1." is as wide, so no column moves). As a '#' line it was skipped, and its wrapped lines were not joined on.
 _RST_ITEM = re.compile(r"^([ \t]*)#\.(?=[ \t])", re.M)
+# A line of YAML front matter: a key, a list item or a line that goes on with one, a comment.
+_YAML_LINE = re.compile(r"^(?:[\w.-]+\s*:|\s|-(?:\s|$)|#|$)")
 
 
 def _rule_blocks(doc: Path) -> list[tuple[int, str]]:
-    """dd.prose_blocks, except for RST '#.' items and a file that starts with a byte-order mark. One saved as
-    UTF-16 - what `>` and Out-File write in Windows PowerShell 5.1 - is read as UTF-16: read as UTF-8, every
-    character of it comes with a NUL and no sentence can be read. A UTF-8 mark does not stick to the first
-    heading."""
+    """dd.prose_blocks, except for RST '#.' items, YAML front matter and a file that starts with a byte-order
+    mark. One saved as UTF-16 - what `>` and Out-File write in Windows PowerShell 5.1 - is read as UTF-16: read
+    as UTF-8, every character of it comes with a NUL and no sentence can be read. A UTF-8 mark does not stick to
+    the first heading. The front matter of a .claude/rules or .cursor/rules file is settings, not rules: its
+    "description: Rules that must always be followed ... paths:" was drafted as one."""
     if doc.suffix == ".py":
         return dd.prose_blocks(doc)
     data = doc.read_bytes()
     enc = "utf-16" if data[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
     text = data.decode(enc, errors="replace").replace("\r\n", "\n").replace("\r", "\n")     # as read_text reads it
+    lines = text.split("\n")
+    end = dd._front_matter_end(lines) if doc.suffix.lower() in (".md", ".mdc", ".mdx") else 0
+    if end and all(_YAML_LINE.match(line) for line in lines[1:end]):
+        text = "\n" * (end + 1) + "\n".join(lines[end + 1:])      # blank, so every line keeps its number
     return dd._paragraphs(_RST_ITEM.sub(r"\g<1>1.", text))
 
 
@@ -429,7 +474,7 @@ def rule_sentences(doc: Path, keep_all: bool = False) -> list[tuple[int, str, st
         sentences = [raw] if table_cjk else _mend_bold_cuts(dd._split_sentences(_ITEM_MARK.sub("", raw, count=1)))
         for k, whole in enumerate(sentences):
             # the item's first sentence is the one its heading belongs to, as in 1.7.6
-            whole_text = " ".join(_unbold(whole).strip(" -*|#>").split())
+            whole_text = " ".join(_trim(_unbold(whole)).split())
             if k == 0 and item and statement:
                 whole_text = f"{_unbold(heading)}: {whole_text}"
             for sent in [whole] if table_cjk else _bold_sentences(whole):
@@ -441,7 +486,7 @@ def rule_sentences(doc: Path, keep_all: bool = False) -> list[tuple[int, str, st
                     if not in_table:            # the header row: column labels, not a rule
                         continue
                     sent = " - ".join(c.strip() for c in sent.strip("|").split("|") if c.strip())
-                own = sent = " ".join(_unbold(sent).strip(" -*|#>").split())
+                own = sent = " ".join(_trim(_unbold(sent)).split())
                 if first and item and statement and dd._long_enough(own, 2):   # not onto a label ("**Note.**")
                     sent, first = f"{_unbold(heading)}: {own}", False
                 if dd._long_enough(sent, 2) and (keep_all or dd.ROUTE_RE.search(sent)
@@ -570,7 +615,8 @@ def _code_page_of(data: bytes) -> tuple[str, str] | None:
 
 def load_map(path: Path) -> list[dict]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: a map saved with a byte-order mark (Windows PowerShell 5.1, "UTF-8 with signature") loads too
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as e:
         raise Stop(f"{path} is not a readable rule map: {e}")
     except UnicodeDecodeError as e:
