@@ -7,7 +7,7 @@ screens everything in seconds, at a fraction of a cent per item; the agent spend
 only on what the fast model flags. Jev is a classifier from TypeSafe (<https://typesafe.ai>), not a chat model: it picks one of the
 answers it is offered and gives a probability for each.
 
-Current release: **1.7.8** (2026-10-07) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
+Current release: **1.7.9** (2026-10-08) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
 
 ## One plugin, installed once
 
@@ -299,15 +299,17 @@ key into an issue or pull request.
   from runs made after the failure, and 37 doc sentences that the code contradicted or that said
   more than the code does (the CHANGELOG has the list). 1.7.8 fixes 25 of the 27 known issues
   that 1.7.7 listed, or narrows them where a full fix would need a guess; the two about stars in
-  rule drafts stay as 1.7.7 had them.
+  rule drafts stay as 1.7.7 had them. 1.7.9 fixes the three known issues 1.7.8 listed and 20 of
+  the 21 older gaps its review rounds recorded; a password after a `;` is read as in 1.7.8 (the
+  CHANGELOG says where a fix is narrower).
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (823 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (895 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
   on Linux, macOS and Windows, from an empty uv cache, runs the seven free tools and checks that the
   three that send refuse without a key.
-- **1,930 automated tests.**
+- **2,732 automated tests.**
 
 ## Repository layout
 

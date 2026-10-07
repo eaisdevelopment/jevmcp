@@ -32,11 +32,13 @@ from __future__ import annotations
 import argparse
 import codecs
 import contextlib
+import errno
 import fnmatch
 import json
 import locale
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -96,6 +98,7 @@ CURSOR_RULES = re.compile(r"(?:^|/)\.cursor/rules/[^/]+\.mdc?$")    # every file
 # So is every file the coding agent itself loads as rules: Claude Code's .claude/rules (subfolders too) and the
 # documents in Cline's .clinerules folder (not its workflows/ or hooks/), or .clinerules as one plain file.
 AGENT_RULE_DIRS = re.compile(r"(?:^|/)(?:\.claude/rules/(?:[^/]+/)*[^/]+\.md|\.clinerules/[^/]+)$")
+AGENT_FOLDERS = {".claude", ".clinerules", ".cursor"}       # a coding agent's own folders
 
 
 def _git_folder_on_gits_way_up(root: Path) -> Path | None:
@@ -138,8 +141,11 @@ def tracked_files(root: Path) -> list[str]:
         # Git-Repository") stopped every audit of a folder outside git.
         out = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"),
                              capture_output=True, timeout=60, check=True, env={**os.environ, "LC_ALL": "C"},
-                             stdin=subprocess.DEVNULL).stdout.decode(errors="replace")
-        return [p for p in out.split("\0") if p]
+                             stdin=subprocess.DEVNULL).stdout
+        # surrogateescape, not a decode that replaces bytes: a name that is not valid UTF-8 still names the file
+        # on disk, and collect_units and validate name it in a note (with the replacement mark it named no file
+        # and was left out without a word). UTF-8, not os.fsdecode: a valid name reads as before in any locale.
+        return [p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p]
     except subprocess.CalledProcessError as e:
         # Only a folder that is not a git repository falls back to every file. In a repository git
         # could not read (dubious ownership, a broken index) that would take ignored files too.
@@ -177,14 +183,24 @@ def tracked_files(root: Path) -> list[str]:
             return p.resolve() == real / p.relative_to(root)
         except (OSError, RuntimeError, ValueError):         # a link loop
             return False
+
+    def dangling(p: Path) -> bool:
+        # A link loop or a link to nothing in a folder of the project is listed, as git lists it: reading it fails,
+        # and it is left out with a note (it points nowhere, so nothing outside the project is read)
+        return os.path.islink(p) and not os.path.exists(p) and inside(p.parent)
     for dirpath, dirnames, _ in os.walk(root):
+        claude = ".claude" in dirnames
         dirnames[:] = sorted(d for d in dirnames if d not in ign)
+        # Claude Code reads .claude/CLAUDE.md as it reads CLAUDE.md
+        memory = Path(dirpath) / ".claude" / "CLAUDE.md"
+        if claude and (os.path.isfile(memory) and inside(memory) or dangling(memory)):
+            out.append(memory.relative_to(root).as_posix())
         for agent in (".claude", ".cursor"):
             rules = Path(dirpath) / agent / "rules"
             # os.path: a folder that cannot be searched is no rules folder, not an error (1.7.7 never looked in)
             if os.path.isdir(rules) and inside(rules):
                 out += [p.relative_to(root).as_posix() for p in dd._discover(rules, ())
-                        if p.suffix in (".md", ".mdc") and inside(p)]
+                        if p.suffix in (".md", ".mdc") and (inside(p) or dangling(p))]
     return out
 
 
@@ -338,7 +354,14 @@ def guess_scope(text: str, source: str, languages: set[str]) -> list[str]:
     if not globs:
         globs = [f"**/*{s}" for s in sorted(languages)] or ["**/*"]
     # with / on every OS: a map is committed with the code, and services\api/**/*.py matches no file off Windows
-    base = Path(source).parent.as_posix() if AGENT_RULE_FILES.match(Path(source).name) else ""
+    # .claude/CLAUDE.md (or a file in .claude/rules, .clinerules or .cursor/rules) rules the folder that holds the
+    # agent's folder, as CLAUDE.md beside it would; one deeper in it (.claude/hooks/CLAUDE.md) rules its own folder
+    parts = Path(source).parent.parts
+    fit = [i for i, d in enumerate(parts) if d in AGENT_FOLDERS
+           and (len(parts) == i + 1 or d != ".clinerules" and parts[i + 1] == "rules")]
+    if fit:                                     # the first agent folder the file sits right in, or in its rules/
+        parts = parts[:fit[0]]
+    base = "/".join(parts) if AGENT_RULE_FILES.match(Path(source).name) else ""
     if base and base != ".":
         globs = [f"{base}/{g}" for g in globs]          # a nested AGENTS.md rules its own directory
     if TEST_WORDS.search(text) and not NOT_TEST_ONLY.search(text):
@@ -560,15 +583,16 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
     (commits, PRs, changelogs), about what a linter already checks, addressed to the assistant, or with
     exceptions and negations are flagged, and process/linter/conduct ones start excluded with a reason.
     A map is UTF-8 JSON, so a file whose name is not valid UTF-8 cannot be recorded in it: a named one is
-    refused, a found one is left out with a note in `warnings`. So is one git lists: tracked_files reads its
-    name with the replacement mark, and that names no file."""
+    refused, a found one is left out with a note in `warnings`, whether git lists it or not. So is a name with
+    the replacement mark that names no file (copied from such a note)."""
     for d in docs or []:
         if not dd._utf8(d):
             raise Stop(f"the name of {dd._readable(d)} is not valid UTF-8, so a map cannot record it - rename it, "
                        f"then name it again")
     files = tracked_files(root)
     languages = {Path(f).suffix for f in files if Path(f).suffix in CODE_SUFFIXES}
-    sources = docs or find_rule_files(root, files)
+    # (an empty list: the command line named files and none of them could be read, so there is nothing to draft)
+    sources = find_rule_files(root, files) if docs is None else docs
     if unusable := [f for f in sources if not dd._utf8(f) or ("\ufffd" in f and not os.path.lexists(root / f))]:
         sources = [f for f in sources if f not in unusable]
         if warnings is not None:
@@ -577,22 +601,33 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
                             f"if they hold rules.")
     entries, seen, read = [], set(), set()
     top = root.resolve()
-    for src in sorted(sources, key=lambda f: (root / f).is_symlink()):   # a real file before a link to it
+    # a real file before a link to it (os.path.islink: False, not an error, in a folder that cannot be entered)
+    for src in sorted(sources, key=lambda f: os.path.islink(root / f)):
         path = (root / src)
-        real = path.resolve()
-        # AGENTS.md linked to CLAUDE.md is read once; a link out of the project is never read.
-        if not path.is_file() or real in seen or not real.is_relative_to(top):
-            continue
-        seen.add(real)
         try:
+            real = path.resolve()
+            # stat, not is_file: on Python 3.14 is_file is False for a file in a folder that cannot be entered
+            try:
+                st = path.stat()             # a link loop, or a folder that cannot be entered, raises
+            except (OSError, ValueError) as e:          # ValueError: a name the locale's encoding cannot hold
+                if isinstance(e, OSError) and e.errno not in _GONE:
+                    raise
+                if os.path.islink(path):     # a link to nothing, or a link loop: left out with a note
+                    raise
+                continue                     # one git lists that is gone from disk (or its folder is now a file)
+            # AGENTS.md linked to CLAUDE.md is read once; a link out of the project is never read.
+            if not stat.S_ISREG(st.st_mode) or real in seen or not real.is_relative_to(top):
+                continue
+            seen.add(real)
             sentences = rule_sentences(path, keep_all=bool(docs))
-        except OSError as e:
+        except (OSError, RuntimeError) as e:                # RuntimeError: a link loop, on Python 3.12 and older
             if docs:                                         # a file the user named: they should hear why
                 raise
             # a found one (a .claude/rules file left root-owned, say) is left out, as 1.7.7 never read it
             if warnings is not None:
-                warnings.append(f"{dd._readable(src)} could not be read ({e.strerror}), so it was left out; fix "
-                                f"its permissions if it holds rules.")
+                why = e.strerror if isinstance(e, OSError) else "Too many levels of symbolic links"
+                warnings.append(f"{dd._readable(src)} could not be read ({why}), so it was left out; fix "
+                                f"{'its permissions' if isinstance(e, PermissionError) else 'it'} if it holds rules.")
             continue
         read.add(src)
         for line, sentence, own, whole in sentences:
@@ -748,6 +783,9 @@ def validate(entries: list[dict], root: Path) -> dict:
                 notes.append(f"{where}: rule is conditional - LIKELY false alarms, because one unit of code seldom "
                              f"shows whether the condition holds; name a trigger the code shows instead, like "
                              f"\"Every os.environ[...] read of the API key goes through env_key().\"")
+    # in NOTES, not in `notes`: those are about a rule's phrasing; only entries whose scope is a list of globs
+    ok = [e for e in reviewed if isinstance(s := e.get("scope", []), list) and all(isinstance(g, str) for g in s)]
+    NOTES[:] = [n] if (n := not_utf8_note(ok, files)) else []
     return {"entries": len(entries), "reviewed": len(reviewed),
             "draft": sum(e.get("status") == "draft" for e in entries),
             "excluded": sum(e.get("status") == "excluded" for e in entries),
@@ -922,12 +960,47 @@ def _secretish(f: str) -> bool:
     return bool(dd._SECRET_FILE.search(name)) or name in (".npmrc", ".pypirc", ".netrc", ".git-credentials")
 
 
+# What pathlib's is_file answered False for without a word: no file there (gone from disk, its folder now a file, a
+# link loop on the way). Any other error (no permission) is a file that is there but cannot be read.
+_GONE = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EBADF)
+
+
+def _unreadable(p: Path) -> bool:
+    """A file that is there but cannot be read: no read permission, or in a folder that cannot be entered."""
+    try:
+        if stat.S_ISREG(p.lstat().st_mode):
+            with open(p, "rb"):
+                pass
+    except ValueError:                  # a name the locale's encoding cannot hold
+        return False
+    except OSError as e:
+        return e.errno not in _GONE
+    return False
+
+
+def _named_left_out(root: Path, src: str) -> str | None:
+    """The warning for a rule file named on the command line that is not there or cannot be read (a link to
+    nothing, a link loop, no permission), in the words draft_map has for a found one; None for one it can read."""
+    try:
+        if stat.S_ISREG((root / src).stat().st_mode):   # through a link, as draft_map reads it; a folder is not opened
+            with open(root / src, "rb"):
+                pass
+    except ValueError:                  # a name the locale's encoding cannot hold: draft_map's to answer
+        pass
+    except OSError as e:
+        return (f"{src} could not be read ({e.strerror}), so it was left out; fix "
+                f"{'its permissions' if isinstance(e, PermissionError) else 'it'} if it holds rules.")
+    return None
+
+
 def _diff_path(p: str) -> str:
     """A file name as git prints it after '+++ ': with a tab after it when it holds a space, and "C-quoted"
     when it holds a quote, a backslash or a character outside ASCII ("b/src/caf\\303\\251.py")."""
     p = p.split("\t")[0]
     if len(p) >= 2 and p[0] == p[-1] == '"':
-        p = p[1:-1].encode("utf-8").decode("unicode_escape").encode("latin-1").decode("utf-8", "replace")
+        # (with core.quotePath=false a byte that is not UTF-8 stays raw: a lone surrogate here)
+        p = (p[1:-1].encode("utf-8", "surrogateescape").decode("unicode_escape").encode("latin-1")
+             .decode("utf-8", "surrogateescape"))
     return p
 
 
@@ -954,9 +1027,45 @@ def changed_lines(root: Path, base: str | None) -> dict[str, set[int]]:
         # --relative: names from the project, as tracked_files has them, when it is a folder of its repository
         args = ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--relative", "--src-prefix=a/",
                 "--dst-prefix=b/", "HEAD"]
-    out = subprocess.run(dd.git_argv("-C", str(root), *args), capture_output=True, text=True, timeout=60,
-                         encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout
     lines: dict[str, set[int]] = {}
+    # git stops at a changed file it cannot read ("cannot hash"), and every file after it was left out without a
+    # word; one in a folder that cannot be entered it lists as deleted. Such a file is kept out of the diff and
+    # entered with no changed lines: collect_units tries it and leaves it out with a note.
+    # git's pathspec variables would change what the exclusions below match: literal names, letter case
+    env = {**os.environ, "GIT_LITERAL_PATHSPECS": "0", "GIT_ICASE_PATHSPECS": "0"}
+    try:
+        names = subprocess.run(dd.git_argv("-C", str(root), args[0], "--name-only", "-z", *args[1:]), env=env,
+                               capture_output=True, timeout=60, check=True, stdin=subprocess.DEVNULL).stdout
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        names = b""                     # (a repository with no commit yet: the diff below says so)
+    seen = []                           # the unreadable ones git can see, and so would stop at
+    for f in (p.decode("utf-8", "surrogateescape") for p in names.split(b"\0") if p):
+        if _unreadable(root / f):
+            lines[f] = set()
+            with contextlib.suppress(OSError):
+                (root / f).lstat()      # (in a folder that cannot be entered git lists it as deleted: no need)
+                seen.append(f)
+    try:
+        res = subprocess.run(dd.git_argv("-C", str(root), *args, "--", *(f":(exclude,literal){f}" for f in seen)),
+                             env=env, capture_output=True, text=True, timeout=60, encoding="utf-8",
+                             errors="surrogateescape", stdin=subprocess.DEVNULL)
+    except OSError as err:
+        if err.errno != errno.E2BIG and getattr(err, "winerror", None) != 206:     # (Windows: the name too long)
+            raise
+        raise Stop(f"{len(seen)} changed files cannot be read, too many for git to leave out of the comparison: fix "
+                   "their permissions, or audit every unit (all) or the files you name.") from None
+    unborn = False                      # no commit yet on this branch
+    if res.returncode:
+        # A branch with no commit yet (a new repository, git checkout --orphan) has no HEAD to compare with: every
+        # file is new, listed below. A HEAD that names something, even a commit that is missing, is not that case.
+        # Otherwise a partial diff would leave out every file after the one git stopped at.
+        head = subprocess.run(dd.git_argv("-C", str(root), "rev-parse", "--verify", "--quiet", "HEAD"),
+                              capture_output=True, timeout=15, stdin=subprocess.DEVNULL)
+        if base or head.returncode == 0:
+            raise Stop(f"git could not compare the change, so its changed lines are not known: "
+                       f"{res.stderr.strip()[-300:]} - name the files to audit, or audit every unit.")
+        unborn = True
+    out = res.stdout
     cur = None
     for ln in out.splitlines():
         if ln.startswith("+++ "):
@@ -967,19 +1076,41 @@ def changed_lines(root: Path, base: str | None) -> dict[str, set[int]]:
             if m:
                 a, n = int(m.group(1)), int(m.group(2) or 1)
                 lines.setdefault(cur, set()).update(range(a, a + max(n, 1)))
-    # A new file the change adds but has not committed yet is in no diff; every line of it is changed.
+    # A new file the change adds but has not committed yet is in no diff; every line of it is changed. With no
+    # commit yet on this branch, so is every file in the index (-c): -o lists only the files git does not track.
     try:
-        new = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-o", "--exclude-standard", "-z"),
+        new = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-co" if unborn else "-o",
+                                         "--exclude-standard", "-z"),
                              capture_output=True, timeout=60, check=True,
-                             stdin=subprocess.DEVNULL).stdout.decode(errors="replace")
+                             stdin=subprocess.DEVNULL).stdout
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        new = ""
-    for f in filter(None, new.split("\0")):
+        new = b""
+    for f in (p.decode("utf-8", "surrogateescape") for p in new.split(b"\0") if p):     # as tracked_files
         p = root / f
-        if Path(f).suffix in CODE_SUFFIXES and not p.is_symlink() and p.is_file() \
-                and p.stat().st_size <= dd.MAX_FILE_BYTES:
-            lines[f] = set(range(1, p.read_text(encoding="utf-8", errors="replace").count("\n") + 2))
+        try:
+            if Path(f).suffix in CODE_SUFFIXES and stat.S_ISREG((st := p.lstat()).st_mode) \
+                    and st.st_size <= dd.MAX_FILE_BYTES:
+                lines[f] = set(range(1, p.read_text(encoding="utf-8", errors="replace").count("\n") + 2))
+        except ValueError:              # a name the locale's encoding cannot hold: left out, as is_file did
+            pass
+        except OSError as e:            # collect_units tries it and leaves it out with a note
+            if e.errno not in _GONE:
+                lines[f] = set()
     return lines
+
+
+def not_utf8_note(reviewed: list[dict], files: list[str]) -> str | None:
+    """A request, a reply and a results file are UTF-8, so a code file whose name is not valid UTF-8 cannot be
+    named in them: it is left out of the audit, and this note names the ones a reviewed rule applies to."""
+    odd = [f for f in files if not dd._utf8(f)]
+    if odd := [f for f in odd if any(in_scope_files(e, [f]) for e in reviewed)]:
+        return (f"{len(odd)} code file(s) were left out because their names are not valid UTF-8: "
+                f"{', '.join(dd._readable(f) for f in odd[:10])}{' ...' if len(odd) > 10 else ''}. "
+                f"Rename them to audit them.")
+    return None
+
+
+NOTES: list[str] = []   # what the last validate or collect_units left out, and why; the command line prints it
 
 
 def collect_units(root: Path, entries: list[dict], scope: str = "changed", base: str | None = None,
@@ -994,9 +1125,11 @@ def collect_units(root: Path, entries: list[dict], scope: str = "changed", base:
     touched = changed_lines(root, base) if scope == "changed" else {}
     pool = tracked if scope == "all" else (files or []) if scope == "files" else list(touched)
     known = set(tracked)
-    pool = [f for f in pool if f in known]
+    pool = [f for f in pool if f in known]      # (a file no list holds is left out without a word, as in 1.7.8)
+    NOTES[:] = [n] if (n := not_utf8_note([e for e in entries if e.get("status") == "reviewed"], pool)) else []
+    pool = [f for f in pool if dd._utf8(f)]
     cache: dict[tuple[str, bool], list[Unit]] = {}
-    pairs = []
+    pairs, unread = [], set()
     for e in entries:
         if e.get("status") != "reviewed":
             continue
@@ -1006,17 +1139,34 @@ def collect_units(root: Path, entries: list[dict], scope: str = "changed", base:
                 p = root / f
                 # A symbolic link may point outside the project (a key, another checkout): never read
                 # through one - the file it points to is audited under its own name if it is in scope.
-                if p.is_symlink() or not p.is_file() or p.stat().st_size > dd.MAX_FILE_BYTES:
+                # lstat, not is_file: on Python 3.14 is_file is False for a file in a folder that cannot be entered
+                try:
+                    st = p.lstat()
+                    if not stat.S_ISREG(st.st_mode) or st.st_size > dd.MAX_FILE_BYTES:
+                        cache[key] = []
+                        continue
+                    raw_all = p.read_text(encoding="utf-8", errors="replace")
+                except ValueError:                  # a name the locale's encoding cannot hold
                     cache[key] = []
                     continue
-                raw_all = p.read_text(encoding="utf-8", errors="replace")
+                except OSError as err:              # one file that cannot be read does not stop the audit
+                    cache[key] = []
+                    if err.errno not in _GONE:        # gone from disk (or its folder now a file): left out quietly
+                        unread.add(f)
+                    continue
                 raw_lines = raw_all.split("\n")
                 sent_lines = file_text(p, key[1])
+                pem = dd._pem_keys("\n".join(sent_lines), written=not dd._is_config_file(Path(f)))
                 units = []
                 for a, b in split_units(f, raw_all):
                     if scope == "changed" and not (touched.get(f, set()) & set(range(a, b + 1))):
                         continue
-                    units.append(Unit(f, a, b, unit_text(f, "\n".join(sent_lines[a - 1:b]), key[1]),
+                    lines = sent_lines
+                    # a PEM private key this unit's cut splits: redact() would not see it whole, so hide its lines
+                    if cut := [(x, y) for x, y in pem if x < a - 1 <= y or x <= b - 1 < y]:
+                        lines = list(sent_lines)
+                        dd._hide_pem_lines(lines, cut)
+                    units.append(Unit(f, a, b, unit_text(f, "\n".join(lines[a - 1:b]), key[1]),
                                       "\n".join(raw_lines[a - 1:b])))
                 cache[key] = units
             units = cache[key]
@@ -1025,6 +1175,10 @@ def collect_units(root: Path, entries: list[dict], scope: str = "changed", base:
             for u in units:
                 if u.text.strip():
                     pairs.append((e, u))
+    if unread:
+        NOTES.append(f"{len(unread)} code file(s) could not be read, so they were left out: "
+                     f"{', '.join(dd._readable(f) for f in sorted(unread)[:10])}{' ...' if len(unread) > 10 else ''}. "
+                     f"Fix their permissions to audit them.")
     return pairs
 
 
@@ -1177,7 +1331,17 @@ def main(argv: list[str] | None = None) -> int:
             if a.draft_map.exists():
                 raise Stop(f"{a.draft_map} exists; the drafter never overwrites a map.")
             warnings: list[str] = []
-            m = draft_map(root, a.docs, warnings)
+            docs = a.docs
+            if docs:
+                # A named file that is not there or cannot be read (a link to nothing, a link loop, no permission)
+                # is left out with a word, and the others are drafted: draft_map itself stops at one it cannot read
+                # and says nothing of one that is not there. A name that is not valid UTF-8, or one copied from a
+                # note with the replacement mark, goes on to it and gets its answer there.
+                out = {d: _named_left_out(root, d) if dd._utf8(d) and ("\ufffd" not in d or os.path.lexists(root / d))
+                       else None for d in docs}
+                docs = [d for d in docs if not out[d]]
+                warnings += [w for w in out.values() if w]
+            m = draft_map(root, docs, warnings)
             try:
                 a.draft_map.write_text(json.dumps(m, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
             except BaseException:
@@ -1193,12 +1357,16 @@ def main(argv: list[str] | None = None) -> int:
         entries = load_map(a.map)
         if a.validate:
             print(json.dumps(validate(entries, root), indent=1))
+            for n in NOTES:
+                print(f"code_audit: {n}", file=sys.stderr)
             return 0
         scope = "all" if a.all else "files" if a.files else "changed"
         if a.base and scope != "changed":
             raise Stop("--base names the change to audit; with --files or --all every unit of them is audited. Pass one.")
         files = [str(Path(f).as_posix()).removeprefix("./") for f in a.files or []]     # './x.py' names x.py
         items = items_for(collect_units(root, entries, scope, a.base, files))
+        for n in NOTES:
+            print(f"code_audit: {n}", file=sys.stderr)
         est = jevkit.estimate_cost(items)
         if a.dry_run:
             for it in items[:50]:

@@ -202,7 +202,8 @@ def screen(items: list[Item], key: str,
     for r in run.results:
         if r.action is None and r.error is None:
             r.error = "not checked: the run stopped early"
-    if samples > 1 and undecided and not run.problems and not run.vendor and not (cancelled and cancelled()):
+    # one request that failed (an HTTP error, an unreadable reply) is that item's: the others are still asked again
+    if samples > 1 and undecided and not run.problems and stop is None and not (cancelled and cancelled()):
         halted: list[dd.Stop] = []
 
         def again(ks: list[int]) -> list[list[dict]]:

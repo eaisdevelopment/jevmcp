@@ -92,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.8"
+VERSION = "1.7.9"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -192,6 +192,11 @@ def _not_checked(unsent: str) -> str:
             "that lists every line")
 
 
+_INDEX_NOTES = {"type": "array", "items": {"type": "string"},
+                "description": "the notes indexing the code printed, the first 10 as the command line prints "
+                               "them: e.g. code or config files left out because their names are not valid "
+                               "UTF-8, or a YAML config or OpenAPI file that could not be parsed. Not a list "
+                               "of every file that could not be read"}
 _NOT_CHECKED_TOTAL = {"type": "integer", "description": "how many lines not_checked holds before the cut - not how "
                                                         "many items were left unchecked"}
 
@@ -318,6 +323,7 @@ SPEC_DRIFT_TOOLS = [
                              "description": "spec files in a folder the map's specs names that were NOT used: a "
                                             "skipped folder that holds some, a link not followed, a name that is "
                                             "not UTF-8, a file that cannot be read. Show each to the user"},
+                "index_notes": _INDEX_NOTES,
             },
             "required": ["project", "map", "claims_in_map", "claims_selected", "checked", "counts", "cost_usd",
                          "complete", "results_file", "map_problems", "not_checked", "map_health", "flagged",
@@ -363,12 +369,16 @@ SPEC_DRIFT_TOOLS = [
                 "samples": {"type": "integer"},
                 "likely_unverifiable": {"type": "array", "items": {"type": "string"},
                                         "description": "one line per spec line; it says how many entries share it"},
-                "problems": {"type": "array", "items": {"type": "string"}},
+                "problems": {"type": "array", "items": {"type": "string"},
+                             "description": "why the map is not ready (cut to fit: problems_total counts the "
+                                            "lines; past 20, the text names a file that lists every one)"},
+                "problems_total": {"type": "integer"},
                 "notes": {"type": "array", "items": {"type": "string"}},
                 "warnings": {"type": "array", "items": {"type": "string"},
                              "description": "spec files in a folder the map's specs names that were NOT used: a "
                                             "skipped folder that holds some, a link not followed, a name that is "
                                             "not UTF-8, a file that cannot be read. Show each to the user"},
+                "index_notes": _INDEX_NOTES,
                 "moved_entries": {"type": "integer",
                                   "description": "entries whose sentence is now on another line of the spec than "
                                                  "the map stores; the check still finds them"},
@@ -421,7 +431,8 @@ SPEC_DRIFT_TOOLS = [
                 "warnings": {"type": "array", "items": {"type": "string"},
                              "description": "spec files in a folder the map's specs names that were NOT used: a "
                                             "skipped folder that holds some, a link not followed, a name that is "
-                                            "not UTF-8, a file that cannot be read. Show each to the user"}},
+                                            "not UTF-8, a file that cannot be read. Show each to the user"},
+                "index_notes": _INDEX_NOTES},
             "required": ["project", "map", "model", "claims", "warnings"],
         },
     },
@@ -482,7 +493,7 @@ SPEC_DRIFT_TOOLS = [
                                               "the user choose"},
                 "families": {"type": "array", "items": _SPEC_FAMILY_OUT,
                              "description": "without docs: files that look like versions of one document"},
-                "next_step": {"type": "string"}},
+                "index_notes": _INDEX_NOTES, "next_step": {"type": "string"}},
             "required": ["project", "drafted", "out", "specs", "entries", "warnings", "candidates", "families",
                          "next_step"],
         },
@@ -621,9 +632,10 @@ CI_TRIAGE_TOOLS = [
                            "properties": {k: _INT for k in ("CHANGE", "review", "??")},
                            "required": ["CHANGE", "review", "??"]},
                 "cost_usd": _NUM,
-                "complete": {"type": "boolean", "description": "every failure was checked, and every failed "
-                                                                "job's log was read (false when a note starts "
-                                                                "INCOMPLETE)"},
+                "complete": {"type": "boolean", "description": "true only when every failed job's log was read "
+                                                                "(false when a note starts INCOMPLETE) and every "
+                                                                "failure was answered: nothing stopped, nothing "
+                                                                "failed (CI triage asks each failure once)"},
                 "not_checked": {**_STRS, "description": _not_checked(
                     "a result labelled 'not checked', as is a failure whose request failed")},
                 "not_checked_total": _NOT_CHECKED_TOTAL,
@@ -1215,6 +1227,8 @@ class Server:
                             f"{every})")
         warnings = list(dd.MAP_WARNINGS)
         head += _warning_text(warnings)
+        index_notes = _index_notes()
+        head += [f"note: {n}" for n in index_notes]
         structured = {"summary": head[0], "project": str(self.root), "map": self.map_used, "claims_in_map": total,
                       "claims_selected": len(claims), "checked": 0,
                       "counts": {"DRIFT": 0, "review": 0, "??": 0, "ok": 0}, "cost_usd": 0.0,
@@ -1226,7 +1240,8 @@ class Server:
                       "flagged": [], "flagged_total": 0,
                       "to_read": {k: 0 for k in ("drift", "drift_shown", "review", "review_shown", "groups",
                                                  "groups_shown")},
-                      "review_groups": [], "unverifiable_by_reason": [], "warnings": warnings}
+                      "review_groups": [], "unverifiable_by_reason": [], "warnings": warnings,
+                      "index_notes": index_notes}
         if not claims:
             head.append("nothing to check" + ("" if all else " - no claim in the map is about those files. "
                                               "Use all=true for a full check."))
@@ -1353,8 +1368,7 @@ class Server:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             claims = self.claims(syms, problems, map)
-        if strict:
-            problems += [f"{n} (strict)" for n in dd.MAP_NOTES]
+        coverage = [f"{n} (strict)" for n in dd.MAP_NOTES] if strict else []
         excluded = dd.MAP_COUNTS.get("excluded", 0)
         moved = dd.MAP_COUNTS.get("moved", 0)
         warnings = list(dd.MAP_WARNINGS)
@@ -1383,8 +1397,21 @@ class Server:
         if not strict:
             lines += [f"note: {n}" for n in notes]
         lines += _warning_text(warnings)
+        index_notes = _index_notes()
+        lines += [f"note: {n}" for n in index_notes]
+        # the map-level lines (a "specs" folder gone, items that are not paths) and the coverage notes first, so
+        # no cut below hides them
+        problems[:] = [p for p in problems if p.startswith(_MAP_LEVEL)] + coverage + \
+            [p for p in problems if not p.startswith(_MAP_LEVEL)]
         if problems:
-            lines += ["", f"PROBLEMS ({len(problems)}) - fix these; the map is not ready:"] + [f"  - {p}" for p in problems]
+            lines += ["", f"PROBLEMS ({len(problems)}) - fix these; the map is not ready:"]
+            lines += [f"  - {p}" for p in problems[:20]]
+            if len(problems) > 20:                # a map broken by a rename has two per entry: the rest go to a file
+                every = self.results_file("validate-map-problems")
+                every.write_text(json.dumps(problems, indent=1, ensure_ascii=False), encoding="utf-8",
+                                 errors="replace")   # a project path that is not UTF-8: '?', as in the reply
+                lines.append(f"  ... and {len(problems) - 20} more lines (all {len(problems)} lines are listed in "
+                             f"{every})")
         else:
             lines.append("OK - the map is complete and every entry resolves.")
         structured = {"project": str(self.root), "map": self.map_used, "ready": not problems,
@@ -1392,8 +1419,9 @@ class Server:
                       "likely_unverifiable": [k + (f" ({n} entries)" if n > 1 else "") for k, n in weak_lines.items()],
                       "full_check_cost_usd": round(dd.estimate_cost(claims), 6),
                       "full_check_cost_usd_max": round(dd.estimate_cost(claims, self.samples), 6),
-                      "samples": self.samples, "problems": problems,
-                      "notes": [] if strict else notes, "warnings": warnings, "moved_entries": moved}
+                      "samples": self.samples, "problems": _fit(problems, INLINE_BUDGET // 3),
+                      "problems_total": len(problems), "notes": [] if strict else notes, "warnings": warnings,
+                      "moved_entries": moved, "index_notes": index_notes}
         return "\n".join(lines), False, structured
 
     def preview_spec_check(self, files: list[str] | None = None, line: int | None = None,
@@ -1413,8 +1441,8 @@ class Server:
                       "claims": [{"doc": c.doc, "line": c.line,
                                   "map_line": c.map_line if c.map_line not in (None, c.line) else None}
                                  for c in claims],
-                      "warnings": list(dd.MAP_WARNINGS)}
-        extra = _warning_text(structured["warnings"])
+                      "warnings": list(dd.MAP_WARNINGS), "index_notes": _index_notes()}
+        extra = _warning_text(structured["warnings"]) + [f"note: {n}" for n in structured["index_notes"]]
         if not claims:
             return ("\n".join(["no claim matches (a line number is the sentence's line in the spec now, or the line the "
                                "map stores for it; files are paths relative to the project)."] + extra)), False, structured
@@ -1471,13 +1499,14 @@ class Server:
                                    named_specs=[dd.named_path(self.root, d) for d in docs], cli=False)
         step = (f"Nothing is checked until the entries are reviewed. Then validate_spec_map (map: {out}) must report "
                 f"OK before check_spec_drift.")
-        text = f"{self.last_index}\n{buf.getvalue().strip()}"
+        index_notes = _index_notes()
+        text = "\n".join([self.last_index, *(f"note: {n}" for n in index_notes), buf.getvalue().strip()])
         if warnings:
             text += ("\n\nWARNINGS - show each one to the user:\n"
                      + "\n".join(f"  - {w}" for w in warnings))
         return (f"{text}\n\n{step}", False,
                 {**empty, "drafted": True, "out": rel_out, "specs": [p.as_posix() for p in rel_specs],
-                 "entries": entries, "warnings": warnings, "next_step": step})
+                 "entries": entries, "warnings": warnings, "index_notes": index_notes, "next_step": step})
 
     # ── CI failure triage ───────────────────────────────────────────────────
     def _arg_path(self, given: str) -> Path:
@@ -1748,6 +1777,7 @@ class Server:
                  f"{tracked:,} bytes git tracks) would leave the machine, {sent:,} bytes of state in all.",
                  f"About ${structured['estimate_usd']:.5f}, up to ${structured['estimate_usd_max']:.5f} if every "
                  f"undecided request is asked again (up to {samples} times each)."]
+        lines += [f"note: {n}" for n in audit.NOTES]     # code files left out (names not valid UTF-8)
         if structured["comment_bearing_requests"]:
             lines.append(f"{structured['comment_bearing_requests']} request(s) are for rules about comments and "
                          f"are sent WITH comments (links and addresses removed).")
@@ -1784,8 +1814,9 @@ class Server:
                       "complete": True, "not_checked": [], "not_checked_total": 0, "results_file": None, "flagged": [],
                       "flagged_total": 0}
         if not items:
-            text = (f"code audit ({rel}): nothing to audit - no reviewed rule applies to the units in scope. That "
-                    f"is not a pass: check the rules' scope, or use files / all=true.")
+            text = "\n".join([f"code audit ({rel}): nothing to audit - no reviewed rule applies to the units in scope. "
+                              f"That is not a pass: check the rules' scope, or use files / all=true.",
+                              *(f"note: {n}" for n in audit.NOTES)])
             structured["summary"] = text
             return text, False, structured
         key = self.api_key()
@@ -1808,7 +1839,8 @@ class Server:
         to_read = sum(1 for r in results if audit.triage_group(r) in ("BREAKS", "review"))
         lines = [head, f"BREAKS {counts['BREAKS']} · review {counts['review']} · ?? {counts['??']} · ok {counts['ok']}"
                        f" · n/a {counts['n/a']}   full results (with the exact code sent): {out}",
-                 f"To read: {to_read} (BREAKS, and review from P(breaks) 0.3 up); the rest of review is low risk."]
+                 f"To read: {to_read} (BREAKS, and review from P(breaks) 0.3 up); the rest of review is low risk.",
+                 *(f"note: {n}" for n in audit.NOTES)]
         titles = {"BREAKS": "BREAKS - investigate each (is the code or the rule wrong?):",
                   "review": "review - P(breaks) 0.3 and up, highest first; investigate each:",
                   "??": "?? - NOT a pass: the code shown cannot settle the rule:",
@@ -1858,6 +1890,7 @@ class Server:
         files = audit.tracked_files(self.root)
         unused = [f for f in audit.find_rule_files(self.root, files) if f not in used and real(f) not in used_real]
         maybe = [f for f in audit.candidate_rule_files(self.root, files) if f not in used and real(f) not in used_real]
+        unused, maybe = [dd._readable(f) for f in unused], [dd._readable(f) for f in maybe]     # as they can be shown
         ready = not v["problems"] and v["reviewed"] > 0
         structured = {"project": str(self.root), "map": rel, "ready": ready, "entries": v["entries"],
                       "reviewed": v["reviewed"], "draft": v["draft"], "excluded": v["excluded"],
@@ -1872,6 +1905,7 @@ class Server:
             lines.append("Not ready: no entry is reviewed yet. Review the drafts with the user.")
         else:
             lines.append("OK - every reviewed entry has a rule and a scope that matches files.")
+        lines += [f"note: {n}" for n in audit.NOTES]     # code files left out (names not valid UTF-8)
         if v["notes"]:
             lines += ["", "Phrasing that tends to come back ?? or as a false alarm - rewrite as one positive "
                           "condition the code shows:"] + [f"  - {x}" for x in v["notes"]]
@@ -1902,8 +1936,17 @@ class Server:
                     found = sorted(f for f in audit.tracked_files(self.root)
                                    if (rel == "." or f.startswith(rel + "/"))
                                    and (Path(f).suffix.lower() in audit.DOC_SUFFIXES
-                                        or (not Path(f).suffix and Path(f).name.upper() in audit.PLAIN_RULE_FILES))
-                                   and not (self.root / f).is_symlink())
+                                        or (not Path(f).suffix and Path(f).name.upper() in audit.PLAIN_RULE_FILES)))
+                    links = [f for f in found if os.path.islink(self.root / f)]  # os.path: False on an OS error
+                    found = [f for f in found if f not in links]
+                    # a link that works is left out quietly; one that leads nowhere is named, as the finder does,
+                    # and one whose target cannot be reached for another reason (a folder on the way cannot be
+                    # entered) is named below as one that could not be read
+                    gone = {f: _stat_errno(self.root / f) for f in links}
+                    if broken := [f for f in links if gone[f] in audit._GONE]:
+                        warns.append(f"{len(broken)} rule file(s) in {d} are links that lead nowhere (a loop or a "
+                                     f"missing target), so they were left out: "
+                                     f"{', '.join(dd._readable(f) for f in broken)}. Fix them if they hold rules.")
                     # A map cannot record a name that is not valid UTF-8, and the user named the folder, not the
                     # file: it is left out with a warning, as in a spec folder. Outside git the name is as on
                     # disk; git's list has U+FFFD for each such byte, a name no file has.
@@ -1912,8 +1955,15 @@ class Server:
                         warns.append(f"{len(bad)} rule file(s) in {d} were left out because their names are not valid "
                                      f"UTF-8, so a map cannot record them: {', '.join(dd._readable(f) for f in bad)}. "
                                      f"Rename them if they hold rules.")
-                    # and one git still lists but that is gone from disk is not read, so not a source either
-                    sources += [f for f in found if f not in bad and (self.root / f).is_file()]
+                    # and one git still lists but that is gone from disk is not read, so not a source either; one
+                    # in a folder that cannot be entered, or that cannot be read, is left out with a warning
+                    shut = sorted([f for f in found if f not in bad and _unreadable(self.root / f)]
+                                  + [f for f in links if gone[f] not in (None, *audit._GONE)])
+                    if shut:
+                        warns.append(f"{len(shut)} rule file(s) in {d} could not be read, so they were left out: "
+                                     f"{', '.join(dd._readable(f) for f in shut)}. Fix their permissions if they hold "
+                                     f"rules.")
+                    sources += [f for f in found if f not in bad and f not in shut and os.path.isfile(self.root / f)]
                 else:
                     sources.append(rel)
             if not sources:
@@ -1924,7 +1974,7 @@ class Server:
         if not m["sources"]:
             # Claude.md or agents.md is not taken (only the capitalised names are), and validate_rule_map, which
             # lists such files, needs a map first: name them here, or the project looks as if it had no rules
-            maybe = [] if docs else audit.candidate_rule_files(self.root)
+            maybe = [] if docs else [dd._readable(f) for f in audit.candidate_rule_files(self.root)]
             raise ToolError("no rule files found (CLAUDE.md, AGENTS.md, CONTRIBUTING, style or convention guides). "
                             "Pass docs: the files where this project writes its rules. Nothing was written."
                             + (" Documents named after a coding agent that the finder does not take (it takes only "
@@ -2096,6 +2146,20 @@ def _check_value(key: str, prop: dict, value):
             raise ToolError(f"{key} must be a list of strings (got {json.dumps(value)[:60]})")
         return [_check_value(f"each item of {key}", item, v) for v in value] if item else value
     if isinstance(value, str):
+        # every string a tool takes is a file name, a git name or a run: one the system cannot hold is refused
+        # here, not by a traceback later. A "\udcff" escape (a name that is not valid UTF-8) can be held.
+        bad = [value.find("\0")]
+        try:
+            os.fsencode(value)                        # the whole string at once; the place only when it fails
+        except UnicodeEncodeError as e:
+            bad.append(e.start)
+        bad = [at for at in bad if at >= 0]
+        if bad:
+            ch = value[min(bad)]
+            what = ("a NUL" if ch == "\0" else "a lone surrogate - half of a character" if "\ud800" <= ch <= "\udfff"
+                    else f"a character that the encoding of file names here ({sys.getfilesystemencoding()}) lacks")
+            raise ToolError(f"{key} holds {ch!r} (character {min(bad) + 1}), which no file name or command on this "
+                            f"system can hold: {what}.")
         if "enum" in prop and value not in prop["enum"]:
             raise ToolError(f"{key} must be one of: {', '.join(map(str, prop['enum']))} (got {value[:60]!r})")
         if len(value) < prop.get("minLength", 0):
@@ -2112,6 +2176,34 @@ def _check_value(key: str, prop: dict, value):
         if "maximum" in prop and value > prop["maximum"]:
             raise ToolError(f"{key} must be at most {prop['maximum']} (got {value})")
     return value
+
+
+def _unreadable(p: Path) -> bool:
+    """A file that is there but cannot be read: a folder on its way cannot be entered, or it cannot be opened. One
+    that is gone from disk is not (it is simply not read)."""
+    try:
+        if stat.S_ISREG(os.stat(p).st_mode):
+            with open(p, "rb"):                     # opened, not os.access: that ignores Windows ACLs
+                pass
+    except OSError as e:                            # gone, its folder now a file or a link loop: not unreadable
+        return e.errno not in audit._GONE
+    return False
+
+
+def _stat_errno(p: Path) -> int | None:
+    """The error following a link gives (ENOENT: no target, ELOOP: a loop, EACCES: ...), or None if it works."""
+    try:
+        os.stat(p)
+    except OSError as e:
+        return e.errno
+    return None
+
+
+def _index_notes() -> list[str]:
+    """The notes indexing the code printed (dd._NOTES, e.g. files whose names are not valid UTF-8, a YAML
+    config or OpenAPI file that could not be parsed), as the command line prints them: the first 10."""
+    notes = dd._NOTES
+    return notes[:10] + ([f"... and {len(notes) - 10} more"] if len(notes) > 10 else [])
 
 
 def _warning_text(warnings: list[str]) -> list[str]:
@@ -2340,6 +2432,9 @@ def _error(mid, code: int, message: str, data: dict | None = None) -> dict:
     return msg
 
 
+_LINK_LOOP = "Symlink loop from "                  # pathlib's own message, up to Python 3.12
+
+
 def _tool_result(server: Server, params: dict) -> dict:
     name = params.get("name")
     if not isinstance(name, str) or not name:
@@ -2353,6 +2448,11 @@ def _tool_result(server: Server, params: dict) -> dict:
         text, is_error, *rest = server.call(name, args)
     except ToolError as e:
         text, is_error, rest = str(e), True, []
+    except RuntimeError as e:                      # Python 3.12 and older: Path.resolve() on a link loop
+        if not str(e).startswith(_LINK_LOOP):
+            raise
+        text, is_error, rest = (f"{str(e)[len(_LINK_LOOP):]} cannot be read: it is, or passes through, a link that "
+                                f"leads back to itself (a link loop)."), True, []
     result: dict = {"content": [{"type": "text", "text": text}], "isError": is_error}
     if rest and rest[0] is not None and not is_error:
         result["structuredContent"] = rest[0]

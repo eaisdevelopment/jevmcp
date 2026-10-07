@@ -1,5 +1,213 @@
 # Changelog
 
+## 1.7.9 — 2026-10-08
+
+**The known issues and older gaps of 1.7.8, fixed.** The 1.7.8 entry below ends with three known
+issues and a list of older gaps; each is fixed here, except where *Not fixed* says otherwise. The
+fixed questions, their options, the thresholds, the model and spec drift's sentence reading are
+unchanged.
+
+**Secret redaction** (spec drift; the rules for code also apply to code audit's units and CI
+triage's lines):
+- The shell's `PWD=` with an absolute path (`ENV HOME=/home/you PWD=/home/you`, `"PWD=/srv/app"`;
+  a path that starts with `/`, `~/`, `X:\`, `X:/` or a UNC `\\` and holds only letters, digits and
+  `_.-~/\@+%,`) is sent as written again, as in 1.7.7, except right after a `;`, where it
+  is read as ODBC's password, or after `?` or `&`, a URL query's password. A regular expression
+  with no group after `password=` that is made only of `.`, escapes and character classes and
+  ends in an escape or a class with a quantifier (`\w{8,}`, `[A-Za-z0-9]+`; the class with a
+  range, an escape or `^`) is kept, as a group is; one with a literal character in it
+  (`abc[0-9]+`) is redacted.
+- A PEM private key written in code as joined string literals (Python's `\`, Java's `+`, PHP's
+  `.`) is hidden whole, under any name, also when another BEGIN marker (a marker constant, a
+  comment) with no END marker of its own stands before it, then from that marker on, as 1.7.8's
+  shape hid it (a marker in a secret-named variable's value or in a connection-string password,
+  `PRIVATE_KEY_HEADER = "-----BEGIN ..."`, pairs with nothing, as in 1.7.8, so the code after it
+  is sent); 1.7.8 sent all but its first line under a secret name.
+  Code between a BEGIN and an END marker string, a name between its literals included
+  (`+ privateKeyBase64Encoded +`), is sent as in 1.7.8 when the BEGIN marker's literal closes right
+  after the marker and its line breaks; one that goes on with key text first reads as a key.
+- An armored PGP private key block (`-----BEGIN PGP PRIVATE KEY BLOCK-----`) is redacted as a PEM
+  private key is, in code and configuration files; with its checksum line and `Version:` or
+  `Comment:` headers it is written as a key for the line-range and cap rules below. 1.7.8 sent
+  it. A PGP public key block is sent as written.
+- In a code file that starts with a UTF-8 byte-order mark, a typed secret declaration on line 1
+  (`SECRET_KEY: Final = "..."`) is redacted.
+- In a YAML or TOML file, a list or table under a secret key that goes on below its line
+  (`api_keys = [`) is redacted to its closing line; in an INI, `.cfg`, `.conf`, `.properties` or
+  `.env` file only that line is, as before. A comment inside the list that holds `]` or `}`
+  does not end it; in YAML a `#` or an apostrophe inside an unquoted item (`k#1`, `o'neil`) is
+  part of the item, so a list that closes on its key's line redacts only that line, and `''`
+  inside a single-quoted item is an apostrophe. In YAML, after `key:`, a tag or an anchor
+  before the list, map or block (`api_keys: &keys [`, `private_key: !!binary |`) is passed over.
+- A configuration file is known by its suffix in any letter case (`application.YML`), and the
+  template name `env.example` in any letter case too, so their secret settings are redacted.
+- In a code file too, a line range that starts or ends inside a PEM private key written as a key
+  sends that key's lines as `<redacted>`.
+- A PEM private key written as a key on one line that the 2,600-character cap, or a claim's share,
+  would cut is hidden whole first, also in a file whose lines end in a lone `\r`; 1.7.8 sent the
+  part before the cut. A key whose line breaks are written as XML's `&#10;` or `&#xD;` counts as
+  written as a key, so a cut or a line range sends none of it either.
+- Code audit: a PEM private key written as a key that the cut between two units splits is sent
+  as `<redacted>` lines; 1.7.8 sent its lines.
+- CI triage: a PEM private key, or an armored PGP private key block, in a failed step's log, or
+  in a JUnit failure's message or text,
+  is redacted from its BEGIN marker to the next END marker when key text follows the BEGIN
+  marker: every line between is sent as `<redacted>`, whatever it holds (behind pytest's `E` or
+  another per-line prefix, in a `-vv` diff of a list or a dict, in `pprint`'s or Node's quoted
+  form, with another job's line in between); 1.7.8 sent its lines. A marker is found also with
+  control or invisible characters inside it (a UTF-16 log without a byte-order mark). `PRIVACY.md`
+  has the rule.
+- CI triage: a secret declared with a string type is also redacted behind a line's leading marks
+  (`+API_TOKEN: str = "..."`; a diff's `+` or `-`, pytest's `>` or `E`, a line number, `|`, `#`),
+  in log lines and in the change excerpt.
+- CI triage: the name of a Windows home folder is shown as `<user>` with `Users` in any letter
+  case, written with `\`, `\\` or `/` (`c:\users\x`, `C:\\Users\\x`, `c:/users/x`); written with
+  `/`, only where the drive letter is not right after a letter, a digit or `_`.
+
+**Spec drift.**
+- A Python file that starts with a byte-order mark is indexed, and its docstrings read, so a map
+  entry that names one of its functions, classes or constants, or a route it defines, is checked
+  and its code sent (1.7.8 reported it not found and left it unchecked), a `config:` entry
+  also shows that file's reads of the setting, and a route it mounts from another file
+  (`include_router(..., prefix=...)`, `register_blueprint`, Django's `include()`) now has its
+  prefix, so a `route:` entry written without it, which 1.7.8 checked, is reported not found; a line
+  range into it, and code audit's units of it, have their comments and docstrings removed, as in
+  any Python file; 1.7.8 sent its docstrings.
+- One claim's failed first request no longer stops the others being asked again (code audit too).
+- `--dry-run --out` in a folder whose path is not valid UTF-8 writes its plan (such a byte as `?`)
+  when the map has a problem, instead of a traceback.
+- `validate_spec_map` lists the first 20 problem lines and names a file that lists them all;
+  `problems_total` counts them.
+- `check_spec_drift`, `validate_spec_map`, `preview_spec_check` and `draft_spec_map` (with `docs`)
+  show the notes the command line prints about indexing the code, such as code files whose names
+  are not valid UTF-8 or a YAML config that could not be parsed (`index_notes`): the first 10, then
+  `... and N more`, which the command line now prints too.
+- The spec finder runs git with `LC_ALL=C` and decides "outside a repository" as the code audit
+  does when git finds no repository on its way up, so with git in another language an empty `.git`, a `GIT_CEILING_DIRECTORIES` entry or a
+  mount point above the project no longer stops it; a repository git cannot read stops it with
+  git's message, and so does a `.git` folder in the project or above it that is not empty but that
+  git does not take for a repository (its HEAD gone), also with git in English, where 1.7.8 listed
+  the files there; naming the spec in `docs` still works.
+
+**CI triage.**
+- A matrix whose step names differ only by a pre-release version (`3.14-dev`, `3.13.0-beta.4`,
+  `1.23rc1`, `22-ea`, `23-nightly`) is one failure again, as in 1.7.7. A pre-release word written
+  as a word of its own (`3.13 beta`) still keeps two names apart.
+- A GitHub-hosted Windows workspace written with `/` (`D:/a/<r>/<r>/`) is removed from log paths.
+  Git Bash's `/d/a/...` is still left as written.
+- No workspace is cut out of a URL: `file:///home/you/work/r/r/x` is sent as
+  `file:///home/<user>/work/r/r/x`, where 1.7.8 sent `file://x`. A workspace path after a URL in
+  the same JSON or `key=value` text is cut: a GitHub-hosted or another CI's as in 1.7.8, and now
+  a container job's (`/__w/<a>/<b>/`) or a self-hosted runner's (`_work/<a>/<b>/`) too, which
+  1.7.8 left as written there.
+- A CI log or JUnit report whose file name is not valid UTF-8 can be previewed and triaged; 1.7.8
+  failed with an internal error.
+- `triage_ci_failure`'s output schema says what `complete` means: every failed job's log read and
+  every failure answered.
+
+**Code audit.**
+- A rule file that `draft_rule_map` finds but cannot reach (a folder under `.claude/rules` that
+  can be listed but not entered, a link loop, a link to nothing) is left out with a note naming
+  it, and the other rule files are drafted, on every Python version, in git and outside it; on
+  such a folder 1.7.8 failed with a permission error. With `docs` naming the folder that holds
+  it, it is left out with a warning; a link there that can be followed is left out without one,
+  as before.
+- A code file whose name is not valid UTF-8, in git or outside it, is left out of an audit with a
+  note naming it when git lists it or its folder can be listed, on the command line (stderr) and as a `note:` line in `validate_rule_map`,
+  `preview_code_audit` and `check_code_rules`. Outside git, 1.7.8 crashed on it.
+- A code file in scope that cannot be read (no read permission, or in a folder that cannot be
+  entered) is left out with a note naming it, and the rest of the audit runs (except as *Not fixed*
+  says): in every scope when
+  git lists the file or, outside git, its folder can be listed. 1.7.8
+  stopped with a permission error, or, auditing the change, left it and the changed files git
+  listed after it out without a word. When git cannot compare the change for another reason, the
+  audit now stops with git's message instead of auditing part of it.
+- Command line: `--draft-map --docs` leaves out a named rule file that does not exist or cannot
+  be read (a link to nothing, a link loop, no read permission) with a line on stderr, and drafts
+  the others. 1.7.8 gave a traceback for one it had no permission to read and said nothing of
+  one that did not exist.
+- Auditing the uncommitted change on a branch with no commit yet (a new repository,
+  `git checkout --orphan`), the files already added with `git add` are audited too; they were
+  left out without a note.
+- A rule in a `CLAUDE.md` or `AGENTS.md` right in `.claude/`, `.cursor/` or `.clinerules/`, or
+  anywhere under `.claude/rules/` or `.cursor/rules/`, gets
+  the scope of the folder that holds that agent folder (the whole project for `.claude/CLAUDE.md`),
+  not one that matches no code; outside git, `.claude/CLAUDE.md` is found.
+
+**MCP server.**
+- A tool argument that holds a NUL or a lone surrogate (such as `\ud800`) gives a tool error
+  naming the argument and the character, not an internal error (-32603). A `\udc80` to `\udcff`
+  escape, a byte of a file name that is not valid UTF-8, is still accepted, and on Windows a lone
+  surrogate is too.
+- On Python 3.12 and older, a path in a tool argument that is, or passes through, a link loop
+  gives a tool error naming the path, not an internal error (-32603).
+
+**Documentation.** `docs/clients.md` points to the generated how-to page for the size of the
+skills and the tool list, instead of figures that had gone stale.
+
+**What is sent changes only where it should.** Measured offline against 1.7.8: the states of
+jevmcp's own spec map as 1.7.8 shipped it (823), a Java project's two maps (115 and 131) and code
+audit's scoring corpus (126) are byte-identical; of the CI corpus's 121 states, 116 are, and the
+other 5 hold a `D:/a/...` or `file://` path, or a Windows home folder written with doubled
+backslashes, read as above.
+
+**jevmcp's own spec map** pairs every new or changed sentence of `PRIVACY.md` and `docs/tools.md`
+with the code that shows it: 1,080 entries, 895 of them checked claims. Its line ranges were
+moved to the 1.7.9 code.
+
+**How it was tested.** Every behaviour change has a regression test that fails on the 1.7.8 code
+and passes on this release's; each family's fixes were then attacked by a second agent told to
+break them, and what it found was fixed. 2,732 automated tests (one is skipped unless a file owned
+by another user exists).
+
+**Not fixed:**
+- Spec drift and code audit: a `PWD=` path right after a `;` is still redacted
+  (`export HOME=/root; PWD=/srv/app`), as ODBC's `UID=x;PWD=...` password is. In a CI log line or
+  a line of CI triage's change excerpt, a `PWD=` path that follows another `key=value` or a quote
+  is still redacted when it is inside a home folder (`ENV HOME=/home/you PWD=/home/you`), as the
+  folder's name is replaced by `<user>` first, or inside a CI workspace or the project folder
+  (`ENV LANG=C PWD=/__w/r/r/src/app`), as that prefix is removed first.
+- CI triage: a PEM private key is redacted only up to a whole END marker. Sent as written: the
+  key lines pytest shows of a long diff it cuts short without `-vv` (`...Full output truncated`),
+  a key whose END marker `pprint` splits inside a `bytes` value, a key each of whose lines
+  carries other text after it (one JSON log line per key line), and a key whose body does not
+  start within two lines of its BEGIN line.
+- CI triage: a typed secret declaration behind a word prefix (docker compose's `web-1  |`) is
+  sent as written, and so is the name in Git Bash's or WSL's lower-case `/c/users/x`. A home
+  folder's name is replaced only up to its first space (`C:\Users\John Doe\x` is sent as
+  `C:\Users\<user> Doe\x`), as in 1.7.8.
+- CI triage: a private key whose marker is broken across two lines, or holds a tab, a no-break
+  space or another visible character, is sent. Under a PGP block's BEGIN line only empty lines
+  and the headers `Version:`, `Comment:`, `MessageID:`, `Hash:` and `Charset:` (at the start of
+  the line or after a space or a tab) are passed over when looking for its body.
+- CI triage: a file that an error line names only by a `file://` URL (a Node ESM stack frame,
+  Kotlin's `e: file:///...`) is not among the files the errors name.
+- Connection strings: a password after a `;` is read as in 1.7.8, to `&`, a space or a quote; what
+  follows that is sent (`Password=Hunter22 x;` reads `Password=<redacted> x;`), and a value with
+  fewer than four characters before it is sent whole (`Password=P&ssw0rd!;`). A wider rule was
+  tried in this release and taken back, as each change to it was found to send something else.
+  A `pwd=` value in plain quotes (`Pwd='...'`) is sent as written, and when a `;` and a space
+  stand between two passwords in one string, the second may be sent as written
+  (`Server=db;Password=abcd; Pwd=Hunter22;`).
+- A PEM private key with other text on its lines (a Kotlin or Scala `|` margin, one appended a
+  statement per line as `key += "..."`, one in comment lines) is not written as a key: code
+  audit sends it when a unit cut splits it, and spec drift when a line range into a code file
+  starts or ends inside it. Appended to a secret-named variable, it is sent but for its first
+  line. A PGP block with a header other than `Version:` or `Comment:` is not written as a key
+  either.
+- A code or configuration file saved as UTF-16 is sent with a NUL between its characters and no
+  secret in it redacted. A code file with an upper-case suffix (`UPPER.PY`) is not indexed by
+  spec drift and keeps its comments.
+- Code audit: auditing the change stops with `N changed files cannot be read, too many for git to
+  leave out of the comparison` when more changed files that cannot be read (of any kind, each in a
+  folder that can be entered) are in the change than fit on git's command line, tens of thousands
+  on Linux; 1.7.8
+  audited the changed files git listed before the first of them.
+- Code audit: a file that the file list does not hold (outside git, one in a folder that cannot be
+  listed) is left out without a note, in every scope, also when `files` names it, as in 1.7.8.
+- On Python 3.13 a link loop named in a tool argument is answered as in 1.7.8, not with the new
+  error.
+
 ## 1.7.8 — 2026-10-07
 
 **The known issues of 1.7.7, fixed.** The 1.7.7 entry below ends with a list of known issues: four

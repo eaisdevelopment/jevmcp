@@ -60,7 +60,17 @@ started for, and not your home or a filesystem root.
 
 Every argument is checked against the tool's input schema before the tool runs: an unknown
 argument, a wrong type, a value outside its allowed length, pattern or range, or too many list
-items is refused with a message that names the argument.
+items is refused with a message that names the argument. So is a string argument, or an item of
+a list of strings, that holds a NUL or a lone surrogate such as `\ud800` (`<argument> holds
+'<char>' (character N), which no file name or command on this system can hold: a NUL.`, or
+`... a lone surrogate - half of a character.`); a `\udc80` to `\udcff` escape, which stands for a
+byte of a file name that is not valid UTF-8, is accepted, and on Windows, where a file name can
+hold a lone surrogate, only the NUL is refused. On Python 3.12 and older, a path in an
+argument that is, or passes through, a link loop is answered with the tool error `'<path>' cannot
+be read: it is, or passes through, a link that leads back to itself (a link loop).`, except `draft_spec_map`'s
+`docs`, which answers `spec not found in the project: <path>` unless a folder stands before it in
+`docs`; on Python 3.13 nothing changes: the
+tool answers as in 1.7.8.
 
 ---
 
@@ -174,6 +184,7 @@ it as a second text block of JSON for clients that do not read structured output
 | `review_groups` | array of objects | Every place to open for `review` from P(drifted) 0.3 up, most likely first, each with `code` (the first `code_refs` entry its claims share), `claims`, `shown` (how many of them `flagged` lists) and `p_drifted_max`. It is cut to fit, never below the places `flagged` lists, and the text says when it stops short; `to_read.groups` counts every place. |
 | `unverifiable_by_reason` | array of objects | The `??` claims counted by why they came back `??`, each with `reason`, `claims` and `at` (up to five `doc:line`). |
 | `warnings` | array of strings | Spec files in a folder the map's `specs` names that were **not** used: a skipped folder that holds some, a link not followed, a name that is not valid UTF-8, a file that cannot be read. The text shows them in a `WARNINGS - spec files in a named folder that were NOT used` block. Tell the user; name such a file or folder in `specs` to have it checked. |
+| `index_notes` | array of strings | The notes indexing the code printed, the first 10 then `... and N more`, as in `validate_spec_map`; the text has them as `note:` lines. |
 
 Each `flagged` item has `label` (`DRIFT` / `review` / `??`), `doc`, `line`, `claim`,
 `p_drifted`, `severity` (0–3), `value_mismatch` (may be null), `code_refs`, `why` and `samples`
@@ -186,7 +197,9 @@ decided by agreement only when every one of those answers came back, all agree, 
 one that cannot be read, credits used up — the claim keeps its first answer's label and why, gets
 a `note`, and the check is not complete. The failure is listed in `not_checked` by the claim's
 name, except when a stop cut the asking again, while asking again or before it: that gives one
-line for all the claims it cut, with their number. After a
+line for all the claims it cut, with their number. A claim whose first request failed is
+listed on its own, and the other claims the first answers did not settle are still asked again:
+only a stop (a rejected key, credits used up) or a cancellation ends asking again. After a
 cancellation, a rejected key or credits running out, no new request starts, for a first answer or
 for asking again; requests already in flight finish. Every answer that came back counts, whatever
 its claim's place in the order: it is labelled, counted in `checked` and `counts`, paid for in
@@ -278,8 +291,18 @@ OK - the map is complete and every entry resolves.
 ```
 
 If anything is wrong, the last line is replaced by a `PROBLEMS (n) - fix these; the map is not
-ready:` block listing each one. With `strict: false` the same findings appear as `note:` lines
-instead and do not make the map unready.
+ready:` block: problems about the map's `specs` first, then the `(strict)` coverage problems, then
+the entries' problems. It lists the first 20 lines; past 20 it ends with
+`... and M more lines (all N lines are listed in <file>)`, a file in the server's private folder
+(`last-validate-map-problems-<project>-<tag>.json`) that lists every line. With `strict: false`
+the same findings appear as `note:` lines instead and do not make the map unready.
+
+When indexing the code printed notes, the text has them as `note:` lines, the first 10 then
+`... and N more`, as the command line prints them: for example code or config files left out
+because their names are not valid UTF-8, or a YAML config or OpenAPI file that could not be parsed.
+They are not a list of every file that could not be read: a Python file with a syntax error, or one
+that is not UTF-8, is left out without a note. `check_spec_drift`, `preview_spec_check` and
+`draft_spec_map` with `docs` show the same lines, and all four have them in `index_notes`.
 
 When some claims will probably come back `??`, a line after the first says so (`N of M claims
 will probably come back '??' - not a pass, and such claims often hold real problems: keep them,
@@ -297,7 +320,9 @@ which changes only the `line` fields).
 **Structured fields:** `project`, `map`, `ready` (boolean — no problems), `entries_to_check`,
 `excluded`, `full_check_cost_usd`, `full_check_cost_usd_max` (if every claim is asked again),
 `samples`, `likely_unverifiable` (array; one line per spec line and reason, with what to do —
-entries that share both are listed once, with how many there are), `problems` (array), `notes` (array; empty when
+entries that share both are listed once, with how many there are), `problems` (array, cut to fit,
+about 10,000 characters), `problems_total` (integer — every problem line, listed or not),
+`index_notes` (array — the notes from indexing the code, above), `notes` (array; empty when
 `strict` is true, because the notes have become problems), `warnings` (array — as in
 `check_spec_drift`) and `moved_entries` (integer — entries
 whose sentence is now on another line of the spec).
@@ -339,7 +364,7 @@ changed files). A claim whose sentence has moved shows both lines:
 
 **Structured fields:** `project`, `map`, `model`, `claims` (one `{doc, line, map_line}` per claim
 shown — `map_line` is the line the map stores when the sentence has moved since, else null; the
-states are in the text) and `warnings` (as in `check_spec_drift`).
+states are in the text), `warnings` and `index_notes` (as in `check_spec_drift`).
 
 If nothing matches, the text starts `no claim matches (a line number is the sentence's line in
 the spec now, or the line the map stores for it; files are paths relative to the project).` and
@@ -488,6 +513,7 @@ it: validate the map after the spec changes.
 | `warnings` | array of strings | About a named folder: files git does not list (it ignores them, or they belong to another repository) that were used anyway; and what was **not** used — a skipped folder that holds spec files, a link not followed, a name that is not valid UTF-8, a file that cannot be read; or that git could not be asked. Also an `out` inside a symbolic link to a folder: the map really lands in the folder the link leads to and stays there when the link is repointed. Show each to the user. |
 | `candidates` | array of objects | Without `docs`: every file that looks like a spec, with the hints. Each has `path`, `title` (the front matter's title, a `Title:` header field, else its first heading, or null), `last_commit` (date, or null when not committed or not found), `committed` (null when git cannot be run in a git project), `last_commit_not_found` (why `last_commit` is null for a committed file - `git log` was stopped after 60 s before it got there, or git is not installed - or null), `looks_historical` (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version), `self_declared` (the line at its top that says it is out of date, or null), `family` (the document it is a version of), `family_size`, `newest_in_family` (null when it cannot be told) and `newest_decided_by`. |
 | `families` | array of objects | Without `docs`: the documents with several versions — `family`, `members`, `newest` (or null), `decided_by`, `last_commits` (member → date), `last_commit_not_found` (member → why its last commit is not known; empty when `git log` ran to the end). |
+| `index_notes` | array of strings | With `docs`: the notes indexing the code printed, as in `validate_spec_map`; the text has them as `note:` lines after the index line. |
 | `next_step` | string | What to do next. |
 
 **Errors:** `draft_spec_map needs out when docs is given` · `X already exists and may hold a
@@ -577,7 +603,9 @@ or a secret file, is refused with `<path> is not a log a check may read.`, the p
 Files in the server's own results folder, or in another session's `jevmcp-*` or `claude-*`
 temporary folder, are refused. At most the last 25 MB of a log is read. A log or JUnit report
 saved as UTF-16 with a byte-order mark (what `>` and `Out-File` write in Windows PowerShell 5.1) is
-read as UTF-16; any other is read as UTF-8, where a byte that is not UTF-8 becomes `�`. The inbox
+read as UTF-16; any other is read as UTF-8, where a byte that is not UTF-8 becomes `�`. A log or
+report whose own file name is not valid UTF-8 is read too: such a byte is left out of a log's job
+name and shown as `�` in a JUnit report's step name. The inbox
 is a folder the server creates with mode 0700 on first use and removes when it stops; its absolute
 path is in the preview's output (`inbox`) and in the error for a file outside the project.
 
@@ -608,12 +636,17 @@ matrix) are merged into one failure with several jobs, so they cost one request.
 compared with case, numbers, hex ids and OS names ignored (`ubuntu`, `macos` and `windows`, each also
 with `-latest` or a version, and in the step name `linux` too, so `${{ runner.os }}`'s `Linux`,
 `macOS` and `Windows` count as one), a version counting as one number however many parts it has
-(`Go 1.22` and `Go 1.22.3`; in the first error each run of digits is one number, so there `1.22` and
-`1.22.3` differ, as in 1.7.7), so a matrix whose step name
+(`Go 1.22` and `Go 1.22.3`, Python's free-threaded `3.13t` too; in the first error each run of
+digits is one number, so there `1.22` and `1.22.3` differ, as in 1.7.7), also with a pre-release
+suffix right after it, with numbers after the suffix or not: the word `dev`, `alpha`, `beta`, `rc`,
+`pre`, `preview`, `ea`, `nightly` or `canary`, or `a` or `b` followed by a number (`3.14-dev`,
+`3.14.0-rc.1`, `3.13.0-beta.4`, `3.13.0a4`, `1.23rc1`, `22-ea`, `23-nightly`,
+`9.0.100-preview.7.24407.12`), so a matrix whose step name
 carries its value (`Set up Python 3.12`, `Run tox -e py312`, `Test on Linux`) is still one failure;
 steps whose names differ in words (`Install Valgrind` and `Install system dependencies`, or a
-matrix value that is a word, an abbreviation such as `win`, `osx` or `darwin` included) are
-separate failures, each sent as its own request. A merged failure
+matrix value that is a word, an abbreviation such as `win`, `osx` or `darwin` included, a
+pre-release word written as a word of its own, `3.13 beta`, or with no version before it,
+`api-dev`) or by a letter alone (`Step 2a` and `Step 2b`) are separate failures, each sent as its own request. A merged failure
 shows the first job's step name, run time and cancel facts. On a GitHub run,
 a job cancelled next to a failed one is named in a note and not triaged: one of the matrix of a
 job that GitHub reports as failed or timed out, that ended between 5 seconds before and 5 minutes
@@ -685,8 +718,11 @@ CI's `build/<o>/<r>/` in the `travis` user's home folder (under `/home` or `/Use
 `/var/lib/buildkite-agent/builds/<a>/<o>/<p>/`, TeamCity's `/opt/buildAgent/work/<id>/` (or
 `/opt/TeamCity/buildAgent/work/<id>/`, and `X:\BuildAgent\work\<id>\`) and a line that starts
 with `/workspace/`: only these exact paths, not every workspace of those CIs. A GitHub-hosted
-Windows workspace written with `/` (`D:/a/<r>/<r>/...`, or Git Bash's `/d/a/<r>/<r>/...`) is left
-as written, as in 1.7.7, so its paths are not matched to the project's files.
+Windows workspace written with `/` (`D:/a/<r>/<r>/...`, as Go and Vitest print it on
+`windows-latest`) is removed too, where a path starts, as the two cuts below are (it is not cut
+right after a letter, a digit, `_`, `.`, `~`, `-` or `/`, nor where its `<r>` holds `:`, `;` or
+`,`: `PATH=D:/a/r/r;C:/x` is left as written), and never under the runner's own folders; Git Bash's
+`/d/a/<r>/<r>/...` is left as written, so its paths are not matched to the project's files.
 
 The workspace of a GitHub container job (`/__w/<a>/<b>/`) and of a self-hosted runner or Azure
 Pipelines agent (`<install folder>/_work/<a>/<b>/` on Linux and macOS, `X:\...\_work\<a>\<b>\` or
@@ -712,7 +748,7 @@ never passes through a runner folder, so a path inside one is kept whole even wi
 in it. That holds for a runner installed in `~/work` or one folder below it
 (`/home/<user>/work/_work/...`, `/home/<user>/work/actions-runner/_work/...`), or in `X:\a\` or one
 folder below it (written with `\`: written with `/`, `X:/a/...` or `/x/a/...`, it is left as
-written, as a hosted path is), and for a path printed right after a log marker such as `##[error]`
+written), and for a path printed right after a log marker such as `##[error]`
 or `[command]`. A runner installed two or more folders below `~/work` or `X:\a\`
 (`~/work/<x>/<y>/_work/`, `X:\a\<x>\<y>\_work\`) is taken for GitHub's hosted workspace, so its
 paths keep `_work/<a>/<b>/` in front and are not matched to the project's files; on a runner
@@ -729,18 +765,24 @@ another CI's path too (`/workspace/x/_work/a/b/c.go` and
 comes off, as in 1.7.7 (`/workspace/opt/buildAgent/work/1/x` reads `opt/buildAgent/work/1/x`). A
 GitHub-hosted, Docker action's, Jenkins or CircleCI path after it is still cut out of the middle, as
 in 1.7.7 (`/workspace/var/lib/jenkins/workspace/j/x` reads `/workspacex`). A relative path is not
-touched. Neither of these two cuts applies inside a URL: when the path's own word (the characters
-before it, back to a space or a tab) holds `://`, the path is left as written
-(`https://x.com/_work/...`, `file:///__w/...`, `file:///C:/.../_work/...` and
-`https://[::1]/_work/...`); a URL earlier on the line, before a space, does not stop the cut
+touched. No workspace cut, of any CI, applies inside a URL: when the path's own word (the
+characters before it, back to a space, a tab, a quote, a backtick, `,`, `;`, `(`, `)`, `{`, `}`,
+`<`, `>` or `|`; a square bracket does not end it) holds `://`, the path is left as written
+(`https://x.com/_work/...`, `file:///__w/...`, `file:///C:/.../_work/...`,
+`https://[::1]/_work/...`, and `file:///home/you/work/r/r/x`, sent as
+`file:///home/<user>/work/r/r/x`, which 1.7.8 cut to `file://x`); a URL earlier on the line, before
+a space, does not stop the cut
 (`git clone https://github.com/acme/lib /opt/runner/_work/w/w/vendor/lib` reads
-`git clone https://github.com/acme/lib vendor/lib`). A path written right after `:` with no `://`
+`git clone https://github.com/acme/lib vendor/lib`), and nor does one earlier in the same JSON or
+`key=value` text (`url=https://x.io;cwd=/home/you/work/r/r/pkg` reads `url=https://x.io;cwd=pkg`,
+as in 1.7.8). A path written right after `:` with no `://`
 (`file:/opt/r/_work/a/b/x.py`) is cut, and reads `file:x.py`. The runner's own folders beside the
 workspace (`_actions`, which holds an action's own code, `_temp` and `_tool`, which hold a Python or
 Node it installed, and Azure Pipelines' `_tasks`, which holds a task's own script) are not the
 project's, under each of these workspaces: their paths are kept whole, a home folder in them shown
 as `<user>`, and they are neither offered as the project's traceback frame nor named among the files
-the errors name.
+the errors name. Nor is a file that an error line names only by a `file://` URL (a Node ESM stack
+frame, Kotlin's `e: file:///...`).
 
 **Structured fields:**
 
@@ -827,9 +869,11 @@ The fields:
 Every line is cleaned before it is sent: colour codes, GitHub's line timestamps and invisible
 characters removed, the CI runner's workspace path (or, for a log from a file, the project folder)
 removed, home folders shown as `<user>`, email addresses as `<email>`, and secret-looking values
-redacted. The change leaves out secret files and
+redacted, a PEM private key or an armored PGP private key block from its BEGIN marker to its END
+marker, over several log lines as
+`<redacted>` lines (see [PRIVACY.md](../PRIVACY.md) for where a key starts and ends). The change leaves out secret files and
 comment-only lines, and its lines are code: only the workspace paths 1.7.7 removed are removed
-from them, the GitHub-hosted one as 1.7.8 reads it, so a container job's `/__w/<a>/<b>/` or a
+from them, the GitHub-hosted one as 1.7.8 reads it but never inside a URL (see above), so a container job's `/__w/<a>/<b>/` or a
 self-hosted runner's `_work/<a>/<b>/` there is sent as written, and so is a hosted path under
 `_tasks` or of a runner installed in `~/work` or `X:\a\`, or one folder below either, which 1.7.7
 cut; see [PRIVACY.md](../PRIVACY.md). The questions ask whether the change caused
@@ -864,7 +908,7 @@ block.
 | `failures` | integer | How many distinct failures there were. |
 | `counts` | object | `CHANGE`, `review`, `??` — a count each. |
 | `cost_usd` | number | What this call cost. |
-| `complete` | boolean | True only when every failure was checked and every failed job's log was read. |
+| `complete` | boolean | True only when every failed job's log was read (false when a note starts `INCOMPLETE`) and every failure was answered: nothing stopped and no request failed. Each failure is asked once. |
 | `not_checked` | array of strings | What stopped or failed: why the run stopped, when it did, comes first; then one line per failure whose request failed. A stop adds that one line, none per failure: a failure it left unsent is a result labelled `not checked` (as is a failure whose request failed). Cut to fit, about 10,000 characters. |
 | `not_checked_total` | integer | How many lines `not_checked` holds, listed or not — not how many failures went unchecked. |
 | `jobs_not_checked` | array of strings | Failed jobs whose logs were not read: nothing was sent for them and they are not triaged. Not a pass. |
@@ -1016,9 +1060,16 @@ folders are matched with `/` on every system, and outside git the file list name
 every system, as git does, so on Windows these files are found there too, and the files a code audit
 reads there are named with `/`. Outside git, the walk for `.claude/rules` and `.cursor/rules`
 follows no link: a linked `.claude` or `.cursor` folder (wherever it leads, inside the project too),
-a linked `rules` folder, a linked file and a file that resolves outside the project are not listed,
+a linked `rules` folder, a linked file that can be followed and a file that resolves outside the
+project are not listed,
 so `validate_rule_map` never names them as rule files in the project and `preview_code_audit`'s file
-list does not count them. In a git repository, git's list is used as before.
+list does not count them. A link that leads nowhere (a link to nothing or a link loop) in those
+folders, or as `.claude/CLAUDE.md`, is listed, as git lists it, so `draft_rule_map` leaves it out
+with a note and `validate_rule_map` names it among the rule files the map does not use. Outside
+git, Claude Code's `.claude/CLAUDE.md` (in any folder) is found
+too, as it is in git: never through a link that can be followed, and never in the copies under
+`.claude/worktrees`. In a
+git repository, git's list is used as before.
 
 A sentence becomes an entry when it reads as a rule: it has a rule word (must, should, avoid,
 prefer, and some Chinese, Japanese and Korean ones such as 必须, 必ず or 해야), starts with an imperative
@@ -1082,7 +1133,9 @@ message in the conversation must be persisted before it is rendered."). A rule a
 docstrings gets `keep_comments: true`. The scope is guessed from the rule's words (a language
 named in it, else every code file type in the project), never from a rule file's front matter; a
 rule in a nested `AGENTS.md` or `CLAUDE.md` is limited to its own folder, written with `/` on every
-system; and a rule about test code gets `tests-only` ("Don't
+system, except one right in a coding agent's folder (`.claude/`, `.cursor/`, `.clinerules/`) or
+anywhere under its rules folder (`.claude/rules/`, `.cursor/rules/`), which is limited to the folder that holds that agent folder: the whole project
+for `.claude/CLAUDE.md`, `svc/**` for `svc/.claude/CLAUDE.md`; and a rule about test code gets `tests-only` ("Don't
 add tests that only check a mock"), while one that asks for tests of other code ("Every bug fix
 adds a regression test") does not, nor does one with words about production code, CI or build
 logs, jobs, runs or failures, or test logs, output, results, runs, reports, jobs or steps, even
@@ -1102,7 +1155,17 @@ process, for a linter). When there are any, further lines count the draft entrie
 `descriptive` (no rule wording, kept because the file was named: exclude them unless they state a
 rule for the code) and `conditional` (they tend to come back as false alarms: name a trigger the
 code shows instead, like "Every os.environ[...] read of the API key goes through env_key()."). A
-line names the rule files that were left out, when a name was not valid UTF-8; `from N file(s)`
+line names the rule files that were left out, when a name was not valid UTF-8 or when a rule file
+it found could not be read (a folder under `.claude/rules` or `.clinerules` that can be listed but
+not entered, a link loop or a link to nothing), and the map is drafted from the others, on every
+Python version, in git and outside it. Inside a folder named in `docs` such files are left out
+with a warning: one names the links that lead nowhere (a loop or a missing target), one the files
+that could not be read (no read permission, or a folder on the way that cannot be entered, a
+link's target folder too). A link there that can be followed is never read, and is left out
+without a warning. A link to a file outside the project is never read. A file named in `docs`
+itself that cannot be read still fails the draft of this tool, `draft_rule_map`; the command line
+leaves it out with a line on stderr (see `--docs` under [the command line](#the-command-line)).
+`from N file(s)`
 counts only the files read, each once (`AGENTS.md` linked to `CLAUDE.md` is one file, and a file
 git lists that is gone from disk is not read). The map is written as UTF-8; a write that fails
 leaves no file behind.
@@ -1260,7 +1323,33 @@ up to such a ceiling or mount point, that is not empty but that git does not tak
 (its `HEAD` or `refs` gone, as a copy or sync tool that drops empty folders can leave it), whose
 ignored files cannot be told apart — and only code files (Python, JavaScript, TypeScript, Go, Rust,
 Java, Kotlin, Scala, Ruby, PHP, C#, C and C++, Swift, shell, SQL and similar); symbolic links,
-secret files and files over 1.5 MB are skipped. A rule covers the files its `scope` matches. A file
+secret files and files over 1.5 MB are skipped. A code file whose name is not valid UTF-8, in git or
+outside it, cannot be named in a request, so it is left out, with a note that names the ones a
+reviewed rule applies to in the scope audited (the bytes that are not UTF-8 shown as `�`): the
+command line prints it on stderr after a check, a dry run or `--validate`, and `validate_rule_map`,
+`preview_code_audit` and `check_code_rules` show it as a `note:` line. A code file that a
+reviewed rule's scope applies to and that
+cannot be read (no read permission, or in a folder that cannot be entered) is left out with a note
+that names it (`N code file(s) could not be read, so they were left out: ...`), on stderr after a
+check or a dry run and as a `note:` line in `preview_code_audit` and `check_code_rules`
+(validating a map reads no code, so it does not show this note), and the rest of the audit runs
+(unless, auditing the change, more changed files that cannot be read, of any kind and each in a
+folder that can be entered, are in the change than fit on git's command line, tens of thousands
+on Linux: then the audit stops with `N changed files cannot be read, too many for git to leave
+out of the comparison`): in every scope (`all`, `files`, and the change,
+with `base` or not) when the file list holds the file (git lists it, or outside git its folder
+can be listed). A file the list does not hold (in a folder that cannot be listed, which git does
+not list, or one git ignores) is not found and is left out without a note, also when `files`
+names it, as in 1.7.8. A file git lists that is gone from disk is left out without a note, and so
+is a name in `files` that does not exist. On the command line, a name in `--files` that is outside the project,
+behind a linked folder or too long to be a file name gets no note either, and is not audited;
+the MCP tools refuse a file outside the project. When git
+cannot compare the change for another reason, the audit stops with `git could not compare the
+change, so its changed lines are not known: <git's message> - name the files to audit, or audit
+every unit.` instead of auditing part of it. For the uncommitted change on a branch with no commit
+yet (a new repository, or a branch made with `git checkout --orphan`), every file git would commit
+is new and is audited whole: the files added with `git add` and the untracked files git does not
+ignore. A rule covers the files its `scope` matches. A file
 is split into units at its definitions, at the top level or indented up to four spaces, so a class's
 methods are units of their own (decorators, attributes such as `#[test]` and the comments right
 above a definition stay with it), and a unit longer than 2,600 characters is cut into windows. A
@@ -1326,7 +1415,8 @@ not complete.
 
 **Cost and duration:** charged on input tokens only, at $0.042 per million. A request is typically
 700 to 1,400 tokens, so about $0.00003 to $0.00006; a request the first answer did not settle is
-asked up to twice more, and is decided by agreement only when every answer came back. An audit of
+asked up to twice more, and is decided by agreement only when every answer came back; a request
+whose first try failed does not keep the others from being asked again. An audit of
 400 requests costs about $0.02. Up to 8 requests are asked at once; after a rejected key or credits
 running out, no new request of the audit starts.
 
@@ -1508,8 +1598,8 @@ is paired by line range.
 
 A code, config or OpenAPI file whose name (its path inside the folder checked) is not valid UTF-8
 cannot be named in a map or a request, so it is left out of the index, with a note that names it
-(the bytes that are not UTF-8 shown as `�`; the command line prints the note, the MCP tools do
-not), and a check, a dry run or a draft goes on without it. On the command line, a `--src` path
+(the bytes that are not UTF-8 shown as `�`; the command line prints the note, and the MCP tools
+show it in their text and in `index_notes`), and a check, a dry run or a draft goes on without it. On the command line, a `--src` path
 that is itself not valid UTF-8 stops a check, a dry run or a draft at once (exit 2): cd into the
 project and give `--src` as a path inside it, or leave it out.
 
@@ -1784,7 +1874,7 @@ uv run --script <plugin>/scripts/code_audit.py --map rule_map.json --src . --bas
 | Flag | Meaning |
 |---|---|
 | `--draft-map FILE` | Write a rule map from the project's own rule files, and stop. Refuses to overwrite; a write that fails leaves no file behind. A named rule file whose name is not valid UTF-8 is refused (exit 2); a found one is left out, in a git repository too, with a warning on stderr, and `from N file(s)` counts only the files read, each once. When it finds no rule file, it writes a map with no entries (`0 rule sentence(s) from 0 file(s)`): delete it and name the files in `--docs`. |
-| `--docs FILE [FILE ...]` | With `--draft-map`: these rule files instead of the ones it finds. Every sentence of a named file becomes an entry, a list item or a line that looks like code included; one with no rule wording is flagged `descriptive`. |
+| `--docs FILE [FILE ...]` | With `--draft-map`: these rule files instead of the ones it finds. Every sentence of a named file becomes an entry, a list item or a line that looks like code included; one with no rule wording is flagged `descriptive`. A named file that does not exist or cannot be read (a link to nothing, a link loop, no read permission, a folder on its way that cannot be entered) is left out with a line on stderr, `code_audit: <name> could not be read (<the system's words>), so it was left out; fix it if it holds rules.` (`fix its permissions` for a permission error), and the map is drafted from the others (exit 0); when none of them can be read, the map is written with no entries, and the rule files it would find are not used instead. A named folder is passed over without a word. |
 | `--map FILE` | The rule map. Default `rule_map.json`. |
 | `--validate` | Check the map and print the counts, problems and notes, without sending anything. |
 | `--base REF` / `--files FILE ...` / `--all` | The scope, as for `check_code_rules`; default the uncommitted changes. |

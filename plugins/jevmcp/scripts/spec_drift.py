@@ -330,18 +330,60 @@ _SECRET_PARAM = re.compile(r"""((?:[?&;"'`]|(?<![\w.\-])\w+=(?:'[^'\n]*'|\([^\s=
 # (`password=***, host=db`); never a password that only starts with one of those characters
 # (`%40dm1n%21x`, `$uperS3cret!`, `*Hunter22*`, `@dmin2024`, `([Hunt3r!`)
 _REGEX_ATOM = r"(?:\.|\\\\?[A-Za-z]|\[(?:\\.|[^\]\\])+\])(?:(?:[*+?]|\{\d+(?:,\d*)?\})\??)?"
+_REGEX_CLASS = r"\[(?=\^|[^\]]*?(?:\\.|[a-z]-[a-z]|[A-Z]-[A-Z]|\d-\d))(?:\\.|[^\]\\])+\]"
 _PARAM_PLACEHOLDER = re.compile(
     r"(?:\{\{[^{}]*\}\}|\{[^{};]*\}|#\{[^{}]*\}|\\\([^()]*\)|%\{\w+\}|%<\w+>[sdrvqx]?|<[^<>]*>|%(?:\(\w+\)|\d+\$)?[-+# 0]*(?:[1-9]\d*)?(?:\.\d+)?[sdrvqx]|%[A-Za-z_]\w*%|\$\d+"
     r"|\$(?:(?i:env):)?[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*)*(?:\{\w+\})?|\$\([\w.\-]+\)"
     r"|\$\(\$(?:(?i:env):)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\)|\*+)(?:\\[nrt])*[,).:]*"
     rf"|\((?:\?(?:P?<\w+>|:))?(?:{_REGEX_ATOM})+\)[*+?]?(?:\$|\\\\?[A-Za-z][*+?]?)*\\?[,).:]*"
-    rf"|\((?:\?(?:P?<\w+>|:))?(?:{_REGEX_ATOM})*\[\^(?:\\\\?[A-Za-z])*\\?")
+    rf"|\((?:\?(?:P?<\w+>|:))?(?:{_REGEX_ATOM})*\[\^(?:\\\\?[A-Za-z])*\\?"
+    # or a regular expression with no group that ends in an escape or a class with a quantifier: `password=\\w+`,
+    # `[A-Za-z0-9]+`; the class must hold a range, an escape or a leading `^`, as a password in brackets does not
+    rf"|(?:{_REGEX_ATOM})*(?:\\\\?[A-Za-z]|{_REGEX_CLASS})(?:[*+?]|\{{\d+(?:,\d*)?\}})\??\\?[,).:]*")
 # or when a quote or a space cut the value inside a `{...}`, a `#{...}`, a `<...>` or a shell's `$(...)` whose closer
 # follows on the line: `password={os.environ['PW']}`, `password=#{ENV['PW']}`, `Password=<your password>;`,
 # `password=$(cat /run/secrets/pw)`; never when a `;` or `&` cut it (`PWD={Hunt3r;`, `password=<Hunt3r&ssl=1`)
 _PARAM_OPENED = re.compile(r"#?\{\{?[^{}]*|<[^<>]*|\$\([\w.\-]*")
 _PARAM_CLOSER = {"{": re.compile(r"[^\n{}]*\}"), "#": re.compile(r"[^\n{}]*\}"), "<": re.compile(r"[^\n<>]*>"),
                  "$": re.compile(r"[^\n()]*\)")}
+# a PEM private key, or an armored PGP one (`-----BEGIN PGP PRIVATE KEY BLOCK-----`), from its BEGIN to the next END
+_PEM_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?"
+                      r"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+# what may stand between a PEM key's BEGIN and END where the key itself is written: base64 (with a run of 20 or more
+# of its characters), header lines (`Proc-Type: 4,ENCRYPTED`), quotes, `\n` escapes, XML's `&#10;` and `&#xD;` line
+# breaks and the `+`, `\`, `.` or `,` that join literals; `=` only as padding. In a PGP block also its checksum
+# (`=AbCd`: `=` before four base64 characters, after a space, a line's start or a quote) and a `Version:` or
+# `Comment:` line: whole from the line's start, a quote or a joining `+`, `.`, `,` and a quote that starts it, or
+# after a `\n` escape up to the next escape or quote (taken once, so the time stays linear)
+_PEM_WRITTEN = re.compile(r"""(?=[\s\S]*?[A-Za-z0-9+/]{20})"""
+                          r"""(?:[A-Za-z0-9+/\s"'`\\,.\-]|&\#(?:0*1[03]|x0*[aAdD]);|(?<=[A-Za-z0-9+/=])="""
+                          r"""|(?<=[\s"'`])=(?=[A-Za-z0-9+/]{4}(?![A-Za-z0-9+/=]))"""
+                          r"""|(?m:^)(?=([ \t]*(?:[+.,][ \t]*)?["'`]?(?:Version|Comment):[^\n]*))\1"""
+                          r"""|(?<=\\n)(?=((?:Version|Comment):[^\n\\"'`]*))\2"""
+                          r"""|(?:(?<=Proc-Type)|(?<=DEK-Info)):)*""")
+# Code that builds a key from a name: its BEGIN marker's literal closes right after the marker (after line breaks),
+# and a name stands outside the literals before the one that opens the END marker's
+# (`"-----BEGIN ...\n" + privateKeyBase64Encoded + "\n-----END ..."` is code that builds a key, as 1.7.8 read it)
+_PEM_PREFIX = r"(?:[rRbBuUfFL]{1,2}|u8|[@$])"
+_PEM_LITERAL = re.compile(r'@"(?:""|[^"])*"|' + _PEM_PREFIX + r'?(?:"""[\s\S]*?"""|' + r"'''[\s\S]*?'''|"
+                          + r'"(?:\\.|[^"\\\n])*"|' + r"'(?:\\.|[^'\\\n])*'|`[^`]*`)")
+
+
+def _written_between(text: str, a: int, b: int) -> bool:
+    """What stands between a BEGIN marker's end at `a` and an END marker at `b` is a key written as one (see
+    _PEM_WRITTEN and _PEM_LITERAL)."""
+    if not _PEM_WRITTEN.fullmatch(text, a, b):
+        return False
+    inner = text[a:b]
+    # line breaks and any escapes (`\n`, `\\n`, `\x0a`, `\u000a`, `\U0000000a`, `\012`, `\xA`, `\u{a}`) may close
+    # the BEGIN marker's literal
+    if not (q := re.match(r"(?:\\{1,2}(?:[xuUN]\{[^}\n]*\}|[xuU][0-9a-fA-F]+|[0-7]{1,3}|\S)|\s)*([\"'`])", inner)):
+        return True                                                 # its literal goes on: a key
+    inner = inner[q.end():max(inner.rfind(c) for c in "\"'`")]     # up to the quote that opens the END's literal
+    left = re.sub(r"(?<![\w$])" + _PEM_PREFIX + "$", "", _PEM_LITERAL.sub("", inner).rstrip())   # (its prefix)
+    return not re.search(r"[A-Za-z0-9_$]", left)
+
+
 _SECRET_SHAPES = [re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{8,}"),     # Stripe
                   re.compile(r"\b(?:ghp|gho|ghu|ghs|github_pat)_[0-9A-Za-z_]{20,}"),     # GitHub
                   re.compile(r"\bxox[abprs]-[0-9A-Za-z-]{10,}"),                          # Slack
@@ -350,7 +392,7 @@ _SECRET_SHAPES = [re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[0-9A-Za-z]{8,}"),  
                   re.compile(r"://[^/\s:@]+:[^/\s@]+@"),                                   # user:password@ in URLs
                   re.compile(r"eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}"),
                   re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
-                  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+                  _PEM_KEY,
                   re.compile(r"\bgl(?:pat|dt|rt|ptt|cbt|imt|soat|ft|oas)-[0-9A-Za-z_\-]{20,}"),   # GitLab
                   re.compile(r"\bnpm_[0-9A-Za-z]{36}\b"),                                  # npm
                   re.compile(r"\bpypi-[0-9A-Za-z_\-]{50,}"),                              # PyPI
@@ -365,13 +407,30 @@ def redact(text: str) -> str:
     reveal nothing and are kept - they are often what the claim is about. A default
     written into one (`${DB_PASSWORD:hunter2}`) or text next to one is not kept.
     """
-    # in backticks (a JavaScript template string) `${A-B}` is code, never a default: colonless=False
-    text = _SECRET_LITERAL.sub(lambda m: f"{m.group(1)}{m.group(2)}{_redacted(m.group(3), m.group(2) != '`')}"
-                                         f"{m.group(2)}", text)
-    text = _SECRET_PARAM.sub(_param_redacted, text)
+    # a PEM private key first: a secret-named variable's rule would take its BEGIN line alone, and the shape would
+    # then not see the key (`PRIVATE_KEY = "-----BEGIN ...\n" \` and its other lines as joined literals); only a
+    # key written as one (see _written_key), never code between a BEGIN and an END marker string
+    text = _hide_written_keys(text)
+    # a line that starts with a byte-order mark (line 1 of a file, also after build_state's `# file:line` head) is
+    # read as the line after it, and the mark kept: these rules keep every line where it was
+    lines = text.split("\n") if "\ufeff" in text else []
+    marks = {k: line[:len(line) - len(line.lstrip("\ufeff"))] for k, line in enumerate(lines) if line[:1] == "\ufeff"}
+    sent = _redact_secret_values("\n".join(line.lstrip("\ufeff") for line in lines)).split("\n") if marks else []
+    if len(sent) == len(lines) and marks:
+        text = "\n".join(marks.get(k, "") + line for k, line in enumerate(sent))
+    else:
+        text = _redact_secret_values(text)
     for pat in _SECRET_SHAPES:
         text = pat.sub(lambda m: "://<redacted>@" if m.group(0).startswith("://") else "<redacted>", text)
     return text
+
+
+def _redact_secret_values(text: str) -> str:
+    """redact()'s rules for a secret's value: a secret-named variable's string, a connection-string password."""
+    # in backticks (a JavaScript template string) `${A-B}` is code, never a default: colonless=False
+    text = _SECRET_LITERAL.sub(lambda m: f"{m.group(1)}{m.group(2)}{_redacted(m.group(3), m.group(2) != '`')}"
+                                         f"{m.group(2)}", text)
+    return _SECRET_PARAM.sub(_param_redacted, text)
 
 
 def _param_redacted(m: re.Match) -> str:
@@ -392,6 +451,11 @@ def _param_placeholder(m: re.Match, value: str, quoted: bool) -> bool:
     end = m.end()
     if quoted and re.search(r"[;&]", value):
         return False
+    # the shell's working folder, `ENV HOME=/root PWD=/srv/app`, `"PWD=C:\\Users\\me"`, a UNC `PWD=\\\\host\\share`: an
+    # absolute path of letters, digits and `_.-~/\\@+%,`, never after a `;`, `?` or `&` (a URL's query: a password)
+    if not quoted and m.group(1)[-4:].lower() == "pwd=" and not re.search(r"[;?&][ \t]*pwd=$", m.group(1), re.I) \
+            and re.fullmatch(r"(?:/|~/|[A-Za-z]:[\\/]|\\\\)[\w.\-~/\\@+%,]*", value):
+        return True
     if _PARAM_PLACEHOLDER.fullmatch(value):
         return True
     return bool(not quoted and m.string[end:end + 1] in ("\"", "'", "`", " ", "\t") and _PARAM_OPENED.fullmatch(value)
@@ -509,7 +573,7 @@ def _goes_on(line: str) -> bool:
     return (len(body) - len(body.rstrip("\\"))) % 2 == 1
 
 
-def redact_config_text(text: str, properties: bool = False) -> str:
+def redact_config_text(text: str, properties: bool = False, flow: bool = False, toml: bool = False) -> str:
     """Config files paired whole or by line range: redact secret settings line by line, quoted
     or not (`spring.datasource.password=hunter2`, `  password: hunter2`, `"password": hunter2`,
     in a .properties file also `db.password hunter2`), and every line of a secret's YAML block
@@ -524,13 +588,22 @@ def redact_config_text(text: str, properties: bool = False) -> str:
     continue`), except that a `password=...` on it is still redacted, as 1.7.6 did (the next part
     of a JDBC URL); a line after one with no key that can be read (`db.\\`, a lone `\\`) is read on
     its own. Placeholders are kept, a default written in one is not. Every line stays where it was,
-    so a line range still names the same lines."""
+    so a line range still names the same lines. With flow (a YAML or TOML file), a secret's value that opens a `[` or
+    `{` it does not close on its line is redacted on every line below, to the line that closes it (toml: a TOML
+    file, for where a comment starts: see _open_brackets)."""
     if text[:1] == "\ufeff":       # a byte-order mark: line 1 is read as the line after it, and the mark kept
-        return "\ufeff" + redact_config_text(text[1:], properties=properties)
+        return "\ufeff" + redact_config_text(text[1:], properties=properties, flow=flow, toml=toml)
     out, block = [], -1            # block >= 0: inside a secret's block value, which is indented deeper
     goes_on = None                 # .properties: the line above goes on to this one (True: a secret's value)
     bare, closer = -1, None        # under a bare secret key (its column); inside a secret's """ or ''' string
+    depth = 0                      # inside a secret's TOML array or YAML flow value (`[`, `{`; in an INI file a
+    #                                value is a string, and `[` or `{` is its first character): the brackets left open
     for line in text.split("\n"):
+        if depth > 0:
+            depth += _open_brackets(line, toml)
+            indent = len(line) - len(line.lstrip())
+            out.append(line[:indent] + "<redacted>" if line.strip() else line)
+            continue
         if closer is not None:
             if closer in line:
                 closer = None
@@ -583,17 +656,26 @@ def redact_config_text(text: str, properties: bool = False) -> str:
             if value.startswith("${"):
                 if (kept := _keep_placeholders(value)) != value:      # else the line stays as it is, byte for byte
                     line = f"{m.group(1)}{m.group(2)}{m.group(3)}{kept}"
-            elif _BLOCK_SCALAR.fullmatch(value):
+            elif _BLOCK_SCALAR.fullmatch(node := _yaml_node(value, flow and ":" in m.group(3), toml)):
                 block = len(m.group(1))
+                if node != value:          # after a tag or an anchor the key's line is redacted too, as in 1.7.8
+                    line = f"{m.group(1)}{m.group(2)}{m.group(3)}<redacted>"
             else:                          # `password=>Xk9q`, `token: |abc`: a value, not a block header
                 line = f"{m.group(1)}{m.group(2)}{m.group(3)}<redacted>"
                 closer = _toml_opener(value)
+                # (in a YAML file a bracket after `=` opens nothing: `- MYSQL_PASSWORD={Hunt3r22` is a plain scalar)
+                depth = _open_brackets(node, toml) if flow and (toml or ":" in m.group(3)) \
+                    and node.startswith(("[", "{")) else 0
         elif m is None and (q := _CONFIG_QUOTED.match(line)) and _secret_key(q.group(3)):
             value = q.group(5)
-            if _BLOCK_SCALAR.fullmatch(value):
+            if _BLOCK_SCALAR.fullmatch(node := _yaml_node(value, flow and ":" in q.group(4), toml)):
                 block = len(q.group(1))
+                if node != value:
+                    line = f"{q.group(1)}{q.group(2)}{q.group(3)}{q.group(2)}{q.group(4)}<redacted>"
             else:
                 closer = _toml_opener(value)
+                depth = _open_brackets(node, toml) if flow and (toml or ":" in q.group(4)) \
+                    and node.startswith(("[", "{")) else 0
                 v = re.fullmatch(r"""(["'])(.*)\1(,?)""", value)     # a quoted value keeps its quotes
                 sent = f"{v.group(1)}{_redacted(v.group(2))}{v.group(1)}{v.group(3)}" if v else _redacted(value)
                 if sent != value:
@@ -616,7 +698,8 @@ def redact_config_text(text: str, properties: bool = False) -> str:
     return "\n".join(out)
 
 
-_PEM_BEGIN, _PEM_END = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
+_PEM_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+_PEM_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
 
 
 def _pem_line(line: str) -> tuple[str, str, str]:
@@ -627,23 +710,105 @@ def _pem_line(line: str) -> tuple[str, str, str]:
     return core[:len(core) - len(text)], text, line[len(core):]
 
 
-def _pem_spans(text: str) -> list[tuple[int, int, int, int]]:
-    """Where each PEM private key in `text` that spans lines starts and ends (characters), and its BEGIN and END line
-    (from 0), paired as redact()'s shape pairs them. A BEGIN with no END after it ends the search, so a whole file
-    is read in linear time."""
+def _pem_spans(text: str, one_line: bool = False) -> list[tuple[int, int, int, int]]:
+    """Where each PEM private key in `text` that spans lines (with one_line, every key) starts and ends (characters),
+    and its BEGIN and END line (from 0), paired as redact()'s shape pairs them. A BEGIN with no END after it ends the
+    search, so a whole file is read in linear time."""
     keys, i, at = [], 0, 0
     while (b := _PEM_BEGIN.search(text, i)) and (e := _PEM_END.search(text, b.end())):
         first = at + text.count("\n", i, b.start())
         at = first + text.count("\n", b.start(), e.end())
-        if at > first:
+        if at > first or one_line:
             keys.append((b.start(), e.end(), first, at))
         i = e.end()
     return keys
 
 
-def _pem_keys(text: str) -> list[tuple[int, int]]:
-    """The BEGIN and END line (from 0) of each PEM private key in `text` that spans lines (see _pem_spans)."""
-    return [(first, last) for _, _, first, last in _pem_spans(text)]
+def _pem_keys(text: str, written: bool = False) -> list[tuple[int, int]]:
+    """The BEGIN and END line (from 0) of each PEM private key in `text` that spans lines (see _pem_spans); with
+    written, only a key written as one (see _written_key), from its own BEGIN line, never code between a BEGIN and an
+    END marker string."""
+    if not written:
+        return [(first, last) for _, _, first, last in _pem_spans(text)]
+    keys = [(first + text.count("\n", start, at), last) for start, _, first, last in _pem_spans(text)
+            if (at := _written_at(text, start)) >= 0]
+    return [(first, last) for first, last in keys if first < last]
+
+
+def _written_key(text: str, start: int) -> bool:
+    """Whether the PEM private key whose BEGIN is at `start` holds only what a key holds where it is written (see
+    _PEM_WRITTEN) up to its END: `-----BEGIN ...\n" +` and base64 lines, never
+    `"-----BEGIN ...")\n    assert len(pem) > 1600\n ... "-----END ...` (a test, or a loader's marker constants)."""
+    return _written_at(text, start) >= 0
+
+
+def _written_at(text: str, start: int) -> int:
+    """Where the key written as one (see _written_key) that ends at the END after the BEGIN at `start` begins: at that
+    BEGIN, or at the last BEGIN before the END, when an earlier BEGIN is a marker string or a comment
+    (`BEGIN = "-----BEGIN PRIVATE KEY-----"` and then a key); -1 when neither is written as a key."""
+    b = _PEM_BEGIN.match(text, start)
+    if not (e := _PEM_END.search(text, b.end())):
+        return -1
+    if _written_between(text, b.end(), e.start()):
+        return start
+    last = None
+    for last in _PEM_BEGIN.finditer(text, b.end(), e.start()):
+        pass
+    if not (last and _written_between(text, last.end(), e.start())):
+        return -1
+    return last.start()
+
+
+
+
+def _hide_written_keys(text: str) -> str:
+    """`text` with each PEM private key written as one (see _written_key) as `<redacted>`, together with all of the
+    match of 1.7.8's shape (_PEM_KEY) that holds it, found as 1.7.8 found it: after a secret-named variable's value
+    and a connection-string password were redacted, so markers in such a value pair with nothing (a key cut short,
+    a marker constant before a key go with it, as in 1.7.8)."""
+    keys = [(at, end) for start, end, _, _ in _pem_spans(text, one_line=True) if (at := _written_at(text, start)) >= 0]
+    if not keys:
+        return text
+    masked, spans = text, []
+    # 1.7.8's order: a secret-named variable's value, then a connection-string password, each redacted first
+    for found in (lambda t: [(m.start(3), m.end(3)) for m in _SECRET_LITERAL.finditer(t)],
+                  lambda t: [m.span(2) for m in _SECRET_PARAM.finditer(t) if _param_redacted(m) != m.group(0)]):
+        if new := found(masked):
+            parts, i = [], 0
+            for x, y in new:
+                parts += [masked[i:x], "\0" * (y - x)]
+                i = y
+            masked = "".join(parts) + masked[i:]
+            spans = sorted(spans + new)
+    merged: list[list[int]] = []
+    for x, y in spans:                                  # one range per run of overlapping values
+        if merged and x < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], y)
+        else:
+            merged.append([x, y])
+    spans = [(x, y) for x, y in merged]
+    hidden: list[list[int]] = []
+    # widened by the shape matches it overlaps, then by the values those overlap (a value the hidden part starts or
+    # ends in goes whole, as its rule would have taken it)
+    for wide in ([m.span() for m in _PEM_KEY.finditer(masked)], spans):
+        starts, out = [x for x, _ in wide], []
+        for at, end in keys:
+            k = bisect.bisect_left(starts, end)         # the ranges that start before it ends ...
+            while k and wide[k - 1][1] > at:            # ... and end after it starts
+                k -= 1
+                at, end = min(at, wide[k][0]), max(end, wide[k][1])
+            out.append((at, end))
+        keys = out
+    for at, end in sorted(keys):
+        if hidden and at <= hidden[-1][1]:
+            hidden[-1][1] = max(hidden[-1][1], end)
+        else:
+            hidden.append([at, end])
+    out, i = [], 0
+    for at, end in hidden:
+        out += [text[i:at], "<redacted>"]
+        i = end
+    return "".join(out) + text[i:]
 
 
 def _redact_pem_keys(text: str) -> str:
@@ -666,7 +831,8 @@ def _hide_inner_lines(lines: list[str], keys: list[tuple[int, int]]) -> None:
                 lines[k] = f"{ws}<redacted>{tail}"
 
 
-def _config_lines(text: str, properties: bool = False) -> tuple[list[str], list[tuple[int, int]]]:
+def _config_lines(text: str, properties: bool = False, flow: bool = False,
+                  toml: bool = False) -> tuple[list[str], list[tuple[int, int]]]:
     """A config file's lines as they are read (the PEM pass, then the config rules), and its PEM keys' first and last
     lines, for a line range that cuts one. A key the config rules leave as the PEM pass gave it gets its own lines
     back, as in 1.7.7: redact()'s shape hides it whole, and the 2,600-character cap and a claim's share of it
@@ -674,7 +840,7 @@ def _config_lines(text: str, properties: bool = False) -> tuple[list[str], list[
     shape any more, and its BEGIN and END lines are hidden too."""
     raw, keys = text.split("\n"), _pem_keys(text)
     kept = _redact_pem_keys(text).split("\n")
-    lines = redact_config_text("\n".join(kept), properties=properties).split("\n")
+    lines = redact_config_text("\n".join(kept), properties=properties, flow=flow, toml=toml).split("\n")
     for f, t in keys:
         if lines[f:t + 1] == kept[f:t + 1]:
             lines[f:t + 1] = raw[f:t + 1]
@@ -699,9 +865,11 @@ def _hide_pem_lines(lines: list[str], keys: list[tuple[int, int]]) -> None:
 
 def _split_key(text: str, sent: int | set[int]) -> bool:
     """Whether a cut that sends the first `sent` characters of `text`, or the lines of text.splitlines() numbered in
-    `sent`, sends part of a PEM private key that spans lines but not the whole key: redact()'s shape would not see
-    it, and its other lines would be sent."""
-    for start, end, _, _ in _pem_spans(text):
+    `sent`, sends part of a PEM private key but not the whole key: redact()'s shape would not see it, and its other
+    lines (or, for a key on one line, the part before the cut) would be sent."""
+    for start, end, first, last in _pem_spans(text, one_line=True):
+        if first == last and not _written_key(text, start):      # on one line, only a key written as one
+            continue
         if isinstance(sent, int):
             if start < sent < end:
                 return True
@@ -714,10 +882,11 @@ def _split_key(text: str, sent: int | set[int]) -> bool:
 
 
 def _hide_keys(text: str) -> str:
-    """`text` with every PEM private key that spans lines sent as `<redacted>` lines (see _hide_pem_lines)."""
+    """`text` with every PEM private key that spans lines sent as `<redacted>` lines (see _hide_pem_lines), and every
+    key written on one line (`"-----BEGIN ...\\n...-----END ...-----"`) as `<redacted>`, as redact()'s shape sends it."""
     lines = text.split("\n")
     _hide_pem_lines(lines, _pem_keys(text))
-    return "\n".join(lines)
+    return _hide_written_keys("\n".join(lines))
 
 
 def _head(text: str, limit: int = MAX_CODE_CHARS) -> str:
@@ -728,14 +897,37 @@ def _head(text: str, limit: int = MAX_CODE_CHARS) -> str:
     return text[:limit]
 
 
+def _open_brackets(value: str, toml: bool = False) -> int:
+    """How many `[` and `{` a line opens and leaves open: a secret's TOML array or YAML flow value that goes on below
+    its key (`api_keys = [`) is redacted to the line that closes it. Quoted strings and a comment aside: `#` to the
+    line's end, in a TOML file wherever it is, in YAML where it starts the line or follows a space, a quoted string,
+    `,` or a bracket (right after an unquoted value's character it is part of the value: `P#ssw0rd`, `k#1`). In YAML
+    a quote opens a string only where a value may start (the line's start, after a space, `,`, `:`, `[` or `{`):
+    the apostrophe of an unquoted `o'neil` opens none, and `''` in a single-quoted string is an apostrophe in it."""
+    single = r"'[^'\n]*'" if toml else r"'(?:[^'\n]|'')*'"
+    body = re.sub(("" if toml else r"(?:^|(?<=[\s,:\[{]))") + r"""(?:"(?:[^"\\\n]|\\.)*"|""" + single + ")", " ", value)
+    body = re.sub(r"#.*" if toml else r"(?:^|(?<=[\s,\[\]{}]))#.*", "", body)
+    return body.count("[") + body.count("{") - body.count("]") - body.count("}")
+
+
+_YAML_PROPERTIES = re.compile(r"(?:[!&]\S*[ \t]+)+")       # a tag or an anchor before a YAML value, as in _YAML_KEY
+
+
+def _yaml_node(value: str, flow: bool, toml: bool) -> str:
+    """A YAML file's value after `key:` (flow and not toml) without the tags and anchors before it, each followed by
+    a space (`api_keys: &keys [`, `key: !!binary |`): what opens a list, a map or a block is read after them. Any
+    other file's value, and one after `=` (`- MYSQL_PASSWORD=!Zq9w >` is a plain scalar), as it is."""
+    return value[p.end():] if flow and not toml and (p := _YAML_PROPERTIES.match(value)) else value
+
+
 def _toml_opener(value: str) -> str | None:
     """The closing quotes a TOML multi-line string that starts here and goes on to the next lines needs."""
     return value[:3] if value[:3] in ('"""', "'''") and value[:3] not in value[3:] else None
 
 
 def _is_config_file(path: Path) -> bool:
-    return path.suffix in {".properties", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".env"} \
-        or bool(_ENV_TEMPLATES.match(path.name))
+    return path.suffix.lower() in {".properties", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".env"} \
+        or bool(_ENV_TEMPLATES.match(path.name.lower()))
 
 
 def _blank_py_docstrings(src: str, lines: list[str]) -> None:
@@ -778,7 +970,7 @@ def strip_comments(path: Path, text: str) -> str:
     if path.suffix in (".py", ".pyi"):                      # a stub file is Python too
         lines = text.split("\n")
         with contextlib.suppress(SyntaxError, ValueError):
-            _blank_py_docstrings(text, lines)
+            _blank_py_docstrings(text.removeprefix("\ufeff"), lines)   # as Python reads a byte-order mark
         try:
             for tok in tokenize.generate_tokens(io.StringIO(text).readline):
                 if tok.type == tokenize.COMMENT:
@@ -2251,7 +2443,7 @@ def index_code(root: Path, ignore: tuple[str, ...],
 
     def python(p: Path, local: dict) -> int:
         try:
-            text = p.read_text(encoding="utf-8")
+            text = p.read_text(encoding="utf-8-sig")       # Python reads a file that starts with a byte-order mark
         except (UnicodeDecodeError, OSError):
             return 0
         return index_python_file(p, text, local, py_files)
@@ -2536,7 +2728,7 @@ def prose_blocks(doc: Path) -> list[tuple[int, str]]:
     if doc.suffix != ".py":
         return _paragraphs(text)
     try:
-        tree = ast.parse(text)
+        tree = ast.parse(text.removeprefix("\ufeff"))     # a byte-order mark: Python reads the file, ast.parse not
     except SyntaxError:
         return []
     out: list[tuple[int, str]] = []
@@ -3059,9 +3251,11 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
     if target and (s := _BY_FILE.get((str(rp), target))):
         return s
     text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
-    lines, keys = text.split("\n"), []
+    lines, keys = text.split("\n"), _pem_keys(text, written=True)
     if _is_config_file(path):
-        lines, keys = _config_lines(text, properties=path.suffix == ".properties")
+        suffix = path.suffix.lower()
+        lines, keys = _config_lines(text, properties=suffix == ".properties",
+                                    flow=suffix in (".yml", ".yaml", ".toml"), toml=suffix == ".toml")
     if m := re.fullmatch(r"(\d+)-(\d+)", target or ""):
         a, b = int(m.group(1)), int(m.group(2))
         if a < 1 or b < a or a > len(lines):
@@ -3783,13 +3977,51 @@ def _in_git_worktree(root: Path) -> bool:
     return any((p / ".git").exists() for p in (root, *root.parents))
 
 
+def _git_folder_on_gits_way_up(root: Path) -> Path | None:
+    """The first .git, from root up, that git looked at and is not an empty folder, or None. git looks no
+    higher than the deepest GIT_CEILING_DIRECTORIES entry above root, nor past a mount point unless
+    GIT_DISCOVERY_ACROSS_FILESYSTEM is set; an empty .git folder it passes by (as code_audit's)."""
+    start = Path(root).resolve()
+    ceilings = set()
+    for c in os.environ.get("GIT_CEILING_DIRECTORIES", "").split(os.pathsep):
+        if c and os.path.isabs(c):
+            ceilings |= {Path(os.path.normpath(c)), Path(c).resolve()}
+    ceiling = max((c for c in ceilings if c in start.parents), key=lambda c: len(c.parts), default=None)
+    across = os.environ.get("GIT_DISCOVERY_ACROSS_FILESYSTEM", "").lower() in {"1", "true", "yes", "on"}
+    try:
+        device = os.stat(start).st_dev
+    except OSError:
+        return None
+    for d in (start, *start.parents):
+        if d == ceiling:
+            return None
+        g = d / ".git"
+        try:
+            if d != start and not across and os.stat(d).st_dev != device:
+                return None
+            if g.is_dir():
+                if next(g.iterdir(), None) is not None:
+                    return g
+            elif g.exists():                                 # a dangling .git link: git walks past it
+                return g
+        except OSError:                                      # a .git it cannot open counts as one
+            return g
+    return None
+
+
 def _git_list(root: Path, extra: list[str]) -> list[str]:
+    # LC_ALL=C: git's messages in English, which the check below reads (a translated git stopped the finder)
     r = _subprocess.run(git_argv("-C", str(root), "ls-files", "-z", *extra), capture_output=True, timeout=60,
-                        stdin=_subprocess.DEVNULL)
+                        stdin=_subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
     if r.returncode != 0:
         err = r.stderr.decode(errors="replace")
-        # told by the folder, not by git's words alone: git prints them in the user's language
-        if "not a git repository" in err or not _in_git_worktree(root):
+        # Outside a repository only as code_audit.tracked_files tells it: "not a git repository (or any of the
+        # parent directories | or any parent up to mount point ...)" is git finding none on its way up - past an
+        # empty .git folder, a ceiling, a mount - and no .git that holds something is on that way (a repository
+        # git cannot read any more). A worktree whose repository is gone ("not a git repository: <gitdir>") stops.
+        # With no .git at all from here up, nothing git says makes it a repository.
+        if "not a git repository (or any" in err and _git_folder_on_gits_way_up(root) is None \
+                or not _in_git_worktree(root):
             raise LookupError(err)
         raise GitListError(err.strip())
     # os.fsdecode, not a decode that replaces bytes: a name that is not valid UTF-8 must still name
@@ -4931,7 +5163,8 @@ def check_claims(claims: list[Claim], key: str, jobs: int = 4, show: Callable[[s
         (vendor if isinstance(stop, VendorStop) else problems).append(
             "the run stopped early" + (f" - {len(cut)} item(s) keep their first answer's label" if cut else "")
             + f": {stop}")
-    if samples > 1 and undecided and not problems and not vendor and not (cancelled and cancelled()):
+    # one request that failed (an HTTP error, an unreadable reply) is that claim's: the others are still asked again
+    if samples > 1 and undecided and not problems and stop is None and not (cancelled and cancelled()):
         show(f"  asking again about {len(undecided)} claim(s) one answer did not settle "
              f"({samples - 1} more each)")
         halted: list[Stop] = []
@@ -5073,14 +5306,34 @@ def _relevant_slice(source: str, claim: str, budget: int) -> tuple[str, bool]:
     calls it the whole thing - which is how 31 claims pointed at one big function came back
     "??" in this project's own audit. Keeping the lines that mention the claim's identifiers,
     with a little context, puts the relevant part inside the budget instead. A cut that would
-    split a PEM private key first hides every such key (_hide_keys), so no part of one is sent.
+    split a PEM private key first hides every such key (_hide_keys), so no part of one is sent; so does a cut
+    that leaves a line of a key written as one in what redact() sends (see _key_line_sent).
 
     Returns the text and whether anything was left out.
     """
     out, cut, sent = _slice(source, claim, budget)
-    if cut and _split_key(source, sent):
+    if cut and (_split_key(source, sent) or _key_line_sent(source, sent, out)):
         out, cut, _ = _slice(_hide_keys(source), claim, budget)
     return out, cut
+
+
+def _key_line_sent(source: str, sent: int | set[int], out: str) -> bool:
+    """Whether a line of a PEM private key written as one (see _written_key) is still in what redact() sends of
+    `out`, a claim's share of `source` that holds the lines numbered in `sent`: lines skipped inside a key whose
+    BEGIN line a secret-named variable's rule takes, so that redact()'s shape does not see the key. Never for code
+    between marker strings, which is sent as it was."""
+    if isinstance(sent, int):
+        return False
+    lines, shown = source.splitlines(), None
+    for start, end, _, _ in _pem_spans(source):
+        if (at := _written_at(source, start)) < 0:
+            continue
+        first, last = len((source[:at] + "x").splitlines()) - 1, len((source[:end] + "x").splitlines()) - 1
+        for k in sorted(sent.intersection(range(first + 1, last + 1))):
+            shown = redact(out) if shown is None else shown
+            if (k == last or len(lines[k].strip()) >= 20) and lines[k].strip() in shown:
+                return True
+    return False
 
 
 def _slice(source: str, claim: str, budget: int) -> tuple[str, bool, int | set[int]]:
@@ -5681,6 +5934,8 @@ def run(args, inside_tool_folder: bool) -> int:
         problems.append(f"Spring YAML config was NOT read - install PyYAML:  {sys.executable} -m pip install pyyaml")
     for note in _NOTES[:10]:
         print(f"  note: {note}")
+    if len(_NOTES) > 10:
+        print(f"  note: ... and {len(_NOTES) - 10} more")
     if total_syms == 0 and not _MISSING:
         problems.append(f"no code found in {src.resolve()}. Run from the project's folder, or point --src at the code.")
 
@@ -5771,8 +6026,9 @@ def run(args, inside_tool_folder: bool) -> int:
             body = json.dumps({"claims": plan, "problems": problems,
                                "estimated_cost_usd": round(estimate_cost(claims), 5)},
                               indent=1, ensure_ascii=False)
-            body.encode("utf-8")
-            Path(args.out).write_text(body, encoding="utf-8")
+            # a name that is not valid UTF-8 (the folder you run in, in a problem's "looked in") gets `?` for its
+            # byte, as printed output shows it: never a traceback
+            Path(args.out).write_text(body, encoding="utf-8", errors="replace")
             print(f"plan -> {Path(args.out).resolve()}")
         if problems:
             print(f"INCOMPLETE: {len(problems)} problem(s) above - fix them before the real check. Exit code 2.")
