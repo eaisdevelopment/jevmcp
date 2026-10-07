@@ -31,6 +31,7 @@ CI (GitLab, Jenkins, CircleCI, a local run) with a git base to diff against.
 from __future__ import annotations
 
 import argparse
+import bisect
 import builtins
 import datetime
 import functools
@@ -120,7 +121,10 @@ _WORK_PATH_WIN = (r"(?<![\w.~/-])[A-Za-z]:\\(?:(?!_(?:actions|temp|tool|tasks)\\
 # A line that starts with /workspace/ is cut in 1.7.7's slot, before the unanchored cuts below could splice its
 # path: at its first cuttable _work/<a>/<b>/ (a runner installed under /workspace/), else 1.7.7's /workspace/.
 _WORKSPACE_WORK = r"^(?=/workspace/)" + _WORK_PATH
-_GUARDED = (_CONTAINER, _WORK_PATH, _WORK_PATH_WIN, _WORKSPACE_WORK)
+# A GitHub-hosted Windows workspace written with '/' (D:/a/<r>/<r>/, as Go and Vitest print it; new in 1.7.9).
+_HOSTED_WIN_SLASH = (r"(?<![\w.~/-])(?<!\b[A-Za-z]:)[A-Za-z]:/a/(?!_(?:actions|temp|tool|tasks)/)"
+                     r"(?!(?!_work/_work/)[^/\s]+/_work/|_work/(?!_work/))[^/\s:;,]+/[^/\s:;,]+/")
+_GUARDED = (_CONTAINER, _WORK_PATH, _WORK_PATH_WIN, _WORKSPACE_WORK, _HOSTED_WIN_SLASH)
 _RUNNER_ROOTS = [re.compile(p) for p in (
     # Not a self-hosted runner installed in ~/work/ or ~/work/<dir>/ (its _work/ pattern below cuts that
     # one). A hosted workspace is <r>/<r>/, so _work/_work/ (a repository named _work) is still the hosted one.
@@ -128,6 +132,7 @@ _RUNNER_ROOTS = [re.compile(p) for p in (
     r"(?!(?!_work/_work/)[^/\s]+/_work/|_work/(?!_work/))[^/\s]+/[^/\s]+/",
     r"[A-Za-z]:\\a\\(?!_(?:actions|temp|tool|tasks)\\)"
     r"(?!(?!_work\\_work\\)[^\\\s]+\\_work\\|_work\\(?!_work\\))[^\\\s]+\\[^\\\s]+\\",
+    _HOSTED_WIN_SLASH,
     _CONTAINER,
     r"/github/workspace/", r"(?<![\w.~-])/builds/[^/\s]+/[^/\s]+/", r"/var/lib/jenkins/workspace/[^/\s]+/",
     r"/(?:home|Users)/circleci/project/",
@@ -139,11 +144,14 @@ _RUNNER_ROOTS = [re.compile(p) for p in (
     r"/opt/(?:[Tt]eam[Cc]ity/)?build[Aa]gent/work/[^/\s]+/", r"[A-Za-z]:\\[Bb]uild[Aa]gent\\work\\[^\\\s]+\\",
     # After the other CIs' workspaces, which keep their own cut (a project's _work/<a>/<b>/ folder there keeps its
     # path). A line that starts with /workspace/ was cut above (_WORKSPACE_WORK). A GitHub-hosted X:/a/ written
-    # with '/' is left as written, as it always was.
+    # with '/' was cut above (_HOSTED_WIN_SLASH).
     _WORK_PATH, _WORK_PATH_WIN)]
 # The change excerpt is code, not a log: only the workspace cuts 1.7.7 made apply to it.
 _CHANGE_ROOTS = [r for r in _RUNNER_ROOTS if r.pattern not in _GUARDED]
-_HOME = re.compile(r"(/home/|/Users/|[A-Za-z]:\\Users\\)[^/\\\s]+")
+# Windows: `Users` in any case, after a drive's backslashes (one, or the two of a repr or JSON string) or its `/`;
+# written with `/`, the drive letter is no word's last letter (`Route GET:/users/42` is a route). The name ends at
+# a space.
+_HOME = re.compile(r"(/home/|/Users/|(?:[A-Za-z]:\\+|(?<!\w)[A-Za-z]:/)(?i:users)(?:\\+|/))[^/\\\s]+")
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 # Logs, unlike source code, are also redacted by these broad rules: a log never needs a credential,
 # while code sent for other checks must keep lines such as `password = request.form["password"]`.
@@ -169,15 +177,17 @@ def light_clean(line: str, roots: list[re.Pattern] = _RUNNER_ROOTS) -> str:
     if not line.replace("\t", " ").isprintable():                 # rare: most lines have no control character
         line = "".join(ch for ch in line if ch == "\t" or unicodedata.category(ch)[0] != "C")
     if "/" in line or "\\" in line:
-        for root in roots:
-            line = root.sub(_outside_url if root.pattern in _GUARDED else "", line)
+        for root in roots:      # no workspace is cut out of a URL (a file:/// URL to the workspace stays whole)
+            line = root.sub(_outside_url, line)
     return line.rstrip()
 
 
+_NOT_IN_URL = re.compile(r"[\s\"'`,;(){}<>|]")       # a JSON or key=value line: a URL ends at a quote, a ',' or a ';'
+
+
 def _outside_url(m: re.Match) -> str:
-    """A _GUARDED match is cut, unless the path's own word is a URL (has '://' before the path)."""
-    before = m.string[:m.start()]
-    word = "" if not before or before[-1].isspace() else before.split()[-1]
+    """A workspace match is cut, unless the path's own word is a URL (has '://' before the path)."""
+    word = _NOT_IN_URL.split(m.string[:m.start()])[-1]      # back to a space or a mark a URL path cannot hold
     return m.group(0) if "://" in word else ""
 
 
@@ -187,12 +197,31 @@ def clean_line(line: str) -> str:
     return _scrub(light_clean(line))
 
 
+# A line's leading marks - a diff's '+' or '-', pytest's '>' or 'E', a line number, '|', BuildKit's '#8 0.231' - which
+# code written after them does not start with: a typed declaration (`+API_TOKEN: str = "..."`) is redacted as at the
+# start of a line.
+_LINE_MARK = re.compile(r"[ \t]*(?:(?:[-+>|:.#]|\d+|E(?=[ \t]))[ \t]*)*")
+
+
+def _redact_diff(text: str) -> str:
+    """dd.redact over a diff: over the whole, as 1.7.8 did (a mark keeps a rule from reading two lines as one
+    value), then over the code of its lines without their '+', '-' or ' ' marks, then over the whole again."""
+    lines = dd.redact(text).split("\n")
+    marks = [ln[:1] if ln[:1] in "+- " and not ln.startswith(("+++ ", "--- ")) else "" for ln in lines]
+    bare = [ln[len(k):] for k, ln in zip(marks, lines)]
+    code = dd.redact("\n".join(bare)).split("\n")
+    if len(code) != len(lines):                 # a rule joined lines (a PEM key's): each line by itself
+        code = [dd.redact(ln) for ln in bare]
+    return dd.redact("\n".join(k + ln for k, ln in zip(marks, code)))
+
+
 def _scrub(line: str) -> str:
     """The privacy part of clean_line, for a line light_clean already laid out."""
     line = _HOME.sub(r"\1<user>", line)
     if "@" in line:
         line = _EMAIL.sub("<email>", line)
-    line = dd.redact(line)
+    m = _LINE_MARK.match(line)          # the code behind a line's marks is redacted as code, then the whole line
+    line = dd.redact(line[:m.end()] + dd.redact(line[m.end():]) if m.group().strip() else line)
     for pat in _LOG_SECRETS:
         line = pat.sub(lambda m: m.group(1) + "<redacted>", line)
     return line.rstrip()
@@ -431,7 +460,12 @@ def _split_steps(job: str, raw_lines: list[str], failed_names: list[str], cut: b
     # rest of a multi-line `with:` input) must not cost the next stamped line of the same second its time.
     stamp_at, stamp_t = "", None
     for raw in raw_lines:
-        body = _ANSI.sub("", raw[:4_000]).lstrip("\ufeff")
+        # no shown line is longer than 4,000 characters; one that holds a key marker (also one a colour code splits)
+        # is cut after its keys are hidden
+        if len(raw) > 4_000 and _key_marker(plain := _ANSI.sub("", raw)):
+            body = plain.lstrip("\ufeff")
+        else:
+            body = _ANSI.sub("", raw[:4_000]).lstrip("\ufeff")
         ts = _TS.match(body)
         if ts:
             line = body[ts.end():].rstrip()
@@ -491,9 +525,106 @@ def _split_steps(job: str, raw_lines: list[str], failed_names: list[str], cut: b
     for s, display in zip([s for s in steps if s.failed], failed_names):
         s.name = display or s.name
     for s in steps:
-        s.lines = _clean_step(s.lines) if s.failed else []
+        s.lines = _clean_step(_hide_keys(s.lines)) if s.failed else []
         s.name = clean_line(s.name)
     return steps
+
+
+# A PEM private key in a log: from its BEGIN marker to the next END marker of a private key on that line, every
+# character. Else, over several lines: when the rest of the BEGIN line holds only what a key and its quoting can
+# (_KEY_TEXT: base64, spaces, quotes, `\` escapes, `-`, `:`, `+`, `,` and invisible characters) and that rest or one of
+# the next two lines (of the END marker's line, the part before it) ends with key body (_KEY_BODY: 20 or more base64
+# characters, then no letter or digit but those of `\n`; or holds an encrypted key's `Proc-Type: 4,ENCRYPTED`), up to
+# the next END marker on a later line, every character: the lines between are sent as `<redacted>`, whatever they
+# hold. A BEGIN marker with no END marker after it hides nothing. So code that names a BEGIN marker in a call
+# (`startswith(b"-----BEGIN ...-----")`), a message that ends with one, and a printed BEGIN line that no key body
+# follows start no key. An armored PGP private key block (`PRIVATE KEY BLOCK-----`) is a key like any other; under
+# its BEGIN line, armor header lines (_ARMOR: `Version:`, `Comment:` ... at the start of the line or after a space,
+# so behind a log's line prefix too) and empty lines are not counted among the next two: a block has a blank line
+# before its body, and a UTF-16 log with CRLF line ends read as UTF-8 has an empty line after every line. The markers
+# are looked for in the lines without their control and invisible characters (_no_controls), which light_clean would
+# remove after: a marker one of them splits is a marker in what is sent.
+_KEY_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+_KEY_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+_ARMOR = re.compile(r"(?:^|\s)(?:Version|Comment|MessageID|Hash|Charset):(?:\s|$)")
+_KEY_TEXT = " \t\r\n\x0b\x0cABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=,:\"'`\\-"
+_KEY_TEXT += "".join(map(chr, [*range(0x200b, 0x2010), *range(0x202a, 0x202f), *range(0x2060, 0x206a), 0xfeff]))
+_KEY_BODY = re.compile(r"Proc-Type: 4,ENCRYPTED|(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{20,}={0,2}(?:(?:\\[nrt]|[^A-Za-z0-9+/=])(?:\\[nrt]|[^A-Za-z0-9])*)?$")
+# pytest writes a colour code into its JUnit report as `#x1B[90m`
+_XML_COLOUR = re.compile(r"#x1B\[[0-9;]*m")
+
+
+class _Controls(dict):
+    """For str.translate: the characters light_clean removes (category C, but the tab), each looked up once."""
+
+    def __missing__(self, c: int) -> int | None:
+        self[c] = None if c != 9 and unicodedata.category(chr(c))[0] == "C" else c
+        return self[c]
+
+
+_CONTROLS = _Controls()
+
+
+def _no_controls(line: str) -> str:
+    """The line without the control and invisible characters light_clean removes."""
+    return line if line.replace("\t", " ").isprintable() else line.translate(_CONTROLS)
+
+
+def _key_marker(line: str, bare: bool = False) -> bool:
+    """The line holds the end of a private key's BEGIN or END marker (bare: it has no control characters)."""
+    line = line if bare else _no_controls(line)
+    return "PRIVATE KEY-----" in line or "PRIVATE KEY BLOCK-----" in line
+
+
+def _hide_keys(lines: list[str]) -> list[str]:
+    """Each PEM private key in the lines (see _KEY_BEGIN) redacted before any line is cut or chosen, so lines keep
+    their places and no cut or window splits a key. One pass over the lines."""
+    bare = [_no_controls(ln) for ln in lines]
+    if not any(_key_marker(ln, True) for ln in bare):
+        return lines
+    lines = bare
+    ends = [k for k, ln in enumerate(lines) if _key_marker(ln, True) and _KEY_END.search(ln)]
+    out, i, open_key = list(lines), 0, False
+    while i < len(out):
+        line = out[i]
+        cut = _KEY_END.search(line).end() if open_key else 0    # a key from an earlier line ends at its END marker
+        parts, pos, open_key = ["<redacted>"] if cut else [], cut, False
+        if not _key_marker(line[cut:], True):
+            out[i], i = "".join(parts) + line[cut:], i + 1
+            continue
+        here = [m.span() for m in _KEY_END.finditer(line, cut)]         # this line's END markers
+        n = bisect.bisect_right(ends, i)
+        later = ends[n] if n < len(ends) else None                      # the next line that holds an END marker
+        text = len(line.rstrip(_KEY_TEXT))      # from here to the end of the line, only key text
+        body = None                             # a BEGIN marker up to here is followed by key body (worked out once)
+        while b := _KEY_BEGIN.search(line, pos):
+            pos = b.end()
+            n = bisect.bisect_left(here, (pos, pos))
+            if n < len(here):                               # its END is on this line
+                parts += [line[cut:b.start()], "<redacted>"]
+                cut = pos = here[n][1]
+                continue
+            if later is None or pos < text:
+                continue
+            if body is None:
+                m = _KEY_BODY.search(line, pos)         # the same for this line's later BEGIN markers
+                pgp, near, k = "PGP" in b.group(), [], i + 1
+                while k <= later and len(near) < 2:
+                    if k == later:                      # the END line: what is before it
+                        near.append(lines[k][:_KEY_END.search(lines[k]).start()])
+                    elif not (pgp and not _key_marker(lines[k], True)       # (a marker line is never passed over)
+                              and (not lines[k].strip() or _ARMOR.search(lines[k]))):
+                        near.append(lines[k])
+                    k += 1
+                body = len(line) if any(_KEY_BODY.search(x) for x in near) else m.start() if m else -1
+            if pos <= body:                                 # its END is on a later line
+                parts += [line[cut:b.start()], "<redacted>"]
+                cut, open_key = len(line), True
+                out[i + 1:later] = ["<redacted>"] * (later - i - 1)
+                break
+        out[i] = "".join(parts) + line[cut:]
+        i = later if open_key else i + 1
+    return out
 
 
 def _clean_step(lines: list[str]) -> list[str]:
@@ -636,6 +767,10 @@ _MASK = [(re.compile(r"(?i)\b(?:ubuntu|macos|windows)(?:-latest|-\d+[.\d]*)?\b")
          (re.compile(r"0x[0-9a-f]+|\b[0-9a-f]{7,}\b"), "#"), (re.compile(r"\d+"), "#"),
          (re.compile(r"\\"), "/"), (re.compile(r"\s+"), " ")]
 _LINUX = re.compile(r"(?i)\blinux\b")
+# A masked version with a pre-release suffix (merge key only, after a version's parts were made one '#'): a pre-release
+# word, or 'a'/'b' before a number, with numbers around it ('-beta.#', '#rc#', '-#.#.pre', '-preview.#.#').
+_PRE_RELEASE = re.compile(r"#(?:[.-]?#)*(?:[.-]?(?:dev|alpha|beta|rc|pre|preview|ea|nightly|canary)|[ab](?=#))"
+                          r"(?:[.-]?#)*t?(?!\w)")
 
 
 def _masked(text: str) -> str:
@@ -671,8 +806,10 @@ def failures_from_steps(steps: list[Step]) -> list[Failure]:
         # matrix value ('Set up Python 3.12') or an OS is masked the way the first error is, and also
         # runner.os's 'Linux' (here only: the first error's own mask, and so the state sent, stay as they are);
         # a version counts as one number however many parts it has ('Go 1.22' / 'Go 1.22.3'), Python's
-        # free-threaded build's too ('3.13t').
-        key = (re.sub(r"#(?:\.#)+(?:t(?!\w))?", "#", _masked(_LINUX.sub("<os>", f.step))), f.signature)
+        # free-threaded build's too ('3.13t'), and with a pre-release suffix ('3.14-dev', '3.13.0-beta.4', '1.23rc1',
+        # '3.13.0a4', '22-ea', '23-nightly').
+        key = (_PRE_RELEASE.sub("#", re.sub(r"#(?:\.#)+(?:t(?!\w))?", "#", _masked(_LINUX.sub("<os>", f.step)))),
+               f.signature)
         if key in merged:
             m = merged[key]
             m.jobs.append(job)
@@ -685,6 +822,7 @@ def failures_from_steps(steps: list[Step]) -> list[Failure]:
 
 def failures_from_junit(text: str, name: str) -> list[Failure]:
     """Failed test cases from a JUnit XML report (pytest, Maven Surefire, Gradle, jest-junit, go-junit)."""
+    name = dd._readable(name)          # a file name that is not valid UTF-8, as it can be shown and sent
     if re.search(r"<!(?:DOCTYPE|ENTITY)", text, re.I):          # anywhere: comments can pad a prolog
         # A JUnit report never needs a DTD; refusing one rules out entity-expansion attacks.
         raise Stop(f"{name} declares a DTD or entities; a JUnit report never needs one, so it was not read.")
@@ -699,8 +837,15 @@ def failures_from_junit(text: str, name: str) -> list[Failure]:
             continue
         test = "::".join(x for x in (tc.get("file") or tc.get("classname"), tc.get("name")) if x)
         tests.append(test[:160])
-        cands.append(clean_line(f"{test}: {bad.get('type', bad.tag)}: {bad.get('message', '')}")[:MAX_LINE_CHARS])
-        tail.extend(clean_line(x) for x in (bad.text or "").splitlines()[-25:])
+        message = f"{test}: {bad.get('type', bad.tag)}: {bad.get('message', '')}"
+        text = bad.text or ""
+        # a key ends its lines, not a colour code; and a marker a colour code splits (`^[[0m`, which clean_line
+        # removes after) is a marker, as in a log, whose colour codes are gone before its keys are hidden
+        plain = [_ANSI.sub("", _XML_COLOUR.sub("", x)) for x in (message, text)]
+        if any(_key_marker(x) for x in "\n".join(plain).split("\n")):
+            message, text = plain
+        cands.append(clean_line("\n".join(_hide_keys(message.split("\n"))))[:MAX_LINE_CHARS])       # hidden before the cut
+        tail.extend(clean_line(x) for x in _hide_keys(text.splitlines())[-25:])
     if not tests:
         return []
     f = Failure(jobs=[name], step=f"tests ({name})", kind="test", exit_code=None, candidates=cands[:MAX_LINES],
@@ -1337,26 +1482,27 @@ def _job_facts(fails: list[Failure], jobs: list[dict], time_limits: dict) -> Non
 def safe_file(p: Path, root: Path | None, inbox: Path | None = None) -> Path:
     """A log or report the tool may read: a regular file owned by this user, not a symlink, inside
     the project (not under any .git folder, not a secret file) or inside the server's private inbox."""
+    name, shown = dd._readable(p.name), dd._readable(str(p))     # a name that is not valid UTF-8 cannot be shown
     if p.is_symlink():
-        raise Stop(f"{p.name} is a symbolic link; pass the file itself.")
+        raise Stop(f"{name} is a symbolic link; pass the file itself.")
     try:
         st = p.lstat()
     except FileNotFoundError:
-        raise Stop(f"{p} does not exist.")
+        raise Stop(f"{shown} does not exist.")
     if not stat.S_ISREG(st.st_mode):
-        raise Stop(f"{p.name} is not a regular file.")
+        raise Stop(f"{name} is not a regular file.")
     if hasattr(os, "getuid") and st.st_uid != os.getuid():
-        raise Stop(f"{p.name} belongs to another user; it was not read.")
+        raise Stop(f"{name} belongs to another user; it was not read.")
     real = p.resolve()
     bases = [b.resolve() for b in (root, inbox) if b is not None]
     if not any(real == b or b in real.parents for b in bases):
-        raise Stop(f"{p} is outside the project" + (" and the jevmcp inbox" if inbox else "")
+        raise Stop(f"{shown} is outside the project" + (" and the jevmcp inbox" if inbox else "")
                    + "; save the log inside the project" + (f" or in {inbox}" if inbox else "") + ".")
     # '/' on every OS: the .git/ and secret-file patterns below are written with '/'
     rel = real.relative_to(root.resolve()).as_posix() if root and root.resolve() in real.parents else real.name
     # lower case: macOS and Windows disks ignore case, so .GIT/config there is the repository's own .git/config
     if re.search(r"(?:^|/)\.git/", rel.lower()) or _is_secret_path(rel.lower()):   # any .git folder: a vendored repo's too
-        raise Stop(f"{rel} is not a log a check may read.")
+        raise Stop(f"{dd._readable(rel)} is not a log a check may read.")
     return real
 
 
@@ -1565,7 +1711,7 @@ def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
                     and re.match(rf"^\s*(?:{cmt})", ln[1:]):
                 continue                        # author text: judge the code, not the comments
             lines.append(ln)
-        body = dd.redact("\n".join(lines))
+        body = _redact_diff("\n".join(lines))
         # a long line is cut, then cleaned too (as a log line, but with only 1.7.7's workspace cuts: it is code)
         body = "\n".join(_scrub(light_clean(x[:2000], _CHANGE_ROOTS)) for x in body.split("\n"))
         (named if path and any(norm_path(e).endswith(path) or path.endswith(norm_path(e)) for e in f.files)
@@ -1675,7 +1821,7 @@ def _change_tokens(diff: str) -> tuple[dict[str, list[tuple[str, str]]], dict[st
             continue
         cmt = _COMMENT_ONLY.get(Path(path).suffix)
         side: dict[str, tuple[set[str], set[str]]] = {"+": (set(), set()), "-": (set(), set())}
-        for ln in dd.redact(sec).split("\n"):
+        for ln in _redact_diff(sec).split("\n"):
             if ln[:1] not in ("+", "-") or ln.startswith(("+++ ", "--- ")):
                 continue
             code = ln[1:2000]
@@ -1992,8 +2138,10 @@ def exit_code(results: list[dict], run: jevkit.Run) -> int:
 
 def save_snapshot(path: Path, fails: list[Failure], ctx: Context) -> None:
     """What a preview showed, so the paid run sends exactly that and nothing fetched later."""
-    path.write_text(json.dumps({"version": STATE_VERSION, "failures": [asdict(f) for f in fails],
-                                "context": asdict(ctx)}, ensure_ascii=False), encoding="utf-8")
+    text = json.dumps({"version": STATE_VERSION, "failures": [asdict(f) for f in fails], "context": asdict(ctx)},
+                      ensure_ascii=False)
+    # a log's name that is not valid UTF-8 (caf\udce9.log) is written as a JSON escape, and read back as it was
+    path.write_text(re.sub("[\ud800-\udfff]", lambda m: f"\\u{ord(m.group()):04x}", text), encoding="utf-8")
     os.chmod(path, 0o600)
 
 
@@ -2057,8 +2205,8 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(dd.canonical(it.state), indent=1, ensure_ascii=False))
             print(f"\n(dry run: {len(items)} request(s), ~${jevkit.estimate_cost(items):.5f}; nothing was sent)")
             if a.out:
-                a.out.write_text(json.dumps([{"step": it.meta["failure"].step, "state": it.state} for it in items],
-                                            indent=1, ensure_ascii=False), encoding="utf-8")
+                a.out.write_bytes(json.dumps([{"step": it.meta["failure"].step, "state": it.state} for it in items],
+                                             indent=1, ensure_ascii=False).encode("utf-8", "replace"))
             return 0
         key = dd._load_key(a.key_file, dotenv=False)
         results, run = triage(fails, ctx, key, jobs=a.jobs, samples=a.samples, use_cache=not a.no_cache)
@@ -2078,9 +2226,11 @@ def main(argv: list[str] | None = None) -> int:
     for p in run.problems + run.vendor:
         print(f"  {p}", file=sys.stderr)
     out = a.out or Path("triage.json")
-    out.write_text(json.dumps({"source": ctx.source, "url": ctx.url, "notes": ctx.notes, "results": results,
-                               "jobs_not_checked": ctx.unread_jobs, "cost_usd": run.cost_usd, "complete": complete},
-                              indent=1, ensure_ascii=False), encoding="utf-8")
+    # encoded in full before the file is opened; a log's name that is not valid UTF-8 is written with '?' for the
+    # byte, as the server's results file has it
+    out.write_bytes(json.dumps({"source": ctx.source, "url": ctx.url, "notes": ctx.notes, "results": results,
+                                "jobs_not_checked": ctx.unread_jobs, "cost_usd": run.cost_usd, "complete": complete},
+                               indent=1, ensure_ascii=False).encode("utf-8", "replace"))
     return exit_code(results, run)
 
 
