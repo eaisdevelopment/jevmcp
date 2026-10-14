@@ -99,6 +99,8 @@ CURSOR_RULES = re.compile(r"(?:^|/)\.cursor/rules/[^/]+\.mdc?$")    # every file
 # documents in Cline's .clinerules folder (not its workflows/ or hooks/), or .clinerules as one plain file.
 AGENT_RULE_DIRS = re.compile(r"(?:^|/)(?:\.claude/rules/(?:[^/]+/)*[^/]+\.md|\.clinerules/[^/]+)$")
 AGENT_FOLDERS = {".claude", ".clinerules", ".cursor"}       # a coding agent's own folders
+# a folder that holds an agent's rule files, or the agent folder that holds that one
+_AGENT_FOLDER = re.compile(r"(?:^|/)(?:\.(?:claude|cursor)(?:/rules(?:/.*)?)?|\.clinerules)$")
 
 
 def _git_folder_on_gits_way_up(root: Path) -> Path | None:
@@ -133,15 +135,63 @@ def _git_folder_on_gits_way_up(root: Path) -> Path | None:
     return None
 
 
-def tracked_files(root: Path) -> list[str]:
+def _default_excludes() -> str:
+    """Where git looks for its global excludes file when core.excludesFile is not set."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.normpath(os.path.join(base, "git", "ignore"))
+
+
+def tracked_files(root: Path, shut: list[tuple[str, str]] | None = None) -> list[str]:
     """Files git would commit (tracked + untracked-not-ignored), relative. Ignored local files - build
-    output, a developer's .env, credentials - are never candidates for an audit."""
+    output, a developer's .env, credentials - are never candidates for an audit. `shut` gets the agent folders
+    (.claude, .cursor, their rules folders, .clinerules) that could not be searched, as (folder, why): in git, the
+    ones git could not open to look for files it does not track."""
     try:
         # LC_ALL=C: git's messages in English, which the check below reads. A translated git ("kein
         # Git-Repository") stopped every audit of a folder outside git.
-        out = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"),
+        res = subprocess.run(dd.git_argv("-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"),
                              capture_output=True, timeout=60, check=True, env={**os.environ, "LC_ALL": "C"},
-                             stdin=subprocess.DEVNULL).stdout
+                             stdin=subprocess.DEVNULL)
+        # An ignore file git cannot read (a .gitignore with no read permission) it only warns about, and then lists
+        # the files it would have left out: a local_settings.py or build output was audited as the project's code
+        if warned := re.findall(rb"unable to access '([^\n]*)': ([^\n]*)", res.stderr or b""):
+            top = subprocess.run(dd.git_argv("-C", str(root), "rev-parse", "--show-toplevel"), capture_output=True,
+                                 timeout=15, stdin=subprocess.DEVNULL).stdout.strip()
+            configured = None
+            for name, why in warned:
+                # a folder's .gitignore (named from the repository's top) in a folder that cannot be entered rules
+                # only files that cannot be read either; an excludes file named in git's settings is absolute
+                own = Path(os.fsdecode(name))
+                if own.name == ".gitignore" and not own.is_absolute() \
+                        and _lstat_error(Path(os.fsdecode(top) or root) / own):
+                    continue
+                # git's default global excludes file in a folder that cannot be entered, with none set in git's
+                # settings: git applies nothing from it for the user either, so the list is the one they see
+                if own.is_absolute() and _lstat_error(own) and os.path.normpath(own) == _default_excludes():
+                    if configured is None:
+                        configured = subprocess.run(dd.git_argv("-C", str(root), "config", "core.excludesFile"),
+                                                    capture_output=True, timeout=15,
+                                                    stdin=subprocess.DEVNULL).stdout.strip()
+                    if not configured:
+                        continue
+                what, why = name.decode("utf-8", "replace"), why.decode("utf-8", "replace").strip()
+                # the advice from git's words: git 2.32+ opens a .gitignore without following a link (ELOOP)
+                fix = ("Fix its permissions." if why in ("Permission denied", "Operation not permitted") else
+                       "git does not follow a symbolic link for a .gitignore: replace the link with the file."
+                       if own.name == ".gitignore" and why == "Too many levels of symbolic links" else "Fix it.")
+                raise Stop(f"git could not read {what} ({why}), so which files it ignores (a local .env, build output, "
+                           f"credentials) cannot be told apart, and no code was read. {fix}")
+        out = res.stdout
+        # a folder git cannot open it only warns about, and lists none of the files in it it does not track: in an
+        # agent's folder, rule files left out without a word (outside git such a folder gets a note). Named from the
+        # repository's top, as the files are not.
+        if shut is not None and (opened := [(d, why) for d, why in re.findall(
+                rb"could not open directory '([^\n]*?)/?': ([^\n]*)", res.stderr or b"")
+                if _AGENT_FOLDER.search(d.decode("utf-8", "surrogateescape"))]):
+            prefix = subprocess.run(dd.git_argv("-C", str(root), "rev-parse", "--show-prefix"), capture_output=True,
+                                    timeout=15, stdin=subprocess.DEVNULL).stdout.strip()
+            shut += [(d[len(prefix):].decode("utf-8", "surrogateescape"), why.decode("utf-8", "replace").strip())
+                     for d, why in opened if d.startswith(prefix)]
         # surrogateescape, not a decode that replaces bytes: a name that is not valid UTF-8 still names the file
         # on disk, and collect_units and validate name it in a note (with the replacement mark it named no file
         # and was left out without a word). UTF-8, not os.fsdecode: a valid name reads as before in any locale.
@@ -169,8 +219,6 @@ def tracked_files(root: Path) -> list[str]:
         if dd._in_git_worktree(root):
             raise Stop(f"{dd.GIT_MISSING}, so which files git ignores (a local .env, build output, credentials) "
                        f"cannot be told apart, and no code was read. Install git.") from None
-    # with / on every OS, as git lists them: draft_map, preview and check compare names with /
-    out = [p.relative_to(root).as_posix() for p in dd._discover(root, tuple(dd.DEFAULT_IGNORE))]
     # .claude and .cursor are pruned as agent tooling (.claude/worktrees holds copies of the code), but the
     # rules folders in them hold what coding agents load as rules. Never through a link, as os.walk follows none: a
     # linked .claude listed files outside the project as rule files "in the project".
@@ -188,12 +236,37 @@ def tracked_files(root: Path) -> list[str]:
         # A link loop or a link to nothing in a folder of the project is listed, as git lists it: reading it fails,
         # and it is left out with a note (it points nowhere, so nothing outside the project is read)
         return os.path.islink(p) and not os.path.exists(p) and inside(p.parent)
+
+    def unreachable(p: Path) -> bool:
+        # in a folder that can be listed but not entered: there by its name, as git lists it (draft_map notes it)
+        try:
+            return bool(_lstat_error(p)) and p.name in os.listdir(p.parent) and inside(p.parent)
+        except OSError:
+            return False
+    # with / on every OS, as git lists them: draft_map, preview and check compare names with /. A file only in a
+    # folder that is where it seems: os.walk walks into a Windows junction, which may lead out of the project, and
+    # its code was audited as the project's (a symbolic link there is never followed)
+    folders: dict[Path, bool] = {}
+
+    def kept(d: Path) -> bool:
+        if d not in folders:
+            folders[d] = inside(d)
+        return folders[d]
+    out = [p.relative_to(root).as_posix() for p in dd._discover(root, tuple(dd.DEFAULT_IGNORE)) if kept(p.parent)]
     for dirpath, dirnames, _ in os.walk(root):
-        claude = ".claude" in dirnames
+        agents = [a for a in (".claude", ".cursor") if a in dirnames]
+        # Cline's rule files are in .clinerules itself: one that cannot be listed hides them (1.7.9: no note)
+        if shut is not None and ".clinerules" in dirnames and inside(cline := Path(dirpath) / ".clinerules"):
+            try:
+                os.listdir(cline)
+            except OSError as e:
+                if e.errno not in _GONE:
+                    shut.append((cline.relative_to(root).as_posix(), e.strerror))
         dirnames[:] = sorted(d for d in dirnames if d not in ign)
         # Claude Code reads .claude/CLAUDE.md as it reads CLAUDE.md
         memory = Path(dirpath) / ".claude" / "CLAUDE.md"
-        if claude and (os.path.isfile(memory) and inside(memory) or dangling(memory)):
+        if ".claude" in agents and (os.path.isfile(memory) and inside(memory) or dangling(memory)
+                                    or unreachable(memory)):
             out.append(memory.relative_to(root).as_posix())
         for agent in (".claude", ".cursor"):
             rules = Path(dirpath) / agent / "rules"
@@ -201,7 +274,39 @@ def tracked_files(root: Path) -> list[str]:
             if os.path.isdir(rules) and inside(rules):
                 out += [p.relative_to(root).as_posix() for p in dd._discover(rules, ())
                         if p.suffix in (".md", ".mdc") and (inside(p) or dangling(p))]
+            # the rule files in a folder that cannot be searched cannot be named, as git names them: draft_map says
+            # which folder it is (1.7.9 left them out without a word)
+            if shut is not None and agent in agents and inside(rules.parent):
+                shut += [(f.relative_to(root).as_posix(), e.strerror) for f, e in _unsearchable(rules.parent, inside)]
     return out
+
+
+def _lstat_error(p: Path) -> OSError | None:
+    """Why p cannot be looked at though it is there (its folder cannot be entered); None if it can, or is gone."""
+    try:
+        os.lstat(p)
+    except OSError as e:
+        return None if e.errno in _GONE else e
+    return None
+
+
+def _unsearchable(agent: Path, inside) -> list[tuple[Path, OSError]]:
+    """An agent's folder that can be neither listed nor entered, or the rules folder in it, or a folder under that
+    one, that cannot be searched, with the error."""
+    try:
+        names = os.listdir(agent)
+    except OSError as e:
+        if _lstat_error(agent / "rules"):           # nor entered: what it holds cannot be told
+            return [(agent, e)]
+        names = []
+    rules = agent / "rules"
+    if e := _lstat_error(rules):
+        return [(rules, e)] if "rules" in names else []
+    out: list[tuple[Path, OSError]] = []
+    if os.path.isdir(rules) and inside(rules):
+        for _ in os.walk(rules, onerror=lambda e: out.append((Path(e.filename), e))):
+            pass
+    return [(f, e) for f, e in out if e.errno not in _GONE]
 
 
 def find_rule_files(root: Path, files: list[str] | None = None) -> list[str]:
@@ -359,9 +464,11 @@ def guess_scope(text: str, source: str, languages: set[str]) -> list[str]:
     parts = Path(source).parent.parts
     fit = [i for i, d in enumerate(parts) if d in AGENT_FOLDERS
            and (len(parts) == i + 1 or d != ".clinerules" and parts[i + 1] == "rules")]
+    # any file in a rules folder, not only an AGENTS.md there: svc/.cursor/rules/python.mdc was scoped to every file
+    in_rules = bool(fit) and (parts[fit[0]] == ".clinerules" or len(parts) > fit[0] + 1)
     if fit:                                     # the first agent folder the file sits right in, or in its rules/
         parts = parts[:fit[0]]
-    base = "/".join(parts) if AGENT_RULE_FILES.match(Path(source).name) else ""
+    base = "/".join(parts) if in_rules or AGENT_RULE_FILES.match(Path(source).name) else ""
     if base and base != ".":                            # a nested AGENTS.md rules its own directory; a folder
         esc = re.sub(r"([*?\[])", r"[\1]", base)        # named app/[slug] is matched as written, not as a class,
         esc = re.sub(r"^!", "[]!]", esc)                # and one named !old as a folder, not as a skip
@@ -591,10 +698,16 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
         if not dd._utf8(d):
             raise Stop(f"the name of {dd._readable(d)} is not valid UTF-8, so a map cannot record it - rename it, "
                        f"then name it again")
-    files = tracked_files(root)
+    shut: list[tuple[str, str]] = []
+    files = tracked_files(root, shut)
     languages = {Path(f).suffix for f in files if Path(f).suffix in CODE_SUFFIXES}
     # (an empty list: the command line named files and none of them could be read, so there is nothing to draft)
     sources = find_rule_files(root, files) if docs is None else docs
+    if docs is None and warnings is not None:   # the rule files in such a folder cannot be named
+        # (in git the ones it tracks are listed: they are not the ones left out)
+        warnings += [f"{dd._readable(f)} could not be searched ({why}), so any "
+                     f"{'other ' if any(x.startswith(f + '/') for x in files) else ''}rule files in it were left out; "
+                     f"fix its permissions if it holds rules." for f, why in shut]
     if unusable := [f for f in sources if not dd._utf8(f) or ("\ufffd" in f and not os.path.lexists(root / f))]:
         sources = [f for f in sources if f not in unusable]
         if warnings is not None:
@@ -756,6 +869,17 @@ def load_map(path: Path) -> list[dict]:
     return entries
 
 
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def _half_character(e: dict) -> str | None:
+    """A lone surrogate in what an entry sends or writes (its rule, or its text when it has no rule, its source, line),
+    as that escape: no request or results file can hold it, and the preview failed with -32603, the check with a
+    traceback. One in a field that is never sent (a `why`, a scope) is no problem."""
+    m = _SURROGATE.search(json.dumps([e.get("rule") or e.get("text"), e.get("source"), e.get("line")], ensure_ascii=False))
+    return f"\\u{ord(m.group()):04x}" if m else None
+
+
 def validate(entries: list[dict], root: Path) -> dict:
     """Free: counts, entries not yet reviewed, rules whose scope matches no file, risky phrasing."""
     files = tracked_files(root)
@@ -774,6 +898,9 @@ def validate(entries: list[dict], root: Path) -> dict:
         if e.get("status") == "reviewed":
             if not (e.get("rule") or "").strip():
                 problems.append(f"{where}: reviewed but has no `rule`")
+            if ch := _half_character(e):
+                problems.append(f"entry {i}: holds {ch}, a lone surrogate - half of a character, which cannot be "
+                                f"sent; write the character whole")
             if not in_scope_files(e, files):
                 problems.append(f"{where}: its scope {e.get('scope')} matches no file in the project")
             flags = rule_flags(str(e.get("rule") or ""))
@@ -1049,8 +1176,7 @@ def changed_lines(root: Path, base: str | None) -> dict[str, set[int]]:
                 seen.append(f)
     try:
         res = subprocess.run(dd.git_argv("-C", str(root), *args, "--", *(f":(exclude,literal){f}" for f in seen)),
-                             env=env, capture_output=True, text=True, timeout=60, encoding="utf-8",
-                             errors="surrogateescape", stdin=subprocess.DEVNULL)
+                             env=env, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
     except OSError as err:
         if err.errno != errno.E2BIG and getattr(err, "winerror", None) != 206:     # (Windows: the name too long)
             raise
@@ -1065,19 +1191,30 @@ def changed_lines(root: Path, base: str | None) -> dict[str, set[int]]:
                               capture_output=True, timeout=15, stdin=subprocess.DEVNULL)
         if base or head.returncode == 0:
             raise Stop(f"git could not compare the change, so its changed lines are not known: "
-                       f"{res.stderr.strip()[-300:]} - name the files to audit, or audit every unit.")
+                       f"{res.stderr.decode('utf-8', 'surrogateescape').strip()[-300:]} - name the files to audit, "
+                       f"or audit every unit.")
         unborn = True
-    out = res.stdout
-    cur = None
-    for ln in out.splitlines():
-        if ln.startswith("+++ "):
+    # bytes, decoded here: read as text, a lone CR in a changed line ended the line, and what followed it ("@@ -1,40",
+    # "+++ b/x") was read as a header, so a file's changed lines were left out
+    out = res.stdout.decode("utf-8", "surrogateescape")
+    cur, old, new = None, 0, 0          # old, new: the hunk's removed and added lines still to come
+    # at "\n" only: splitlines also cuts at U+2028, U+2029 and U+0085, which a name git prints raw may hold
+    # (core.quotePath=false), and the file's lines were filed under a name no file has
+    for ln in out.split("\n"):
+        if old > 0 or new > 0:          # a line of the hunk is never a header: an added "++ 1" is "+++ 1" here,
+            old -= ln[:1] in ("-", " ")  # and was read as one, so the file's later hunks were left out (1.7.9)
+            new -= ln[:1] in ("+", " ")
+        elif ln.startswith("+++ "):
             p = _diff_path(ln[4:])
             cur = p[2:] if p.startswith("b/") else None
-        elif ln.startswith("@@") and cur:
+        elif ln.startswith("@@"):
             m = re.search(r"\+(\d+)(?:,(\d+))?", ln)
             if m:
                 a, n = int(m.group(1)), int(m.group(2) or 1)
-                lines.setdefault(cur, set()).update(range(a, a + max(n, 1)))
+                o = re.match(r"@@ -\d+(?:,(\d+))? ", ln)
+                old, new = (int(o.group(1) or 1) if o else 0), n
+                if cur:
+                    lines.setdefault(cur, set()).update(range(a, a + max(n, 1)))
     # A new file the change adds but has not committed yet is in no diff; every line of it is changed. With no
     # commit yet on this branch, so is every file in the index (-c): -o lists only the files git does not track.
     try:
@@ -1123,6 +1260,9 @@ def collect_units(root: Path, entries: list[dict], scope: str = "changed", base:
         if e.get("status") == "reviewed" and not str(e.get("rule") or e.get("text") or "").strip():
             raise Stop(f"entry {i} ({e.get('source')}:{e.get('line')}) is reviewed but has no `rule`, so nothing "
                        f"was sent. Write its rule, then validate the map.")
+        if e.get("status") == "reviewed" and (ch := _half_character(e)):
+            raise Stop(f"entry {i} holds {ch}, a lone surrogate - half of a character, so nothing was sent. Write the "
+                       f"character whole, then validate the map.")
     tracked = tracked_files(root)
     touched = changed_lines(root, base) if scope == "changed" else {}
     pool = tracked if scope == "all" else (files or []) if scope == "files" else list(touched)
@@ -1175,7 +1315,7 @@ def collect_units(root: Path, entries: list[dict], scope: str = "changed", base:
             if units and "tests-only" in (e.get("scope") or []) and f.endswith(".rs"):   # none: never re-read a link
                 units = _test_units(f, (root / f).read_text(encoding="utf-8", errors="replace").split("\n"), units)
             for u in units:
-                if u.text.strip():
+                if u.text.replace("\ufeff", "").strip():    # a byte-order mark alone is no code to ask about
                     pairs.append((e, u))
     if unread:
         NOTES.append(f"{len(unread)} code file(s) could not be read, so they were left out: "
@@ -1297,6 +1437,17 @@ def in_triage_order(results: list[dict]) -> list[dict]:
     return sorted(results, key=lambda r: (order.get(triage_group(r), 7), -(r.get("p_breaks") or 0)))
 
 
+def _project_name(root: Path, src: Path, name: str) -> str:
+    """A name from the command line as the file list has it: an absolute path inside the project, or one with ..
+    or ./ in it, made relative with / (no link is followed). It matched no listed name, and audited nothing, or
+    drafted a scope that matches no file. Any other name is kept as given."""
+    for top in (root, Path(os.path.abspath(src))):
+        p = Path(os.path.normpath(top / name))
+        if p.is_relative_to(top):
+            return p.relative_to(top).as_posix()
+    return Path(name).as_posix()
+
+
 def main(argv: list[str] | None = None) -> int:
     dd.utf8_restart()                           # LC_ALL=C and UTF-8 mode off: 订单.py would be left out
     dd.safe_path()
@@ -1330,10 +1481,10 @@ def main(argv: list[str] | None = None) -> int:
     root = a.src.resolve()
     try:
         if a.draft_map:
-            if a.draft_map.exists():
+            if os.path.lexists(a.draft_map):             # a link too, leading nowhere or back to itself
                 raise Stop(f"{a.draft_map} exists; the drafter never overwrites a map.")
             warnings: list[str] = []
-            docs = a.docs
+            docs = a.docs and [_project_name(root, a.src, d) for d in a.docs]
             if docs:
                 # A named file that is not there or cannot be read (a link to nothing, a link loop, no permission)
                 # is left out with a word, and the others are drafted: draft_map itself stops at one it cannot read
@@ -1365,7 +1516,7 @@ def main(argv: list[str] | None = None) -> int:
         scope = "all" if a.all else "files" if a.files else "changed"
         if a.base and scope != "changed":
             raise Stop("--base names the change to audit; with --files or --all every unit of them is audited. Pass one.")
-        files = [str(Path(f).as_posix()).removeprefix("./") for f in a.files or []]     # './x.py' names x.py
+        files = [_project_name(root, a.src, f) for f in a.files or []]     # './x.py' and <project>/x.py name x.py
         items = items_for(collect_units(root, entries, scope, a.base, files))
         for n in NOTES:
             print(f"code_audit: {n}", file=sys.stderr)

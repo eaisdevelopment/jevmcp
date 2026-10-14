@@ -92,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.9"
+VERSION = "1.7.10"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -193,10 +193,11 @@ def _not_checked(unsent: str) -> str:
 
 
 _INDEX_NOTES = {"type": "array", "items": {"type": "string"},
-                "description": "the notes indexing the code printed, the first 10 as the command line prints "
-                               "them: e.g. code or config files left out because their names are not valid "
-                               "UTF-8, or a YAML config or OpenAPI file that could not be parsed. Not a list "
-                               "of every file that could not be read"}
+                "description": "the notes indexing the code printed, as the command line prints them (the "
+                               "first 10 after the line-range ones): e.g. how many files of a suffix can only "
+                               "be paired by line range, code or config files left out because their names are "
+                               "not valid UTF-8, or a YAML config or OpenAPI file that could not be parsed. Not a "
+                               "list of every file that could not be read"}
 _NOT_CHECKED_TOTAL = {"type": "integer", "description": "how many lines not_checked holds before the cut - not how "
                                                         "many items were left unchecked"}
 
@@ -285,7 +286,9 @@ SPEC_DRIFT_TOOLS = [
                     "p_drifted": {"type": "number"}, "severity": {"type": "number"},
                     "value_mismatch": {"type": ["number", "null"]},
                     "code_refs": {"type": "array", "items": {"type": "string"}}, "why": {"type": "string"},
-                    "samples": {"type": "integer", "description": "how many times this claim was asked about"},
+                    "samples": {"type": "integer", "description": "how many answers were used: 1, or 1 plus "
+                                "the answers of asking again when every one came back (a claim whose asking "
+                                "again failed or was stopped keeps 1, with a note)"},
                     "note": {"type": "string", "description": "why the label is the first answer's: asking "
                                                             "again failed, so the run is not complete"},
                     "next_step": {"type": "string", "description": "on a DRIFT: the decision to make"}},
@@ -373,7 +376,12 @@ SPEC_DRIFT_TOOLS = [
                              "description": "why the map is not ready (cut to fit: problems_total counts the "
                                             "lines; past 20, the text names a file that lists every one)"},
                 "problems_total": {"type": "integer"},
-                "notes": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "array", "items": {"type": "string"},
+                          "description": "with strict false, the notes reading the map printed: the coverage and "
+                                         "review notes, which strict makes problems, and the note on entries whose "
+                                         "sentence moved (also in moved_entries) (cut to fit: notes_total counts them; past 20, the text names "
+                                         "a file that lists every one); empty with strict true"},
+                "notes_total": {"type": "integer"},
                 "warnings": {"type": "array", "items": {"type": "string"},
                              "description": "spec files in a folder the map's specs names that were NOT used: a "
                                             "skipped folder that holds some, a link not followed, a name that is "
@@ -979,6 +987,7 @@ class Server:
         self.cache: dict = {}
         self.lock = threading.Lock()          # the checker's index lives in module globals: one user at a time
         self.last_index = ""
+        self.unpaired: list[str] = []         # files of a language with no parser, noted as the command line does
         self.legacy_version: str | None = None    # set by initialize: this process then also speaks legacy MCP
         self.max_checks = max_checks_per_minute   # paid calls (any tool that sends) a minute; 0 = no limit
         self.max_audit_requests = max_audit_requests  # a bigger audit needs confirm_units; 0 = always
@@ -1114,7 +1123,7 @@ class Server:
     def use_project(self, project: str | None) -> None:
         """Point the server at the project for this call: the one named, else the client's."""
         if project:
-            p = Path(project).expanduser()
+            p = _expand(project)
             if not p.is_absolute():
                 raise ToolError(f"project must be an absolute path (got {project!r}) - your working directory")
             p = p.resolve()
@@ -1138,12 +1147,27 @@ class Server:
     def index(self) -> dict:
         before = {k: id(v) for k, v in self.cache.items() if k != "_files"}
         t = time.perf_counter()
-        syms, counts = dd.index_code(Path("."), self.ignore, self.cache)
+        seen: dict[str, int] = {}
+        walk = dd._discover
+
+        def tally(root: Path, ignore: tuple[str, ...]):
+            """index_code's own walk, counting what dd.unindexed_sources counts: a second walk took as long again."""
+            for p in walk(root, ignore):
+                if p.suffix in dd.UNINDEXED:
+                    seen[p.suffix] = seen.get(p.suffix, 0) + 1
+                yield p
+        dd._discover = tally                  # module globals, as the index: every caller holds self.lock
+        try:
+            syms, counts = dd.index_code(Path("."), self.ignore, self.cache)
+        finally:
+            dd._discover = walk
         dt = time.perf_counter() - t
         parsed = sum(1 for k, v in self.cache.items() if k != "_files" and before.get(k) != id(v))
         state = "cold" if not before else "warm"
         self.last_index = (f"index {dt:.2f}s ({state}: {parsed} of {len(self.cache) - 1} files parsed"
                            f"{'' if state == 'cold' else ' again'})")
+        self.unpaired = [f"{n} {suffix} files can only be paired by line range (file:120-160)"
+                         for suffix, n in sorted(seen.items()) if suffix not in dd._MISSING]
         return syms
 
     def find_maps(self, depth: int = 5) -> list[str]:
@@ -1227,7 +1251,7 @@ class Server:
                             f"{every})")
         warnings = list(dd.MAP_WARNINGS)
         head += _warning_text(warnings)
-        index_notes = _index_notes()
+        index_notes = _index_notes(self.unpaired)
         head += [f"note: {n}" for n in index_notes]
         structured = {"summary": head[0], "project": str(self.root), "map": self.map_used, "claims_in_map": total,
                       "claims_selected": len(claims), "checked": 0,
@@ -1395,9 +1419,14 @@ class Server:
                          f"{self.map_used} --update-lines  (it changes only the \"line\" fields).")
         notes = [ln.strip()[len("note: "):] for ln in buf.getvalue().splitlines() if ln.strip().startswith("note:")]
         if not strict:
-            lines += [f"note: {n}" for n in notes]
+            lines += [f"note: {n}" for n in notes[:20]]
+            if len(notes) > 20:                   # one per partly mapped spec file, as problems are capped below
+                every = self.results_file("validate-map-notes")
+                every.write_text(json.dumps(notes, indent=1, ensure_ascii=False), encoding="utf-8",
+                                 errors="replace")
+                lines.append(f"note: ... and {len(notes) - 20} more (all {len(notes)} notes are listed in {every})")
         lines += _warning_text(warnings)
-        index_notes = _index_notes()
+        index_notes = _index_notes(self.unpaired)
         lines += [f"note: {n}" for n in index_notes]
         # the map-level lines (a "specs" folder gone, items that are not paths) and the coverage notes first, so
         # no cut below hides them
@@ -1420,7 +1449,8 @@ class Server:
                       "full_check_cost_usd": round(dd.estimate_cost(claims), 6),
                       "full_check_cost_usd_max": round(dd.estimate_cost(claims, self.samples), 6),
                       "samples": self.samples, "problems": _fit(problems, INLINE_BUDGET // 3),
-                      "problems_total": len(problems), "notes": [] if strict else notes, "warnings": warnings,
+                      "problems_total": len(problems), "notes": [] if strict else _fit(notes, INLINE_BUDGET // 3),
+                      "notes_total": 0 if strict else len(notes), "warnings": warnings,
                       "moved_entries": moved, "index_notes": index_notes}
         return "\n".join(lines), False, structured
 
@@ -1441,7 +1471,7 @@ class Server:
                       "claims": [{"doc": c.doc, "line": c.line,
                                   "map_line": c.map_line if c.map_line not in (None, c.line) else None}
                                  for c in claims],
-                      "warnings": list(dd.MAP_WARNINGS), "index_notes": _index_notes()}
+                      "warnings": list(dd.MAP_WARNINGS), "index_notes": _index_notes(self.unpaired)}
         extra = _warning_text(structured["warnings"]) + [f"note: {n}" for n in structured["index_notes"]]
         if not claims:
             return ("\n".join(["no claim matches (a line number is the sentence's line in the spec now, or the line the "
@@ -1484,6 +1514,10 @@ class Server:
         if target.exists():
             raise ToolError(f"{out} already exists and may hold a reviewed map - nothing was written. "
                             f"Draft into a new file and compare.")
+        if os.path.lexists(target):               # a link that cannot be followed, e.g. a loop (resolve() keeps it
+            raise ToolError(_LOOP_OUT.format(out=out))      # on 3.13): a failed write's cleanup would delete it
+        for d in docs:                            # expand_docs and named_path expand ~ too: a ~nouser a tool error
+            _expand(d)
         specs, warnings = dd.expand_docs(self.root, docs, self.ignore)    # exactly what was named
         if w := dd.map_through_link(self.root, out):
             warnings.append(w)
@@ -1499,7 +1533,7 @@ class Server:
                                    named_specs=[dd.named_path(self.root, d) for d in docs], cli=False)
         step = (f"Nothing is checked until the entries are reviewed. Then validate_spec_map (map: {out}) must report "
                 f"OK before check_spec_drift.")
-        index_notes = _index_notes()
+        index_notes = _index_notes(self.unpaired)
         text = "\n".join([self.last_index, *(f"note: {n}" for n in index_notes), buf.getvalue().strip()])
         if warnings:
             text += ("\n\nWARNINGS - show each one to the user:\n"
@@ -1513,7 +1547,7 @@ class Server:
         """A log or report path the agent passed: relative to the project, or absolute. Never this
         server's results folder, nor another jevmcp or Claude session's temp folder; ci.safe_file
         then refuses links, other owners, .git, secret files and anything outside project + inbox."""
-        p = Path(given).expanduser()
+        p = _expand(given)
         p = p if p.is_absolute() else self.root / p
         real = p.resolve()
         mine = self.inbox().resolve()
@@ -1710,7 +1744,7 @@ class Server:
 
     # ── code audit ──────────────────────────────────────────────────────────
     def _project_path(self, given: str, what: str) -> Path:
-        p = (self.root / Path(given).expanduser()).resolve()
+        p = (self.root / _expand(given)).resolve()
         if not p.is_relative_to(self.root):
             raise ToolError(f"{what} {given} is outside the project - refused")
         return p
@@ -1923,6 +1957,9 @@ class Server:
         if target.exists():
             raise ToolError(f"{out} already exists and may hold a reviewed map - nothing was written. Draft into a "
                             f"new file and compare.")
+        if os.path.lexists(target):               # a link that cannot be followed: the failed write's unlink below
+                                                  # would delete it
+            raise ToolError(_LOOP_OUT.format(out=out))
         sources: list[str] | None = None
         warns: list[str] = []                       # rule files left out, e.g. a name that is not valid UTF-8
         if docs:
@@ -2190,6 +2227,16 @@ def _unreadable(p: Path) -> bool:
     return False
 
 
+def _expand(given: str) -> Path:
+    """A path argument with ~ expanded. A ~user that names no user (or a home folder that cannot be found) is a
+    tool error: pathlib raises RuntimeError for it, which would end the call with -32603."""
+    try:
+        return Path(given).expanduser()
+    except RuntimeError:
+        raise ToolError(f"{given}: the home folder of {Path(given).parts[0]} cannot be found - give the path "
+                        f"itself, absolute or relative to the project") from None
+
+
 def _stat_errno(p: Path) -> int | None:
     """The error following a link gives (ENOENT: no target, ELOOP: a loop, EACCES: ...), or None if it works."""
     try:
@@ -2199,11 +2246,12 @@ def _stat_errno(p: Path) -> int | None:
     return None
 
 
-def _index_notes() -> list[str]:
-    """The notes indexing the code printed (dd._NOTES, e.g. files whose names are not valid UTF-8, a YAML
-    config or OpenAPI file that could not be parsed), as the command line prints them: the first 10."""
+def _index_notes(unpaired: list[str] | tuple = ()) -> list[str]:
+    """The notes indexing the code printed, as the command line prints them: the files that can only be paired
+    by line range (Server.unpaired), then the first 10 of dd._NOTES (e.g. files whose names are not valid UTF-8,
+    a YAML config or OpenAPI file that could not be parsed)."""
     notes = dd._NOTES
-    return notes[:10] + ([f"... and {len(notes) - 10} more"] if len(notes) > 10 else [])
+    return [*unpaired] + notes[:10] + ([f"... and {len(notes) - 10} more"] if len(notes) > 10 else [])
 
 
 def _warning_text(warnings: list[str]) -> list[str]:
@@ -2433,6 +2481,8 @@ def _error(mid, code: int, message: str, data: dict | None = None) -> dict:
 
 
 _LINK_LOOP = "Symlink loop from "                  # pathlib's own message, up to Python 3.12
+_LOOP_OUT = ("{out} is a link that cannot be followed (a link loop, or a folder on its way that cannot be entered) - "
+             "nothing was written, and the link is left as it is. Draft into a new file.")
 
 
 def _tool_result(server: Server, params: dict) -> dict:

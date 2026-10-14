@@ -51,7 +51,7 @@ the skills ask for your consent before the first send of each kind of data in a 
 - Linux, macOS or Windows. On all three, CI starts the server from an empty uv cache on every
   change to the plugin, runs the seven free tools and checks that the three that send refuse without a key. The
   three that send have been run with a real key on Linux only. Every file is read and written as
-  UTF-8, and a CI log or rule file that Windows PowerShell 5.1 saved as UTF-16 is read too, so
+  UTF-8, and a CI log, spec or rule file that Windows PowerShell 5.1 saved as UTF-16 is read too, so
   specs, rules and logs in any language work on Windows too; so do non-ASCII file names on Linux
   under a locale whose file names are not UTF-8 (an 8-bit one, or C with Python's UTF-8 mode off),
   where the tools start themselves again in Python's UTF-8 mode. Under an 8-bit locale, a file

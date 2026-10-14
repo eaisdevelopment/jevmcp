@@ -44,7 +44,8 @@ The code paired with a requirement is cleaned before it is sent:
     literals (Python's `\` continuations, Java's or C#'s `+`, PHP's `.`), under any name, is hidden
     whole when what stands between its BEGIN and END markers is only what a key holds there: base64
     with a run of 20 or more of its characters, `Proc-Type:` and `DEK-Info:` lines, quotes, `\n`
-    escapes, XML's line breaks (`&#10;`, `&#13;`, `&#xA;`, `&#xD;`) and the joins. When another
+    escapes, XML's line breaks (`&#10;`, `&#13;`, `&#xA;`, `&#xD;`) and the joins, with C#'s and
+    Objective-C's `@` before a literal (`@"..." + @"..."`, `@"..." @"..."`). When another
     BEGIN marker of its kind (a PEM key's before a PEM key, a PGP block's before a PGP block) with no
     END marker of its own stands before such a key (a key cut short, a marker
     constant, a comment), everything from that earlier marker on is hidden with the key, as 1.7.8's
@@ -177,9 +178,11 @@ The code paired with a requirement is cleaned before it is sent:
     (`jwt.key`, `encryption-key`, `encryptionKey`) or `dsn`, and signing keys and client secrets.
     A file is a configuration file by its suffix (`.properties`, `.yml`, `.yaml`, `.toml`, `.ini`,
     `.cfg`, `.conf`, `.env`), in any letter case (`application.YML`, `settings.TOML`), or by a
-    template's name, `env.example` in any letter case too (`ENV.EXAMPLE`); a name that starts or
+    template's name (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.defaults`,
+    also after a name, `app.env.example`; `example.env`, `sample.env`, `env.example`), `env.example`
+    in any letter case too (`ENV.EXAMPLE`); a name that starts or
     ends with `.env` in upper or mixed case (`.ENV.EXAMPLE`, `prod.ENV`) is refused as a secret
-    file.
+    file. In TOML a dotted key with a quoted part (`auth."eu-west".api_keys`) is read as a key too.
     That includes a quoted key (`"password": ...`), a value that starts with `|` or `>`
     (`password=>Xk9q`, `token: |abc`), every line of a YAML block value (`password: |`, a value that
     is only `|` or `>`, with `-`, `+` or a digit and a `# comment` after it or not), and in a
@@ -193,9 +196,11 @@ The code paired with a requirement is cleaned before it is sent:
     sent as written, as in 1.7.6. A value that opens a multi-line string with three double or three
     single quotes (TOML's `password = """`) is redacted with every line up to and including the
     closing quotes. In YAML, after a secret key with no value on its line (`password:`,
-    `api_keys:`), the sequence items below it (`- ...`, the `-` kept) and plain values on the lines
-    below it are redacted; a quoted item is an item even when it holds a colon and a space, also
-    after a tag or an anchor (`- "admin: x"`, `- 'a: b'`, `- !!str "admin: x"`, `- &a "admin: x"`).
+    `api_keys:`), or with only a tag or an anchor after it (`api_keys: &keys`, `password: !!str`,
+    whose line reads `key: <redacted>`), the sequence items below it (`- ...`, the `-` kept) and
+    plain values on the lines below it are redacted; a quoted item is an item even when it holds a
+    colon and a space, also after a tag or an anchor (`- "admin: x"`, `- 'a: b'`, `- !!str "admin: x"`,
+    `- &a "admin: x"`).
     When the first line below is itself a key (a mapping, such as an OpenAPI property's `type:`): an
     unquoted `key:`, or a quoted key followed by `:`, after a tag or an anchor too
     (`- !!str key: v`), the lines are read one by one as before. A `#` comment line among the lines
@@ -221,7 +226,14 @@ The code paired with a requirement is cleaned before it is sent:
     only where a value may start (the line's start, after a space, `,`, `:`, `[` or `{`), so the
     apostrophe of an unquoted `o'neil` opens none, and `''` inside a single-quoted item is an
     apostrophe in it (`'it''s ] one'` closes no list). So a value that closes on its key's line
-    (`credentials: {user: app, password: p#ssw0rd}`) redacts only that line. A quoted YAML string, or
+    (`credentials: {user: app, password: p#ssw0rd}`) redacts only that line. In YAML, a secret key
+    inside a list or map opened on its line (`db: {user: app, password: ...}`,
+    `- {name: app, password: ...}`, `{"password": ...}`), right after its `{`, `[` or a `,`, has its
+    value up to the next `,`, `]` or `}` redacted, quoted or not, as on a key's own line (a
+    placeholder kept), except a value there that holds a `{` or `[` (`password: ${DB_PASS:hunter2}`,
+    `Hunt{er22`), which is sent as written, as in 1.7.9; such a key on a later line of a list or map opened on an earlier line is
+    redacted only when it starts that line or is in a list or map opened on that line. A quoted YAML
+    string, or
     a TOML multi-line string (`"""`, `'''`), that goes on to the next line is not read as one string: a
     `]` or `}` on one of its lines can end the redaction early. In a YAML file, after `key:`, a tag
     or an anchor before the value, each followed by a space, is passed over (`api_keys: &keys [`,
@@ -229,8 +241,9 @@ The code paired with a requirement is cleaned before it is sent:
     as without it, and the key's line reads `key: <redacted>`. So a value there that starts with
     `!` or `&`, holds a space and ends in `|` or `>` (`password: !Zq9w >`) is read as a block's
     header, and the deeper-indented lines below it are redacted with it. After `=`
-    (`- MYSQL_PASSWORD=!Zq9w >`), with no space before the bracket (`&a[b`), and in a TOML file,
-    a tag or an anchor is not read: only that line is redacted. In a YAML file a bracket after `=`
+    (`- MYSQL_PASSWORD=!Zq9w >`) and in a TOML file, a tag or an anchor is not read: only that line
+    is redacted. With no space before the bracket (`&a[b`) it opens no list: it ends the key's line,
+    and the lines below are read as under a bare `api_keys:` (above). In a YAML file a bracket after `=`
     opens nothing either (`- MYSQL_PASSWORD={Hunt3r22`): only that line is redacted. A list or map that is never
     closed is redacted to the end of what is read. A secret setting left in a
     comment (`#spring.datasource.password=...`, `# password: ...`, `; password = ...`,
@@ -266,9 +279,16 @@ The code paired with a requirement is cleaned before it is sent:
     cut; other text between two markers on one line (a check that only names them,
     `startswith("-----BEGIN ...") and endswith("-----END ...")`) is not a key and is not hidden
     first. The
-    hidden key is shorter, so more of the code after it can be sent. Redacted lines stay on their
-    own lines, so line numbers never move, except that a PEM private key hidden whole is sent as one
-    `<redacted>` line, as in 1.7.7. A line with nothing to redact is sent exactly as written.
+    hidden key is shorter, so more of the code after it can be sent. When that cap, or a claim's share
+    that is the code's first characters, would cut inside the quoted value of a secret-named
+    variable or inside a connection-string password, the cut is made before that value, so no part
+    of it is sent. The name is looked for on the cut's line and up to the last line above it that is
+    not blank (one more when that line is only the `=`), within 16,384 characters of the cut; a name
+    of more than 256 characters is not, and a cut made earlier is never one that would send what
+    the cut at the cap hid.
+    Redacted lines stay on their own lines, so line numbers never move, except that a PEM private key
+    hidden whole is sent as one `<redacted>` line, as in 1.7.7. A line with nothing to redact is sent
+    exactly as written.
     Placeholders such as `${DB_PASSWORD}` are kept: they reveal nothing. A default written into one
     (`${DB_PASSWORD:hunter2}`, `${DB_PASSWORD:-hunter2}`, and without a colon, as shells and Docker
     Compose write it, `${DB_PASSWORD-hunter2}` or `${DB_PASSWORD=hunter2}`) and text glued to one
@@ -310,8 +330,9 @@ names, messages and the last 25 lines of each failure's text are used.
 Log lines are cleaned before they are sent, and before they are shown to the agent. The
 cleaning:
 
-- colour codes, the timestamp GitHub Actions writes at the start of each line (read first, to
-  work out how long the step ran), control characters and invisible characters are removed;
+- colour codes (in a JUnit report pytest's `#x1B[..m` too), the timestamp GitHub Actions writes
+  at the start of each line (read first, to work out how long the step ran), control characters
+  and invisible characters are removed;
   timestamps in other formats, or inside a line, stay;
 - the CI runner's workspace path is removed, so paths are relative to the repository, for the
   default workspaces of GitHub Actions (a container job's `/__w/<a>/<b>/` and a hosted Windows
@@ -320,7 +341,9 @@ cleaning:
   Windows `X:\...\_work\<a>\<b>\` too; a runner installed two or more folders below `~/work` or
   `X:\a\` is taken for a GitHub-hosted one, so `_work/<a>/<b>/` stays in front of its paths), Azure
   Pipelines' hosted agents, GitLab (Docker and shell executors), Jenkins, CircleCI, Travis CI,
-  Buildkite and TeamCity, each at the exact paths `docs/tools.md` lists (the runner's own
+  Buildkite and TeamCity, each at the exact paths `docs/tools.md` lists (a Windows one written with
+  `\` also where a log doubles its backslashes, as a JSON string or Python's repr writes a path,
+  `D:\\a\\<r>\\<r>\\`; the runner's own
   `_actions`, `_temp` and `_tool` folders, and Azure Pipelines' `_tasks`, beside the workspace are
   not the workspace, so their paths are kept whole). No workspace path is removed inside a URL (a
   word with `://` in it before the path; a quote, a backtick, `,`, `;`, `(`, `)`, `{`, `}`, `<`,
@@ -337,7 +360,8 @@ cleaning:
   `_work/<a>/<b>/` loses everything up to the first one, as a self-hosted runner's would, and so
   does a line that starts with `/workspace/` (with no such `_work/<a>/<b>/`, only `/workspace/`
   comes off, as in 1.7.7). In a log or JUnit report read from a file, the project folder is removed
-  from the start of a path. The name of any other home folder is shown as `<user>`: after
+  from the start of a path, a Windows one in any letter case, with doubled backslashes and with `\` and `/`
+  mixed too, and one whose name is not valid UTF-8 as the log's text reads it. The name of any other home folder is shown as `<user>`: after
   `/home/` or `/Users/`, and on Windows after a drive's `Users` folder in any letter case, written
   with `\`, `\\` or `/` (`C:\Users\x`, `c:\users\x`, `C:\\Users\\x` as a JSON string writes
   it, `c:/users/x`). Written with `/` after the drive, it is read only where the drive letter is
@@ -402,8 +426,9 @@ The excerpt of the change is cleaned as well:
   Rust, Java, Kotlin, Scala, JavaScript, TypeScript, C, C++, C#, Swift and PHP files;
 - secret-looking values are redacted as in log lines, also in the code after a diff line's `+`,
   `-` or space, home folders are shown as `<user>` and email addresses as `<email>`;
-- a workspace path is removed only where 1.7.7 removed it, and never inside a URL, for
-  GitHub-hosted (on Windows only as written with `\`; a hosted path under `_actions`, `_temp`,
+- a workspace path is removed only where 1.7.7 removed it (a Windows one also where its
+  backslashes are doubled), and never inside a URL, for
+  GitHub-hosted (on Windows only as written with `\` or `\\`; a hosted path under `_actions`, `_temp`,
   `_tool` or `_tasks`, or of a runner installed in `~/work` or `X:\a\`, or one folder below
   either, is kept whole), Azure Pipelines' hosted agents, GitLab, Jenkins, CircleCI,
   Travis CI, Buildkite and TeamCity, and a line that starts with `/workspace/` (only that comes
@@ -452,7 +477,11 @@ Which code can be sent:
   credentials — are left out. In a git repository where git is not installed, which files git
   ignores cannot be told, so no code is read at all, and neither is any in a repository git cannot
   read (dubious ownership, a broken index, a worktree whose repository folder is gone): the audit
-  stops with git's message. So it does at a `.git` folder in the folder or above it, up to any
+  stops with git's message. So it does when git cannot read an ignore file (a `.gitignore` with no
+  read permission or that is a symbolic link, which git 2.32 and later does not follow,
+  `.git/info/exclude`, the global excludes file, but not git's default one in a folder that cannot be
+  entered while `core.excludesFile` is not set, from which git applies nothing), as git then lists the files it would ignore; a `.gitignore` in a folder that cannot be entered does not stop it, as the files it
+  rules cannot be read either. So it does at a `.git` folder in the folder or above it, up to any
   ceiling or mount point where git stops looking, that is not empty but that git does not take for a
   repository (its `HEAD` or `refs` gone, as a copy or sync tool that drops empty folders can leave
   it), as its ignored files cannot be told apart either. In a folder that is not a git repository
@@ -460,7 +489,8 @@ Which code can be sent:
   does a repository above a `GIT_CEILING_DIRECTORIES` entry or, unless
   `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set, past a mount point, as git does not look there): every
   code file outside the skipped folders (`node_modules`, `.venv`, `build` and the like) can be read,
-  and secret files are still skipped;
+  except in a folder that resolves somewhere else: a folder that is a Windows junction is skipped,
+  as a symbolic link is. Secret files are still skipped;
 - only code files that a reviewed rule's `scope` matches, and by default only the units that the
   change under test touches;
 - symbolic links, files over 1.5 MB and secret files (the files listed under "What is never

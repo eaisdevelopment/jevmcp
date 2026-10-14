@@ -351,12 +351,13 @@ _PEM_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z 
                       r"-----BEGIN [A-Z ]*PRIVATE KEY BLOCK-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY BLOCK-----")
 # what may stand between a PEM key's BEGIN and END where the key itself is written: base64 (with a run of 20 or more
 # of its characters), header lines (`Proc-Type: 4,ENCRYPTED`), quotes, `\n` escapes, XML's `&#10;` and `&#xD;` line
-# breaks and the `+`, `\`, `.` or `,` that join literals; `=` only as padding. In a PGP block also its checksum
+# breaks and the `+`, `\`, `.` or `,` that join literals, C#'s and Objective-C's `@` before a literal's quote
+# (`@"..." + @"..."`, `@"..." @"..."`); `=` only as padding. In a PGP block also its checksum
 # (`=AbCd`: `=` before four base64 characters, after a space, a line's start or a quote) and a `Version:` or
 # `Comment:` line: whole from the line's start, a quote or a joining `+`, `.`, `,` and a quote that starts it, or
 # after a `\n` escape up to the next escape or quote (taken once, so the time stays linear)
 _PEM_WRITTEN = re.compile(r"""(?=[\s\S]*?[A-Za-z0-9+/]{20})"""
-                          r"""(?:[A-Za-z0-9+/\s"'`\\,.\-]|&\#(?:0*1[03]|x0*[aAdD]);|(?<=[A-Za-z0-9+/=])="""
+                          r"""(?:[A-Za-z0-9+/\s"'`\\,.\-]|&\#(?:0*1[03]|x0*[aAdD]);|@(?=")|(?<=[A-Za-z0-9+/=])="""
                           r"""|(?<=[\s"'`])=(?=[A-Za-z0-9+/]{4}(?![A-Za-z0-9+/=]))"""
                           r"""|(?m:^)(?=([ \t]*(?:[+.,][ \t]*)?["'`]?(?:Version|Comment):[^\n]*))\1"""
                           r"""|(?<=\\n)(?=((?:Version|Comment):[^\n\\"'`]*))\2"""
@@ -568,6 +569,9 @@ _CONFIG_LINE = re.compile(r"^(\s*(?:export\s+)?-?\s*)([\w.\-\[\]]+)(\s*[:=]\s*)(
 # `"password": hunter2` - a quoted key (YAML); and in a .properties file, a key and value separated by
 # spaces alone (`db.password hunter2`), which Java reads as a setting too
 _CONFIG_QUOTED = re.compile(r"""^(\s*-?\s*)(["'])([\w.\-\[\]]+)\2(\s*[:=]\s*)(\S.*?)\s*$""")
+# in a TOML file, a dotted key with a quoted part (`auth."eu-west".api_keys = [`, `"auth".password = ...`)
+_TOML_PART = r"""(?:[\w\-]+|"[^"\n]*"|'[^'\n]*')"""
+_TOML_DOTTED = re.compile(r"^(\s*)(" + _TOML_PART + r"(?:[ \t]*\.[ \t]*" + _TOML_PART + r")+)(\s*=\s*)(\S(?:.*\S)?)\s*$")
 _PROPERTIES_SPACED = re.compile(r"^(\s*)([\w.\-\[\]]+)(\s+)([^\s=:].*?)\s*$")
 _BLOCK_SCALAR = re.compile(r"[|>][-+0-9]*(?:\s+#.*)?")          # `password: |` - the value is on the lines below
 # YAML `password:` with nothing after it (or only a comment): its value is on the lines below, a sequence
@@ -575,6 +579,8 @@ _BLOCK_SCALAR = re.compile(r"[|>][-+0-9]*(?:\s+#.*)?")          # `password: |` 
 # value is a mapping, and each of its lines is read as a setting of its own; a quoted item is never a key, even
 # when it holds `: ` (`  - "admin: x"`), also after a tag or an anchor (`  - !!str "admin: x"`, `  - &a "admin: x"`)
 _BARE_KEY = re.compile(r"""^(\s*(?:-\s*)?)(["']?)([\w.\-\[\]]+)\2[ \t]*:[ \t]*(?:#.*)?$""")
+# in a YAML file also with only tags and anchors after it (`api_keys: &keys`, `password: !!str`): its value is below
+_BARE_YAML_KEY = re.compile(r"""^(\s*(?:-\s*)?)(["']?)([\w.\-\[\]]+)\2[ \t]*:(?:[ \t]+[!&]\S*)*[ \t]*(?:#.*)?$""")
 _YAML_KEY = re.compile(r"""^\s*(?:-\s+)*(?:[!&]\S*[ \t]+)*(?:(?:"[^"\n]*"|'[^'\n]*')[ \t]*"""
                        r"""|(?!-\s)[^\s#'"\[\]{},!&](?:[^#:\n]|:(?![ \t]|$))*):(?:[ \t]|$)""")
 # a setting left in a comment, `#spring.datasource.password=...`, `# password: x`, `; password = x`: one word or
@@ -582,6 +588,34 @@ _YAML_KEY = re.compile(r"""^\s*(?:-\s+)*(?:[!&]\S*[ \t]+)*(?:(?:"[^"\n]*"|'[^'\n
 # test database` is a note, not a setting
 _COMMENTED = re.compile(r"""^(\s*(?:[#;]+|!)[ \t]*(?:export[ \t]+)?(?:-[ \t]*)?(["']?)([\w.\-\[\]]+)\2[ \t]*[:=][ \t]*)"""
                         r"""("[^"\n]*"|'[^'\n]*'|[^\s"']+)((?:[ \t]+#.*)?[ \t]*)$""")
+
+
+# YAML: a key inside a flow collection, right after its `{`, `[` or a `,` (`db: {user: app, password: Hunter22}`,
+# `- {name: app, password: x}`), and its value, up to the next `,`, `]` or `}`: one quoted string, or a plain value;
+# on a line read with its quoted strings as NULs, so a quoted key is one too (`{"password": x}`)
+# (a plain value read with its trailing blanks, which _flow_secrets leaves out: the time stays linear)
+_FLOW_KEY = re.compile(r"(?<=[{\[,])[ \t]*([\w.\-]+|\0+)[ \t]*:(?:[ \t]+|(?<=\0:))"
+                       r"(\0+(?=[ \t]*(?:[,\]}]|$))|(?![\0 \t])[^,\[\]{}\n]*(?=[,\]}]|$))")
+
+
+def _flow_secrets(line: str) -> str:
+    """A YAML line with the value of each secret key inside a flow collection opened on it redacted (see _FLOW_KEY),
+    as on a key's own line (`password: ...`): a placeholder kept, a quoted value redacted whole; quoted strings and a
+    comment read as _open_brackets reads them."""
+    masked = re.sub(r"""(?:^|(?<=[\s,:\[{]))(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\n]|'')*')""",
+                    lambda q: "\0" * len(q.group()), line)
+    masked = re.sub(r"(?:^|(?<=[\s,\[\]{}]))#.*", lambda c: " " * len(c.group()), masked)
+    out, i, depth, at = [], 0, 0, 0
+    for m in _FLOW_KEY.finditer(masked):
+        part = masked[at:m.start()]
+        depth, at = depth + part.count("{") + part.count("[") - part.count("}") - part.count("]"), m.start()
+        value = line[m.start(2):m.start(2) + len(masked[m.start(2):m.end(2)].rstrip(" \t"))]
+        if depth <= 0 or not value or not _secret_key(line[m.start(1):m.end(1)].strip("\"'")):
+            continue
+        if (sent := _redacted(value)) != value:
+            out += [line[i:m.start(2)], sent]
+            i = m.start(2) + len(value)
+    return "".join(out) + line[i:] if out else line
 
 
 def _goes_on(line: str) -> bool:
@@ -663,12 +697,12 @@ def redact_config_text(text: str, properties: bool = False, flow: bool = False, 
                 out.append(line)
                 continue
         raw = line
-        m = _CONFIG_LINE.match(line)
+        m = _CONFIG_LINE.match(line) or (_TOML_DOTTED.match(line) if toml else None)
         if properties and _goes_on(line) and not line.lstrip().startswith(("#", "!")):   # a comment never goes on
             key = m.group(2) if m else ((p := _PROPERTIES_SPACED.match(line)) and p.group(2))
             # a line with no key it can be read by (`db.\`, a lone `\`) leaves the next line to be read on its own
             goes_on = bool(_secret_key(key)) if key else None
-        if m and _secret_key(m.group(2)):
+        if m and _secret_key(m.group(2).replace('"', "").replace("'", "")):
             value = m.group(4)
             if value.startswith("${"):
                 if (kept := _keep_placeholders(value)) != value:      # else the line stays as it is, byte for byte
@@ -709,8 +743,11 @@ def redact_config_text(text: str, properties: bool = False, flow: bool = False, 
             sent = f"{v.group(1)}{_redacted(v.group(2))}{v.group(1)}" if v else _redacted(value)
             if sent != value:
                 line = f"{c.group(1)}{sent}{rest}"
-        if not properties and (b := _BARE_KEY.match(raw)) and _secret_key(b.group(3)):
+        if not properties and (b := (_BARE_YAML_KEY if flow and not toml else _BARE_KEY).match(raw)) \
+                and _secret_key(b.group(3)):
             bare = len(b.group(1))
+        if flow and not toml and ("{" in line or "[" in line):
+            line = _flow_secrets(line)
         out.append(line)
     return "\n".join(out)
 
@@ -1001,11 +1038,41 @@ def _hide_keys(text: str) -> str:
 
 
 def _head(text: str, limit: int = MAX_CODE_CHARS) -> str:
-    """The first `limit` characters of `text`; a cut that would split a PEM key that spans lines first hides every
-    such key (_hide_keys), so no part of one is sent."""
-    if len(text) > limit and _split_key(text, limit):
+    """The first `limit` characters of `text` (see _value_cut); a cut that would split a PEM key that spans lines
+    first hides every such key (_hide_keys), so no part of one is sent."""
+    at = _value_cut(text, limit)
+    if len(text) > limit and (_split_key(text, limit) or _split_key(text, at)):
         text = _hide_keys(text)
-    return text[:limit]
+        at = _value_cut(text, limit)
+    return text[:at]
+
+
+def _value_cut(text: str, limit: int) -> int:
+    """Where a cut of `text` to `limit` characters ends: before a secret-named variable's value or a connection-string
+    password that it would split (redact() would not see the part before the cut), else at `limit`."""
+    if len(text) <= limit:
+        return limit
+    # such a value is on the cut's line; its name on that line or on the last line above it that is not blank, or
+    # the one above that when that line is only the `=` (`password\n=\n"..."`), at most 16,384 characters each way
+    # (a minified file's one line is not read whole)
+    line = text.rfind("\n", 0, limit) + 1
+    start = text.rfind("\n", 0, len(text[:line].rstrip())) + 1
+    if text[start:line].strip() in ("=", ":", ":=", "=>"):
+        start = text.rfind("\n", 0, len(text[:start].rstrip())) + 1
+    start = max(start, limit - 16_384)
+    end = text.find("\n", limit, limit + 16_384)
+    end = min(len(text), limit + 16_384) if end < 0 else end
+    # read with each run of more than 256 name characters as `x`s: a name that long is not read (the time stays
+    # linear); a value keeps its place and its quotes
+    scan = text[:start] + re.sub(r"[\w.\-]{257,}", lambda r: "x" * len(r.group()), text[start:end])
+    spans = [(m.start(group), m.end(group)) for pat, group in ((_SECRET_LITERAL, 3), (_SECRET_PARAM, 2))
+             for m in pat.finditer(scan, start, end)]
+    cut, at = limit, None
+    while at != cut:                    # (a value the new cut falls in moves it again)
+        at = cut
+        cut = min([a for a, b in spans if a < cut <= b] + [cut])         # (a cut right before the closing quote too)
+    # never a cut that sends what the cut at `limit` hid
+    return cut if cut == limit or redact(text[:limit]).startswith(redact(text[:cut])) else limit
 
 
 def _open_brackets(value: str, toml: bool = False) -> int:
@@ -2191,7 +2258,9 @@ def index_openapi_file(p: Path) -> int:
     return n
 
 
-_ENV_TEMPLATES = re.compile(r"^(?:\.env\.(?:example|sample|template|dist|defaults)|(?:example|sample)\.env|env\.example)$")
+# an env template: `.env.example` and co., also after a name (`app.env.example`, never `.env.x.env.example`)
+_ENV_TEMPLATES = re.compile(r"^(?:(?:[\w-][\w.-]*)?\.env\.(?:example|sample|template|dist|defaults)"
+                            r"|(?:example|sample)\.env|env\.example)$")
 _SPRING_CONFIG = re.compile(r"^(?:application|bootstrap)(?:-([\w.\-]+))?\.(?:properties|ya?ml)$")
 
 
@@ -2827,6 +2896,14 @@ def _paragraphs(text: str) -> list[tuple[int, str]]:
     return out
 
 
+def _spec_text(raw: bytes) -> str:
+    """A spec's text as read_text reads it, also as Windows saves it: a UTF-8 byte-order mark does not stick to
+    line 1 (its heading, its first sentence), and a file that starts with the UTF-16 mark - what `>` and Out-File
+    write in Windows PowerShell 5.1 - is read as UTF-16 (read as UTF-8, every character comes with a NUL)."""
+    enc = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+    return raw.decode(enc, errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def prose_blocks(doc: Path) -> list[tuple[int, str]]:
     """The documentation inside a file, as (line_number, text).
 
@@ -2835,7 +2912,7 @@ def prose_blocks(doc: Path) -> list[tuple[int, str]]:
     whole .py as prose instead would feed executable lines to the model as if
     they were claims, which is the fastest way to a report full of noise.
     """
-    text = doc.read_text(encoding="utf-8", errors="replace")
+    text = _spec_text(doc.read_bytes())
     if doc.suffix != ".py":
         return _paragraphs(text)
     try:
@@ -3214,7 +3291,7 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
                 "spec_text": _norm_text(paragraphs.get(lineno, sent)),
             })
     specs = [Path(d).as_posix() for d in docs] if named_specs is None else list(dict.fromkeys(named_specs))
-    existed = out.exists()
+    existed = os.path.lexists(out)                     # a link loop or a link to nothing is there too: never unlinked
     try:
         out.write_text(json.dumps({"_readme": MAP_README, "specs": specs,
                                    "entries": entries}, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -3244,7 +3321,7 @@ def _norm_text(t: str) -> str:
     """For comparing spec wording: no markdown emphasis, numbering or spacing differences. A space inside a
     code span with a Chinese / Japanese letter in it is part of a literal (`YYYY年MM月DD日 HH:mm`): it counts,
     written as _KEPT_SPACE."""
-    t = re.sub(r"[*_>]", "", t)
+    t = re.sub(r"[*_>\ufeff]", "", t)              # \ufeff: line 1 of a map drafted by 1.7.9 from a spec with the mark
     if _DENSE_LETTER.search(t):
         t = _CODE_SPAN.sub(lambda m: _DENSE_SPACE.sub(_KEPT_SPACE, m.group(0)) if _DENSE_LETTER.search(m.group(0))
                            else m.group(0), t)
@@ -3361,6 +3438,10 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
         return None
     if target and (s := _BY_FILE.get((str(rp), target))):
         return s
+    if not (_utf8(file) and _utf8(_shown(path))):     # a request is UTF-8 text: no request can carry this name
+        fail(f"{file!r} names a file whose name is not valid UTF-8 - refused, no request can carry it. "
+             f"Rename the file.")
+        return None
     text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
     lines, keys = text.split("\n"), _pem_keys(text, written=True)
     if _is_config_file(path):
@@ -3588,7 +3669,7 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
         line = _as_line(e.get("line"))
         text = e.get("text")
         if not text and spec_file is not None and line:
-            spec_lines = spec_file.read_text(encoding="utf-8", errors="replace").split("\n")
+            spec_lines = _spec_text(spec_file.read_bytes()).split("\n")
             text = spec_lines[line - 1].strip(" -*|#") if line <= len(spec_lines) else None
         if not isinstance(text, str) or not text:
             fail(f"{where} has no \"text\" - NOT checked."); continue
@@ -3635,6 +3716,11 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
         if not all(found):
             fail(f"{where} - NOT checked: {sum(1 for f in found if f is None)} of its {len(refs)} code "
                  f"reference(s) could not be resolved (see above)."); continue
+        if bad := next((ch for ch in text if "\ud800" <= ch <= "\udfff"), None):
+            # a JSON "\ud83d" escape alone (half of an emoji, as a tool that cuts escaped text leaves it): the text is
+            # sent and hashed, and no request can carry it, so the check would stop at it
+            fail(f"{where}: its text holds a lone surrogate (\\u{ord(bad):04x}, half of a character) - NOT checked. "
+                 f"Retype that text in the map."); continue
         if str(e.get("status", "reviewed")).lower() != "reviewed":
             unreviewed += 1
         out.append(Claim(text=text, doc=e.get("spec", str(path)), line=line, symbols=found, why_paired="from map",
@@ -3914,11 +4000,22 @@ def path_history(rel: str) -> list[str]:
 
 
 def _read_head(path: Path, n: int = HEAD_LINES) -> list[str]:
+    """The top n lines, however long, read as prose_blocks reads them (see _spec_text), in linear time: each chunk
+    is decoded once and only its own line breaks are counted (`\r\n` counts twice, so up to 2n lines are read)."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return [line.rstrip("\r\n") for line, _ in zip(f, range(n))]
+        with open(path, "rb") as f:
+            chunk = first = f.read(1 << 16)
+            enc = "utf-16" if chunk[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+            dec, parts, breaks = codecs.getincrementaldecoder(enc)(errors="replace"), [], 0
+            while chunk and breaks < 2 * n:
+                parts.append(text := dec.decode(chunk))
+                breaks += text.count("\n") + text.count("\r")
+                chunk = f.read(1 << 16)
+            parts.append(dec.decode(b"", final=True))
     except OSError:
         return []
+    text = "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
+    return text.removesuffix("\n").split("\n")[:n] if first else []
 
 
 def _title_index(lines: list[str]) -> int | None:
@@ -5423,7 +5520,8 @@ def _relevant_slice(source: str, claim: str, budget: int) -> tuple[str, bool]:
     Returns the text and whether anything was left out.
     """
     out, cut, sent = _slice(source, claim, budget)
-    if cut and (_split_key(source, sent) or _key_line_sent(source, sent, out)):
+    if cut and (_split_key(source, sent) or _key_line_sent(source, sent, out)
+                or isinstance(sent, int) and _split_key(source, budget)):     # (as at the cap: see _value_cut)
         out, cut, _ = _slice(_hide_keys(source), claim, budget)
     return out, cut
 
@@ -5458,7 +5556,8 @@ def _slice(source: str, claim: str, budget: int) -> tuple[str, bool, int | set[i
         if any(w in line for w in wanted):
             keep.update(range(max(0, i - 2), min(len(lines), i + 3)))
     if not keep:                                     # nothing to aim at: the head, honestly marked
-        return source[:budget].rstrip() + "\n# ... cut here: the rest of this code was not sent", True, budget
+        at = _value_cut(source, budget)
+        return source[:at].rstrip() + "\n# ... cut here: the rest of this code was not sent", True, at
     out, last, used, sent = [], -1, 0, set()
     for i in sorted(keep):
         gap = (last < 0 and i > 0) or (last >= 0 and i > last + 1)
@@ -5852,7 +5951,8 @@ def _changed_files(given: list[str], src: Path) -> set[str]:
                 top = Path(os.fsdecode(subprocess.run(git_argv("rev-parse", "--show-toplevel"), cwd=src,
                                                       capture_output=True, timeout=60,
                                                       stdin=subprocess.DEVNULL).stdout.rstrip(b"\r\n")))
-            out |= {str((top / os.fsdecode(f)).resolve()) for f in r.stdout.split(b"\0") if f}
+            # realpath, not resolve(): on Python 3.12 resolve() raises on a link loop git lists ("x -> x")
+            out |= {os.path.realpath(top / os.fsdecode(f)) for f in r.stdout.split(b"\0") if f}
     except subprocess.TimeoutExpired:
         raise Stop("git took more than 60 s to say which files changed, so nothing was checked. Name the files "
                    "to check, or check the whole map.") from None
@@ -6012,7 +6112,7 @@ def run(args, inside_tool_folder: bool) -> int:
                    f"map or a request. cd into the project and give --src as a path inside it (or leave it out).")
     if args.limit < 0:
         raise Stop("--limit must be 0 (all claims) or a positive number.")
-    if args.draft_map and Path(args.draft_map).exists():
+    if args.draft_map and os.path.lexists(args.draft_map):     # a link too, leading nowhere or back to itself
         raise Stop(f"{args.draft_map} already exists and may hold a reviewed map - nothing was written.\n"
                    f"Draft into a new file and compare, e.g.  --draft-map {Path(args.draft_map).stem}.draft.json")
     ignore = tuple(dict.fromkeys(([] if args.no_default_ignore else DEFAULT_IGNORE)
@@ -6139,7 +6239,10 @@ def run(args, inside_tool_folder: bool) -> int:
                               indent=1, ensure_ascii=False)
             # a name that is not valid UTF-8 (the folder you run in, in a problem's "looked in") gets `?` for its
             # byte, as printed output shows it: never a traceback
-            Path(args.out).write_text(body, encoding="utf-8", errors="replace")
+            try:
+                Path(args.out).write_text(body, encoding="utf-8", errors="replace")
+            except OSError as e:
+                raise Stop(f"the plan could not be written to {_readable(args.out)}: {e.strerror or e}") from None
             print(f"plan -> {Path(args.out).resolve()}")
         if problems:
             print(f"INCOMPLETE: {len(problems)} problem(s) above - fix them before the real check. Exit code 2.")

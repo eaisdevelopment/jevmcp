@@ -116,8 +116,10 @@ _TS = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
 _CONTAINER = r"(?<![\w.~/-])(?<!\b[A-Za-z]:)/__w/(?!_(?:actions|temp|tool|tasks)/)[^/\s:;,]+/[^/\s:;,]+/"
 _WORK_PATH = (r"(?<![\w.~/-])(?<!\b[A-Za-z]:)(?!/[A-Za-z]/a/)(?:[A-Za-z]:(?!/a/))?(?:/(?!_(?:actions|temp|tool|tasks)/)[\w.~-]+)*?"
               r"/_work/(?!_(?:actions|temp|tool|tasks)/)[^/\s:;,]+/[^/\s:;,]+/")
-_WORK_PATH_WIN = (r"(?<![\w.~/-])[A-Za-z]:\\(?:(?!_(?:actions|temp|tool|tasks)\\)[\w.~-]+\\)*?"
-                  r"_work\\(?!_(?:actions|temp|tool|tasks)\\)[^\\\s:;,]+\\[^\\\s:;,]+\\")
+# A Windows workspace written with '\' is read also with the two of a JSON string or a repr ('D:\\a\\r\\r\\'):
+# group 1 is the separator, the same throughout (new in 1.7.10).
+_WORK_PATH_WIN = (r"(?<![\w.~/-])[A-Za-z]:(\\\\?)(?:(?!_(?:actions|temp|tool|tasks)\1)[\w.~-]+\1)*?"
+                  r"_work\1(?!_(?:actions|temp|tool|tasks)\1)[^\\\s:;,]+\1[^\\\s:;,]+\1")
 # A line that starts with /workspace/ is cut in 1.7.7's slot, before the unanchored cuts below could splice its
 # path: at its first cuttable _work/<a>/<b>/ (a runner installed under /workspace/), else 1.7.7's /workspace/.
 _WORKSPACE_WORK = r"^(?=/workspace/)" + _WORK_PATH
@@ -130,18 +132,18 @@ _RUNNER_ROOTS = [re.compile(p) for p in (
     # one). A hosted workspace is <r>/<r>/, so _work/_work/ (a repository named _work) is still the hosted one.
     r"/(?:home|Users)/[^/\s]+/work/(?!_(?:actions|temp|tool|tasks)/)"
     r"(?!(?!_work/_work/)[^/\s]+/_work/|_work/(?!_work/))[^/\s]+/[^/\s]+/",
-    r"[A-Za-z]:\\a\\(?!_(?:actions|temp|tool|tasks)\\)"
-    r"(?!(?!_work\\_work\\)[^\\\s]+\\_work\\|_work\\(?!_work\\))[^\\\s]+\\[^\\\s]+\\",
+    r"[A-Za-z]:(\\\\?)a\1(?!_(?:actions|temp|tool|tasks)\1)"
+    r"(?!(?!_work\1_work\1)[^\\\s]+\1_work\1|_work\1(?!_work\1))[^\\\s]+\1[^\\\s]+\1",
     _HOSTED_WIN_SLASH,
     _CONTAINER,
     r"/github/workspace/", r"(?<![\w.~-])/builds/[^/\s]+/[^/\s]+/", r"/var/lib/jenkins/workspace/[^/\s]+/",
     r"/(?:home|Users)/circleci/project/",
     # 1.7.7's slot (see _WORKSPACE_WORK).
     _WORKSPACE_WORK, r"^/workspace/",
-    r"/(?:home|Users)/travis/build/[^/\s]+/[^/\s]+/", r"[A-Za-z]:\\Users\\travis\\build\\[^\\\s]+\\[^\\\s]+\\",
+    r"/(?:home|Users)/travis/build/[^/\s]+/[^/\s]+/", r"[A-Za-z]:(\\\\?)Users\1travis\1build\1[^\\\s]+\1[^\\\s]+\1",
     r"/home/(?:gitlab-runner)/builds/[^/\s]+/\d+/[^/\s]+/[^/\s]+/",
     r"/var/lib/buildkite-agent/builds/[^/\s]+/[^/\s]+/[^/\s]+/",
-    r"/opt/(?:[Tt]eam[Cc]ity/)?build[Aa]gent/work/[^/\s]+/", r"[A-Za-z]:\\[Bb]uild[Aa]gent\\work\\[^\\\s]+\\",
+    r"/opt/(?:[Tt]eam[Cc]ity/)?build[Aa]gent/work/[^/\s]+/", r"[A-Za-z]:(\\\\?)[Bb]uild[Aa]gent\1work\1[^\\\s]+\1",
     # After the other CIs' workspaces, which keep their own cut (a project's _work/<a>/<b>/ folder there keeps its
     # path). A line that starts with /workspace/ was cut above (_WORKSPACE_WORK). A GitHub-hosted X:/a/ written
     # with '/' was cut above (_HOSTED_WIN_SLASH).
@@ -229,7 +231,7 @@ def _scrub(line: str) -> str:
 
 def norm_path(p: str) -> str:
     """A file named in a log, as the change would name it: forward slashes, no ./ prefix."""
-    p = p.replace("\\", "/")
+    p = p.replace("\\\\", "/").replace("\\", "/")          # a backslash, or the two of a JSON string or a repr
     while p.startswith("./"):
         p = p[2:]
     return p
@@ -333,7 +335,7 @@ _TEST_NAMES = [
 ]
 _EXTENSIONS = (r"py|pyi|go|rs|java|kt|kts|scala|js|jsx|mjs|cjs|ts|tsx|vue|svelte|rb|php|cs|c|cc|cpp|h|hpp|swift|m|sh|"
                r"ya?ml|toml|json|lock|gradle|xml|cfg|ini")
-_PATH = re.compile(r"(?<![\w/.\\-])((?:[\w.-]+[/\\])*[\w.-]+\.(?:" + _EXTENSIONS + r"))"
+_PATH = re.compile(r"(?<![\w/.\\-])((?:[\w.-]+(?:/|\\\\?))*[\w.-]+\.(?:" + _EXTENSIONS + r"))"
                    r"(?::(\d+)|\((\d+)(?:,\d+)?\)|\", line (\d+))")
 _LIBRARY = re.compile(r"site-packages|dist-packages|node_modules|/lib/python|<frozen|\.cargo/registry|"
                       r"/go/pkg/mod/|/usr/lib|/usr/local/lib|\.gradle/caches|\.m2/repository|^/opt/|\.tox/")
@@ -839,11 +841,9 @@ def failures_from_junit(text: str, name: str) -> list[Failure]:
         tests.append(test[:160])
         message = f"{test}: {bad.get('type', bad.tag)}: {bad.get('message', '')}"
         text = bad.text or ""
-        # a key ends its lines, not a colour code; and a marker a colour code splits (`^[[0m`, which clean_line
-        # removes after) is a marker, as in a log, whose colour codes are gone before its keys are hidden
-        plain = [_ANSI.sub("", _XML_COLOUR.sub("", x)) for x in (message, text)]
-        if any(_key_marker(x) for x in "\n".join(plain).split("\n")):
-            message, text = plain
+        # pytest's colour codes go, as a log's do; and before keys are hidden: a key ends its lines, not a colour
+        # code, and a marker a colour code splits (`^[[0m`, which clean_line removes after) is a marker
+        message, text = (_ANSI.sub("", _XML_COLOUR.sub("", x)) for x in (message, text))
         cands.append(clean_line("\n".join(_hide_keys(message.split("\n"))))[:MAX_LINE_CHARS])       # hidden before the cut
         tail.extend(clean_line(x) for x in _hide_keys(text.splitlines())[-25:])
     if not tests:
@@ -1542,14 +1542,38 @@ def project_relative(text: str, root: Path | None) -> str:
     the project, as a CI runner's workspace prefix is removed, so the facts can name them."""
     if root is None:
         return text
-    for top in dict.fromkeys((str(root), str(root.resolve()))):
+    tops = (str(root), str(root.resolve()))
+    for top in dict.fromkeys((*tops, *map(_as_read, tops))):
         top = top.rstrip("/\\")
-        if len(top) > 3:                                 # never '/' or 'C:\'
-            for form, sep in dict.fromkeys(((top, "\\" if "\\" in top else "/"), (top.replace("\\", "/"), "/"))):
-                # only at the start of a path: '/mnt/home/you/app/x' is not inside '/home/you/app'
-                if form + sep in text:
-                    text = re.sub(r"(?<![\w.~/\\-])" + re.escape(form + sep), "", text)
+        if len(top) <= 3:                                # never '/' or 'C:\'
+            continue
+        # only at the start of a path: '/mnt/home/you/app/x' is not inside '/home/you/app'
+        start = r"(?<![\w.~/\\-])"
+        # a Windows drive or UNC path, told by its shape: a POSIX folder name may hold a backslash
+        if re.match(r"[A-Za-z]:|\\\\", top):
+            # each separator '\', '/' or doubled '\\' (a JSON string, a repr), mixed as a tool joins a
+            # Windows folder and a POSIX path; letter case does not matter (resolve() gives an upper-case drive)
+            sep = r"(?:\\\\?|/)"
+            parts = re.split(r"[\\/]", top)
+            if re.search(sep.join(re.escape(p.lower()) for p in parts if p) + sep, text.lower()):  # a quick look first
+                # the folder may come again right after itself in another form: remove each repeat in this one pass
+                text = re.sub(start + "(?:" + sep.join(map(re.escape, parts)) + sep + ")+", "", text, flags=re.I)
+            continue
+        forms = [(top, "/")]
+        if "\\" in top:                                  # a folder name with a backslash, also as JSON writes it
+            forms += [(top.replace("\\", "\\\\"), "/"), (top, "\\"), (top.replace("\\", "\\\\"), "\\\\")]
+        for form, end in forms:
+            if form + end in text:
+                text = re.sub(start + re.escape(form + end), "", text)
     return text
+
+
+def _as_read(top: str) -> str:
+    """A folder name that is not valid UTF-8 as a log read with errors="replace" writes it (U+FFFD for its bytes)."""
+    try:
+        return os.fsencode(top).decode("utf-8", "replace")
+    except UnicodeError:                # a lone surrogate no file system name holds
+        return top
 
 
 # A UTF-16 byte-order mark: what `>` and Out-File write in Windows PowerShell 5.1. Anything else is read as UTF-8.

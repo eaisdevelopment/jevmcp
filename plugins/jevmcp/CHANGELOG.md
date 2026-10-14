@@ -1,5 +1,198 @@
 # Changelog
 
+## 1.7.10 — 2026-10-14
+
+**The older gaps 1.7.9 listed, fixed.** 1.7.9's review rounds recorded 33 older gaps that 1.7.8
+and 1.7.9 share; each is fixed here, except where *Not fixed* says otherwise. Nothing that 1.7.9
+hid is sent, except the paths of one other folder: for a Linux or macOS project folder whose name
+holds a backslash (`/home/you/my\proj`), 1.7.9 removed a different folder (`/home/you/my/proj/`)
+from the start of paths in a CI log; those paths are now sent like those of any folder outside the
+project, the user name shown as `<user>`. The fixed questions, their options, the thresholds, the
+model and spec drift's sentence reading are unchanged.
+
+**Secret redaction** (spec drift; older gaps that 1.7.8 and 1.7.9 also had):
+- In a YAML file, a secret key whose line ends in a tag or an anchor (`api_keys: &keys`,
+  `password: !!str`) is read as a key with its value below it: the items and plain values on the
+  lines below are redacted, as under `api_keys:`. 1.7.9 redacted only the key's line and sent the
+  lines below it.
+- When the 2,600-character cap, or a claim's share that is the code's first characters, would cut
+  inside the quoted value of a secret-named variable or inside a connection-string password, the
+  cut is made before that value, also when the value starts lines below its name
+  (`dbSecret =`, a blank line, then the string). 1.7.9 sent the part of the value before the cut.
+  An earlier cut is never one that would send what the cut at the cap hid.
+- In a YAML file, a secret key inside a list or map opened on its line (`db: {user: app,
+  password: ...}`, `- {name: app, password: ...}`, `{"password": ...}`) has its value redacted,
+  quoted or not; a placeholder is kept. 1.7.9 sent an unquoted value, and a quoted one under a
+  name such as `error_key`, as written.
+- In a TOML file, a dotted key with a quoted part (`auth."eu-west".api_keys = [`,
+  `"auth".password = ...`) is read as a setting, so its value, a list that goes on below it and a
+  `"""` string under it are redacted. 1.7.9 sent them as written.
+- An env template whose name ends in `.env.example`, `.env.sample`, `.env.template`, `.env.dist`
+  or `.env.defaults` after a name (`app.env.example`, `config.env.sample`) is read as a
+  configuration file, so its secret settings are redacted, quoted or not. 1.7.9 read it as code
+  and sent unquoted values as written. A name that starts with `.env` (`.env.local.example`) is
+  still refused. Such a template's settings are now also read as configuration keys, as
+  `.env.example`'s are (secret values masked), so they can show up among config symbols and fill a
+  route's `${...}` placeholder.
+- A PEM private key written as joined C# verbatim literals (`@"..." + @"..."`) or Objective-C
+  literals (`@"..." @"..."`) counts as written as a key, so it is hidden whole under any name.
+  1.7.9 sent all but its BEGIN line under a secret-named variable.
+
+**Spec drift: reading and writing files** (older gaps, the same in 1.7.8 and 1.7.9):
+- `spec_drift.py --dry-run --out` into a folder that does not exist stops with exit 2 and `the plan
+  could not be written to FILE: No such file or directory`, not a Python traceback.
+- A map entry to be checked whose `text` holds a lone surrogate (a JSON `\ud83d` escape without its
+  other half) is now a problem that `validate_spec_map`, `check_spec_drift` and `--dry-run` report
+  (`map entry N (SPEC:LINE): its text holds a lone surrogate (\ud83d, half of a character) - NOT
+  checked.`), and that entry is not checked; the other entries are. Before, it passed validation and
+  `check_spec_drift` failed with JSON-RPC -32603 (the command line with a traceback). A lone
+  surrogate in a field that is never sent (a `why`, a note, an excluded entry) is still no problem.
+- `spec_drift.py --draft-map FILE` and `code_audit.py --draft-map FILE` refuse a FILE that is a
+  symbolic link, also a link to nothing or a link loop, with their usual `already exists` / `exists`
+  message. Before, a link loop ended in a traceback and was deleted, and a link to nothing was
+  written through. A map draft whose write fails (from the command line or `draft_spec_map`) no
+  longer removes a link that was there before.
+- A Markdown spec that starts with a UTF-8 byte-order mark is read without the mark: a heading on
+  its line 1 is a heading, so the spec finder (`--find-specs`, `draft_spec_map` without `docs`) lists
+  the file and reads a `Superseded` line 1, and line 1's sentence is drafted (and sent) without the
+  mark. A map drafted by 1.7.9 from such a spec, with the mark in its text, still loads.
+- A spec saved as UTF-16 with a byte-order mark (what `>` and `Out-File` write in Windows PowerShell
+  5.1) is read as UTF-16, as a rule file is: its sentences are drafted as written, and the finder lists
+  it. Before, the draft was one entry of characters separated by NULs.
+- On Python 3.12, a link loop that git lists among the changed or new files (an untracked
+  `stray.log -> stray.log`) no longer stops `preview_spec_check` and `check_spec_drift` in their
+  default changed-files scope, nor `spec_drift.py --changed`; the loop is one more changed name.
+- Spec drift: a map's code reference to a file whose name is not valid UTF-8 (written in the map
+  as a `\udcff` escape), as a line range (`app/u\udcffx.py:1-2`) or a whole file, is now a problem
+  that `validate_spec_map`, `--strict` and `--dry-run` report (`'app/u\udcffx.py' names a file
+  whose name is not valid UTF-8 - refused, no request can carry it. Rename the file.`), and that
+  entry is not checked; the other entries are checked as before. 1.7.9 listed such an entry as
+  ready, then the check stopped with a UnicodeEncodeError traceback (command line, exit 1) or a
+  JSON-RPC -32603 error (`check_spec_drift`), with nothing sent.
+
+**Code audit:**
+- When git cannot read an ignore file (a `.gitignore` with no read permission, or one that is a
+  symbolic link, which git 2.32 and later does not follow; `.git/info/exclude`; the global excludes
+  file; git's default one, in a folder that cannot be entered while `core.excludesFile` is not set,
+  stops nothing, as git applies nothing from it), the audit stops with `git could not read <file> (<the system's words>), so which files it
+  ignores ... cannot be told apart, and no code was read.` git only warned and then listed the
+  files it ignores, and their code was audited and sent. The message ends with `Fix its
+  permissions.` for a permission error, says to replace the link with the file for a linked
+  `.gitignore`, and says `Fix it.` otherwise. `draft_rule_map`, `validate_rule_map`,
+  `--draft-map` and `--validate` stop the same way, as they list the project's files as an audit
+  does. A `.gitignore` in a folder that cannot be entered stops none of them, because the files it
+  rules cannot be read either.
+- Outside git, a folder that resolves somewhere else, such as a Windows junction, is no longer
+  walked into, so the code files there are not audited or sent. A symbolic link there was already
+  skipped.
+- Outside git, `.claude/CLAUDE.md` in a `.claude` folder that can be listed but not entered is
+  found and left out with the note `could not be read (Permission denied)`, as in git. A `.claude`
+  or `.cursor` folder that can be neither listed nor entered, a `rules` folder in one that cannot
+  be searched, and a folder under such a `rules` folder that cannot be listed get the line
+  `<folder> could not be searched (...), so any rule files in it were left out` in
+  `draft_rule_map` and `code_audit.py --draft-map`. 1.7.9 left those rule files out without a word.
+- A rule file in a nested rules folder (`svc/.cursor/rules/python.mdc`,
+  `svc/.claude/rules/style.md`, `svc/.clinerules/style.md`) is drafted with the scope of the folder
+  that holds the agent folder (`svc/**`), as `svc/.claude/CLAUDE.md` already was. 1.7.9 gave it the
+  whole project's scope. Root-level rule folders still give the whole project.
+- In a code file that starts with a byte-order mark, a unit that is empty except for the mark once
+  its comments are removed (a licence header, or for Python a header and a module docstring) is not
+  sent. 1.7.9 sent it as a paid request whose code was only the mark, once per reviewed rule.
+- A reviewed rule map entry whose rule (or, with no rule, its text), source or line holds a lone
+  surrogate (a JSON `\ud83d` escape) is now a problem
+  in `validate_rule_map` and `code_audit.py --validate`. `preview_code_audit`, `check_code_rules`
+  and the command line stop with a message and send nothing. 1.7.9 passed validation, then failed
+  with JSON-RPC -32603 or a traceback.
+- With `core.quotePath=false`, a changed file whose name holds U+2028, U+2029 or U+0085 is part of
+  the change's audit. 1.7.9 left it out without a note.
+- `code_audit.py --files` takes an absolute path inside the project, or a name with `..` or `./`,
+  as the file it names, read without following a link (`app/../app/x.py` is `app/x.py`); the MCP
+  tools' `files` already took such names, links followed. 1.7.9 audited nothing for
+  such a name and said no rule applies.
+- `code_audit.py --draft-map --docs` with an absolute path inside the project records the file by
+  its name in the project, so its entries' `source` and scope are those a relative name gives
+  (`**/*.py` for `<project>/.claude/CLAUDE.md`). 1.7.9 drafted an absolute scope that matched no
+  file (`//<project>/**/*.py`).
+- Code audit, change scope: an added line of code that starts with `++ ` (in git's diff, `+++ ...`) was
+  taken for the next file's header, and every later changed part of that file was left out of the
+  audit without a note. 1.7.9 did the same. Lines inside a changed part are no longer read as headers.
+- Code audit, change scope: git's diff was read as text, so a lone carriage return (CR) inside a changed
+  line ended the line there, and what followed it was read as a header: `@@ -1,40 ...` added a line 1 that
+  was not changed, and `+++ b/other.py` filed the file's later changed lines under `other.py`, so they
+  were left out of the audit without a note. 1.7.9 did the same. The diff is now split at line ends only.
+- `draft_rule_map`, outside git: a `.clinerules` folder that cannot be listed hid its rule files without
+  a note (1.7.9 and the 1.7.10 candidate did this). It now gets the line a `.claude` or `.cursor`
+  folder gets: `.clinerules could not be searched (...), so any rule files in it were left out; ...`.
+- `draft_rule_map`, in git: a `.claude`, `.cursor` or `.clinerules` folder (or a `rules` folder in the
+  first two, or a folder under it) that git could not open hid the rule files in it that git does not
+  track, without a note; 1.7.9 did the same. It now gets the same line, with "any other rule files"
+  when git still listed the files it tracks there.
+
+**MCP server.**
+- A path that starts with `~` and a user name that has no home folder (`~nouser/x`) gives a tool
+  error that says so, not an internal error (-32603), in `project`, `draft_spec_map`'s `docs`, the
+  code-audit tools' `map`, `out`, `docs` and `files`, and `preview_ci_triage`'s `logs` and `junit`.
+  The spec tools' `map` and `draft_spec_map`'s `out` are still taken as written.
+- `draft_spec_map` and `draft_rule_map` refuse an `out` that is a link that cannot be followed (a
+  link loop), and leave the link as it is. On Python 3.13 they tried to write through it, failed,
+  and deleted the link.
+- `check_spec_drift`, `validate_spec_map`, `preview_spec_check` and `draft_spec_map` (with `docs`)
+  also show the command line's note on files that can only be paired by line range
+  (`N .go files can only be paired by line range (file:120-160)`), first among the index notes,
+  in the text and in `index_notes`. The files are counted in the walk indexing already makes, not
+  in a second one.
+- `check_spec_drift`'s output schema now says what `flagged[].samples` is: how many answers were
+  used (1 when asking again failed or was stopped), not how many times the claim was asked about.
+  The value is unchanged.
+- `validate_spec_map` with `strict: false` lists the first 20 `note:` lines and names a file that
+  lists them all, as it does for problems; `notes` is cut to fit and the new `notes_total` counts
+  every note. A spec folder with hundreds of partly mapped files gave a reply of about 200,000
+  characters.
+
+**CI triage:**
+- a Windows CI workspace written with doubled backslashes, as a JSON log line or
+  Python's repr of a path writes it (`D:\\a\\<r>\\<r>\\app\\x.ts:3`), is removed like the one
+  written with single backslashes: GitHub-hosted, a self-hosted runner's `_work\\<a>\\<b>\\`,
+  Travis CI's and TeamCity's. A path written that way (`app\\x.ts:3`) is now among the files the
+  errors name. In the change excerpt the same doubled form is removed where 1.7.7's single one was.
+- in a log or JUnit report read from a file, the project folder is removed also when
+  the log writes a Windows folder in another letter case (`c:\...` for `C:\...`, `...\Proj\...`
+  for `...\proj\...`) or with doubled backslashes (JSON), and when the folder's name is not valid
+  UTF-8 (1.7.9 sent the absolute path and named a wrong file, such as `oj/app/main.py`).
+- pytest's `#x1B[..m` colour codes are removed from every JUnit failure, as
+  PRIVACY.md says colour codes are; 1.7.9 removed them only from a failure that named a private-key
+  marker. A coloured file name in such a failure (`tests/test_x.py:12`) is now among the files the
+  errors name.
+- In a log or JUnit report read from a file, a Linux or macOS project folder whose name holds a
+  backslash (`/home/you/my\proj`) is removed from the start of its paths. 1.7.9 took such a folder
+  for a Windows one: it sent the absolute path (`/home/<user>/my\proj/app/main.py`, the user name
+  shown as `<user>`), so the facts named no project file, and it removed `/home/you/my/proj/`, a
+  different folder, instead. That other folder's paths are now sent like those of any folder
+  outside the project, the user name shown as `<user>`.
+- In a log or JUnit report read from a file, a Windows project folder written with `\` and `/`
+  mixed (`C:\Users\you\proj/src/a.ts`, `C:/Users/you/proj\src\a.ts`, a JSON string's
+  `C:\\Users\\you\\proj/src/a.ts`) is removed like one written with a single kind of separator.
+  1.7.9 sent the folder's path (the user name shown as `<user>`) and the facts named no file.
+
+**How it was tested.** Every fix has a regression test that fails on the 1.7.9 code and passes on
+this release's, and each area's fixes were checked by a second agent told to find where they are
+worse than 1.7.9. The fuzzers that compare what is sent with 1.7.9 and 1.7.8 (PEM and PGP keys,
+cuts and line ranges, configuration files, YAML, connection strings, code-audit units, CI logs) find
+nothing that 1.7.10 sends and 1.7.9 hid, except that other folder's paths (see the top). 2,910
+automated tests (one is skipped unless a file owned by another user exists). jevmcp's own spec map
+has 1,103 entries, 917 of them checked claims.
+
+**Not fixed:**
+- In YAML, a secret key on a later line of a list or map opened on an earlier line, after a `,`
+  (`db: {host: x,` then `user: app, password: ...}`), is sent as written; one that starts its line
+  is redacted.
+- The cap rule above looks for the value within 16,384 characters of the cut, and not under a
+  name of more than 256 characters; a longer value, or a value under such a name, that the cap
+  cuts sends the part before the cut, as in 1.7.9.
+- In YAML, a value inside a list or map opened on its line that holds a `{` or `[`
+  (`password: ${DB_PASS:hunter2}`, `Hunt{er22`) is sent as written, as in 1.7.9.
+- The limits in 1.7.9's *Not fixed* list below still apply.
+
 ## 1.7.9 — 2026-10-13
 
 **The known issues and older gaps of 1.7.8, fixed.** The 1.7.8 entry below ends with three known
