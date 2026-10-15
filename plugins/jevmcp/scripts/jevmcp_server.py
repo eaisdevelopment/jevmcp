@@ -452,7 +452,8 @@ SPEC_DRIFT_TOOLS = [
         "description": (
             "Set up a project that has no spec map yet. If the user named the spec - files or a folder - call it "
             "with docs = exactly what they named, and out: it drafts from exactly that, never second-guessing "
-            "it (a folder gives every .md and .rst file in it). Otherwise first call it WITHOUT docs: it drafts "
+            "it (a folder gives every .md and .rst file in it, but never a secrets file such as .env.md, which is left "
+            "out with a warning; naming a secrets file itself stops the draft). Otherwise first call it WITHOUT docs: it drafts "
             "nothing and lists every file that looks like a spec, with its last commit date and hints (looks "
             "like an old copy, says it is superseded, which of several versions looks newest). Show that list to "
             "the user and ask which file(s) or folder hold the current spec - never pick one yourself; the hints "
@@ -467,7 +468,8 @@ SPEC_DRIFT_TOOLS = [
                 "docs": {"type": "array", "items": {"type": "string", "minLength": 1},
                          "description": "The spec file(s) or folder(s) the user named, relative to the project - "
                                         "used exactly as named; a folder gives every .md and .rst file in it and "
-                                        "below it. Leave out to list the candidates instead (nothing is written)."},
+                                        "below it (never a secrets file such as .env.md: left out with a warning; "
+                                        "naming one itself stops the draft). Leave out to list the candidates instead (nothing is written)."},
                 "out": {"type": "string",
                         "description": "The new map file, relative to the project - usually next to the "
                                        "spec, named spec_map.json. Needed with docs."},
@@ -1966,6 +1968,10 @@ class Server:
             sources = []
             for d in docs:
                 p = self._project_path(d, "rule file")
+                # a secrets file is refused by its name before anything opens it (a folder on its way that cannot
+                # be entered would otherwise answer first)
+                if audit._secret_file(Path(d).name) or audit._secret_file(p.name):
+                    raise ToolError(f"{d} looks like a secrets file - refused, never read")
                 if not p.exists():
                     raise ToolError(f"rule file not found in the project: {d}")
                 rel = os.path.relpath(p, self.root).replace(os.sep, "/")

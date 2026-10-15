@@ -48,7 +48,8 @@ result that says `INCOMPLETE`.
 
 **Log files from another CI** must be inside the project, or in the server's private inbox (a
 0700 folder whose absolute path the preview's output gives as `inbox`). Save the log there and
-pass its path. Symbolic links, `.git`, secret files and other users' files are refused.
+pass its path. Symbolic links, `.git`, secret files and, on Linux and macOS, other users'
+files are refused (on Windows the owner is not checked).
 
 ## Before anything is sent
 

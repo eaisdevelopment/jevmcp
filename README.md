@@ -7,7 +7,7 @@ screens everything in seconds, at a fraction of a cent per item; the agent spend
 only on what the fast model flags. Jev is a classifier from TypeSafe (<https://typesafe.ai>), not a chat model: it picks one of the
 answers it is offered and gives a probability for each.
 
-Current release: **1.7.10** (2026-10-14) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
+Current release: **1.7.11** (2026-10-15) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
 
 ## One plugin, installed once
 
@@ -311,7 +311,7 @@ key into an issue or pull request.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
   on Linux, macOS and Windows, from an empty uv cache, runs the seven free tools and checks that the
   three that send refuse without a key.
-- **2,910 automated tests.**
+- **3,026 automated tests.**
 
 ## Repository layout
 

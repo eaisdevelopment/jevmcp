@@ -962,6 +962,9 @@ _COMMENT_ONLY = {".py": r"#", ".sh": r"#", ".rb": r"#", ".yml": r"#", ".yaml": r
                  ".js": r"//|/\*|\*", ".ts": r"//|/\*|\*", ".tsx": r"//|/\*|\*", ".jsx": r"//|/\*|\*",
                  ".c": r"//|/\*|\*", ".cc": r"//|/\*|\*", ".cpp": r"//|/\*|\*", ".h": r"//|/\*|\*",
                  ".cs": r"//|/\*|\*", ".swift": r"//|/\*|\*", ".php": r"//|#|/\*|\*", ".scala": r"//|/\*|\*"}
+# the other names C++, JavaScript, TypeScript and Kotlin files go by
+_COMMENT_ONLY.update({x: r"//|/\*|\*" for x in (".hpp", ".hh", ".hxx", ".cxx", ".c++", ".h++", ".mjs", ".cjs",
+                                                  ".mts", ".cts", ".kts")})
 
 
 def _is_secret_path(p: str) -> bool:
@@ -1680,15 +1683,32 @@ def _project_files(root: Path, commit: str | None = None) -> list[str] | None:
     return out
 
 
+def _gitlinks(root: Path, commit: str | None = None) -> list[str]:
+    """The folders of the project's git submodules (gitlinks, mode 160000), in the index and in `commit`: their
+    files are the project's, though git lists only the folder."""
+    out: list[str] = []
+    for args in [("ls-files", "-z", "-s"), *([("ls-tree", "-z", "-r", commit)] if commit else [])]:
+        try:
+            r = subprocess.run(dd.git_argv("-C", str(root), *args), capture_output=True, timeout=60,
+                               stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0:
+            out += [os.fsdecode(e.split(b"\t", 1)[1]) for e in r.stdout.split(b"\0")
+                    if e.startswith(b"160000 ") and b"\t" in e]
+    return out
+
+
 def set_apart_outside(fails: list[Failure], root: Path, changed: list[str] | None, commit: str | None = None) -> None:
     """A file the errors name that is no file of the project (a test's own temporary project, a fixture's
     `app.py`) is moved to `outside`: the facts name it apart, and say nothing of the change from it. A named
     file is the project's when it is one of git's files or a changed file, or one ends with the other (a log
-    of a subfolder, a workspace prefix kept). `commit` (a GitHub run's) adds its files; when git cannot list
-    the project's files, or that commit's, nothing is moved."""
+    of a subfolder, a workspace prefix kept), or lies in one of its git submodules. `commit` (a GitHub run's) adds
+    its files; when git cannot list the project's files, or that commit's, nothing is moved."""
     have = _project_files(root, commit)
     if not have:
         return
+    subs = [g.lower().strip("/") for g in _gitlinks(root, commit)]
     by_name: dict[str, list[str]] = {}
     for q in [*have, *(changed or [])]:
         q = q.lower()                              # macOS and Windows disks ignore case
@@ -1696,7 +1716,8 @@ def set_apart_outside(fails: list[Failure], root: Path, changed: list[str] | Non
 
     def ours(e: str) -> bool:
         e = norm_path(e).lower()
-        return any(q == e or q.endswith("/" + e) or e.endswith("/" + q) for q in by_name.get(e.rsplit("/", 1)[-1], ()))
+        return any(q == e or q.endswith("/" + e) or e.endswith("/" + q) for q in by_name.get(e.rsplit("/", 1)[-1], ())) \
+            or any(f"/{g}/" in f"/{e}" for g in subs)
     for f in fails:
         f.named = list(f.files)
         f.files, f.outside = [p for p in f.files if ours(p)], [p for p in f.files if not ours(p)]

@@ -65,7 +65,8 @@ free; only step 7 sends anything.
 
 2. **Let the user choose the spec (free).** If the user named it — a file, several files or a
    folder, such as `specification/final` — go to step 3 with exactly that: it is used as named,
-   never second-guessed, and a folder gives every `.md` and `.rst` file in it. Otherwise call
+   never second-guessed, and a folder gives every `.md` and `.rst` file in it (a secrets file such
+   as `.env.md` is left out with a warning, and one named itself is refused). Otherwise call
    `draft_spec_map` without `docs`; it writes nothing and lists every file that looks like a spec,
    with its last commit date and hints — a version number or date in its name, a folder such as
    `archive/`, a line in its first 40 that says it is superseded or deprecated, which of several

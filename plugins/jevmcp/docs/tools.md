@@ -542,7 +542,7 @@ it: validate the map after the spec changes.
 | `specs` | array of strings | The spec files drafted from. |
 | `entries` | integer | Entries written. |
 | `warnings` | array of strings | About a named folder: files git does not list (it ignores them, or they belong to another repository) that were used anyway; and what was **not** used — a skipped folder that holds spec files, a link not followed, a name that is not valid UTF-8, a file that cannot be read, a file named as a secrets file or a link to one; or that git could not be asked. Also an `out` inside a symbolic link to a folder: the map really lands in the folder the link leads to and stays there when the link is repointed. Show each to the user. |
-| `candidates` | array of objects | Without `docs`: every file that looks like a spec, with the hints. Each has `path`, `title` (the front matter's title, a `Title:` header field, else its first heading, or null), `last_commit` (date, or null when not committed or not found), `committed` (null when git cannot be run in a git project), `last_commit_not_found` (why `last_commit` is null for a committed file - `git log` was stopped after 60 s before it got there, or git could not be run, as when it is not installed - or null), `looks_historical` (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version, unless a word in its path or its own first lines already mark it old), `self_declared` (the line at its top that says it is out of date, or null), `family` (the document it is a version of), `family_size`, `newest_in_family` (null when it cannot be told) and `newest_decided_by`. |
+| `candidates` | array of objects | Without `docs`: every file that looks like a spec, with the hints (a secrets file such as `.env.md`, or a link to one, is never listed or read). Each has `path`, `title` (the front matter's title, a `Title:` header field, else its first heading, or null), `last_commit` (date, or null when not committed or not found), `committed` (null when git cannot be run in a git project), `last_commit_not_found` (why `last_commit` is null for a committed file - `git log` was stopped after 60 s before it got there, or git could not be run, as when it is not installed - or null), `looks_historical` (every reason it may be an old copy; a version number or date is not counted against the newest version of a document or a file with no other version, unless a word in its path or its own first lines already mark it old), `self_declared` (the line at its top that says it is out of date, or null), `family` (the document it is a version of), `family_size`, `newest_in_family` (null when it cannot be told) and `newest_decided_by`. |
 | `families` | array of objects | Without `docs`: the documents with several versions — `family`, `members`, `newest` (or null), `decided_by`, `last_commits` (member → date), `last_commit_not_found` (member → why its last commit is not known; empty when `git log` ran to the end). |
 | `index_notes` | array of strings | With `docs`: the notes indexing the code printed, as in `validate_spec_map`; the text has them as `note:` lines after the index line. Without `docs` the code is not indexed, and it is empty. |
 | `next_step` | string | What to do next. |
@@ -1081,7 +1081,8 @@ own rule files into a new rule map, for review. Free, sends nothing. **Never ove
 | `out` | string | `rule_map.json` | The new map file, relative to the project. |
 | `project` | string | see above | Absolute path of the project. |
 
-Without `docs`, it looks for these files, among those git tracks or would commit:
+Without `docs`, it looks for these files, among those git tracks or would commit (never a secrets
+file such as `.claude/rules/.env.md`, which is left out with a warning and never read):
 
 - the files coding agents read, by their exact names, capitals included, in any folder —
   `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` and `AGENTS.override.md` (a document whose name only
@@ -1862,7 +1863,7 @@ uv run --script <plugin>/scripts/spec_drift.py --help
 |---|---|
 | `--docs PATH [PATH ...]` | The spec: Markdown/`.rst` files or folders, inside the folder you run from. Pairs only sentences that name code — in backticks, an upper-case constant such as `MAX_ITEMS`, or a route such as `GET /orders` — and lists the others as not checked (the first 30, then how many more). Same rules as `draft_spec_map`: exactly what you name is used, and a folder gives every `.md` and `.rst` file in it. |
 | `--map FILE` | A reviewed map. Use this to check every requirement, not only the ones that name code. `--docs` and `--map` are alternatives, never both. |
-| `--find-specs` | List every file that looks like a spec, with its last commit date and hints — the same list as `draft_spec_map` without `docs` — and stop. No API calls. Use it alone (with `--ignore` if needed), from the project's folder: it lists the folder you run from, so a `--src` other than that folder is refused. |
+| `--find-specs` | List every file that looks like a spec (never a secrets file), with its last commit date and hints — the same list as `draft_spec_map` without `docs` — and stop. No API calls. Use it alone (with `--ignore` if needed), from the project's folder: it lists the folder you run from, so a `--src` other than that folder is refused. |
 | `--update-lines` | With `--map`: store the current line of every entry whose sentence has moved in the spec. Only those `line` values change; every other byte of the file stays as it was, and the file is replaced in one step. Says how many entries it changed, and in a `note:` each entry it left as it was because its spec file is missing or its `spec_text` is no longer in the spec. No API calls. |
 | `--src DIR` | Folder to read the code from. Default: the current folder. |
 | `--ignore NAME [NAME ...]` | More folder names to skip, on top of the defaults. |
@@ -1955,7 +1956,7 @@ uv run --script <plugin>/scripts/ci_triage.py --log build.log --junit report.xml
 | `--run URL` | A GitHub Actions run, job or pull-request URL, read with your own `gh` login. |
 | `--repo OWNER/NAME` | With a bare run id instead of a URL. |
 | `--any-repo` | Read a run of a repository that is not a GitHub remote of `--src`. The MCP tools have no such option. |
-| `--log FILE [FILE ...]` | Log files from any CI. Each must be inside `--src`: copy the log into the project first. A file outside `--src` is refused (exit 2), and so are symbolic links, files under a `.git` folder, secret files such as `.env`, and other users' files. A relative path is read from the current folder, not from `--src`. |
+| `--log FILE [FILE ...]` | Log files from any CI. Each must be inside `--src`: copy the log into the project first. A file outside `--src` is refused (exit 2), and so are symbolic links, files under a `.git` folder, secret files such as `.env`, and on Linux and macOS other users' files (on Windows the owner is not checked). A relative path is read from the current folder, not from `--src`. |
 | `--junit FILE [FILE ...]` | JUnit XML reports, under the same rules as `--log`. |
 | `--base REF` | With `--log`/`--junit`: the git ref the change under test is compared against. |
 | `--src DIR` | The project checkout. Default: the current folder. |

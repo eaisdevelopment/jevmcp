@@ -771,6 +771,7 @@ _PEM_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
 _PEM_BEGIN_178, _PEM_END_178 = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
 _PGP_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY BLOCK-----")
 _PGP_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY BLOCK-----")
+_KEY_MARKER = re.compile(r"-----(?:BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")   # any of the four
 
 
 def _pem_line(line: str) -> tuple[str, str, str]:
@@ -1000,15 +1001,20 @@ def _keep_keys_hidden(raw: str, lines: list[str], others: tuple[list[str], ...] 
     """`lines` are raw's lines with comments or docstrings removed, as many as raw has; `others`, the same lines as
     1.7.10 removed them, where it removed less. redact() finds a PEM key (or PGP block) by its BEGIN and END markers,
     and a removed comment or docstring may have held one: the markers left then pair in other ways, and a key's
-    body can stand outside every pair. When the keys of `lines` are not those of raw and of each of `others`
-    (their lines and columns), every key of all of them is hidden in `lines`: from its BEGIN marker's column on,
-    its other lines but for their indentation (a line with no letter or digit left as it is)."""
-    if "-----" not in raw or len(lines) != raw.count("\n") + 1 or any(len(o) != len(lines) for o in others):
+    body can stand outside every pair, in the whole text or in a part cut from it. When the keys of `lines` are not
+    those of raw and of each of `others` (their lines and columns), or a marker of `others` is gone, every key of
+    all of them is hidden in `lines`: from its BEGIN marker's column on, its other lines but for their indentation
+    (a line with no letter or digit left as it is)."""
+    if not _KEY_MARKER.search(raw) or len(lines) != raw.count("\n") + 1 \
+            or any(len(o) != len(lines) for o in others):
         return
     texts = ["\n".join(lines), raw, *("\n".join(o) for o in others)]
     spans = [[(first, start - text.rfind("\n", 0, start) - 1, last, end - text.rfind("\n", 0, end) - 1)
               for start, end, first, last in _pem_spans(text, one_line=True, wide=True)] for text in texts]
-    if all(sp == spans[0] for sp in spans[1:]):     # the same keys, each from and to the same columns
+    # The same keys, each from and to the same columns, and no marker gone that 1.7.10's cleaning kept: a part of
+    # the text (a line range, an audit unit) cut from `lines` pairs its markers as 1.7.10's cut from its own did.
+    left = len(_KEY_MARKER.findall(texts[0]))
+    if all(sp == spans[0] for sp in spans[1:]) and all(len(_KEY_MARKER.findall(t)) <= left for t in texts[2:]):
         return
     keys = [(first, col, last) for sp in spans for first, col, last, _ in sp]
     for first, col, last in keys:
@@ -1162,33 +1168,38 @@ def _is_config_file(path: Path) -> bool:
         or bool(_ENV_TEMPLATES.match(path.name.lower()))
 
 
-def _blank_py_docstrings(src: str, lines: list[str], def_line: bool = True) -> None:
-    """Blank every module, class and function docstring in `lines` (line count kept). One that starts on its
-    `def` or `class` line (`def f(): '''...'''`) becomes `...` there, the line's other characters kept in their
-    columns (a comment after it is found where tokenize finds it); its other lines are blanked. Not in a text with
-    a lone `\r`, which ast reads as a line break and `lines` do not, nor without def_line (as 1.7.10 left them)."""
-    same_line = def_line and "\r" not in src.replace("\r\n", "")
+def _blank_py_docstrings(src: str, lines: list[str], def_line: bool = True) -> int:
+    """Blank every module, class and function docstring in `lines` (line count kept). One that shares a line
+    with code - it starts on its `def` or `class` line (`def f(): '''...'''`), the signature closes on its line,
+    or code follows it (`"doc"; limit = 5`) - becomes `...` there, the line's other characters kept in their
+    columns (a comment after it is found where tokenize finds it); its other lines are blanked. An empty one
+    (`''`) on such a line stays. Not in a text with a lone `\r`, which ast reads as a line break and `lines` do
+    not, nor without def_line (as 1.7.10 left them: one on its def line kept, one on a line of its own blanked
+    with the line). Returns how many it cut out of a line, so 0 when 1.7.10 would have left the same lines."""
+    same_line, cut = def_line and "\r" not in src.replace("\r\n", ""), 0
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
             first = node.body[0]
             if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
                     and isinstance(first.value.value, str)):
-                if isinstance(node, ast.Module) or first.lineno > node.lineno:
-                    for k in range(first.lineno - 1, first.end_lineno):
-                        lines[k] = ""
-                    continue
-                if not same_line:
-                    continue
+                own = isinstance(node, ast.Module) or first.lineno > node.lineno
                 k, end = first.lineno - 1, first.end_lineno - 1
-                mark = len(lines[k]) - len(lines[k].lstrip("\ufeff")) if k == 0 else 0   # ast reads it without one
-                # ast's columns count UTF-8 bytes
-                a = mark + len(lines[k][mark:].encode("utf-8")[:first.col_offset].decode("utf-8", "replace"))
-                b = mark * (end == 0) + len(lines[end][mark * (end == 0):].encode("utf-8")[:first.end_col_offset]
-                                            .decode("utf-8", "replace"))
-                rest = lines[end][b:]
-                rest = rest if rest.strip() else ""         # (a comment after it is found in its columns)
-                if first.value.value == "":         # an empty docstring (`''`, `""""""`) holds no text
+                if same_line:
+                    mark = len(lines[k]) - len(lines[k].lstrip("\ufeff")) if k == 0 else 0   # ast reads it without one
+                    # ast's columns count UTF-8 bytes
+                    a = mark + len(lines[k][mark:].encode("utf-8")[:first.col_offset].decode("utf-8", "replace"))
+                    b = mark * (end == 0) + len(lines[end][mark * (end == 0):].encode("utf-8")[:first.end_col_offset]
+                                                .decode("utf-8", "replace"))
+                    rest = lines[end][b:]
+                    rest = rest if rest.strip() else ""         # (a comment after it is found in its columns)
+                    shared = lines[k][mark:a].strip() or (rest and not rest.lstrip().startswith("#"))
+                if own and not (same_line and shared):
+                    for j in range(k, end + 1):
+                        lines[j] = ""
                     continue
+                if not same_line or first.value.value == "":    # an empty docstring (`''`) holds no text
+                    continue
+                cut += 1
                 if end == k:
                     lines[k] = lines[k][:a] + ("...".ljust(b - a) if rest else "...") + rest
                 else:
@@ -1196,12 +1207,13 @@ def _blank_py_docstrings(src: str, lines: list[str], def_line: bool = True) -> N
                     for j in range(k + 1, end):
                         lines[j] = ""
                     lines[end] = " " * b + rest if rest else ""
+    return cut
 
 
-def _py_strip(src: str, lines: list[str], def_line: bool = True) -> None:
+def _py_strip(src: str, lines: list[str], def_line: bool = True) -> int:
     """Python's docstrings (see _blank_py_docstrings) and comments removed from `lines`, src's lines, in place.
-    Raises SyntaxError when src does not parse."""
-    _blank_py_docstrings(src, lines, def_line)
+    Raises SyntaxError when src does not parse. Returns how many docstrings were cut out of a line."""
+    cut = _blank_py_docstrings(src, lines, def_line)
     try:
         for tok in tokenize.generate_tokens(io.StringIO(src).readline):
             if tok.type == tokenize.COMMENT:
@@ -1209,14 +1221,16 @@ def _py_strip(src: str, lines: list[str], def_line: bool = True) -> None:
                 lines[r - 1] = lines[r - 1][:c].rstrip()
     except (tokenize.TokenError, IndentationError, SyntaxError):
         pass
+    return cut
 
 
 def _py_cleaned(src: str, lines: list[str]) -> None:
     """_py_strip, a key whose marker was in a removed docstring or comment kept hidden (see _keep_keys_hidden)."""
-    _py_strip(src, lines)
-    if "-----" in src:
-        before = src.split("\n")                     # as 1.7.10 removed them: no docstring on its def line
-        _py_strip(src, before, def_line=False)
+    cut = _py_strip(src, lines)
+    if _KEY_MARKER.search(src):
+        before = src.split("\n") if cut else lines    # as 1.7.10 removed them, where that differs
+        if cut:
+            _py_strip(src, before, def_line=False)
         _keep_keys_hidden(src, lines, (before,))
 
 
@@ -1239,10 +1253,10 @@ def _py_clean(src: str) -> str:
 def strip_comments(path: Path, text: str) -> str:
     """A whole file (for line-range refs) with comments blanked, line numbers kept."""
     if path.suffix in (".py", ".pyi"):                      # a stub file is Python too
-        def cleaned(def_line: bool) -> list[str]:
-            lines = text.split("\n")
+        def cleaned(def_line: bool) -> tuple[list[str], int]:
+            lines, cut = text.split("\n"), 0
             with contextlib.suppress(SyntaxError, ValueError):
-                _blank_py_docstrings(text.removeprefix("\ufeff"), lines, def_line)  # as Python reads a byte-order mark
+                cut = _blank_py_docstrings(text.removeprefix("\ufeff"), lines, def_line)  # as Python reads a BOM
             try:
                 for tok in tokenize.generate_tokens(io.StringIO(text).readline):
                     if tok.type == tokenize.COMMENT:
@@ -1250,10 +1264,10 @@ def strip_comments(path: Path, text: str) -> str:
                         lines[r - 1] = lines[r - 1][:c].rstrip()
             except (tokenize.TokenError, IndentationError, SyntaxError):
                 pass
-            return lines
-        lines = cleaned(True)
-        if "-----" in text:                                 # as 1.7.10 removed them: no docstring on its def line
-            _keep_keys_hidden(text, lines, (cleaned(False),))
+            return lines, cut
+        lines, cut = cleaned(True)
+        if _KEY_MARKER.search(text):                        # as 1.7.10 removed them, where that differs
+            _keep_keys_hidden(text, lines, (cleaned(False)[0] if cut else lines,))
         return "\n".join(lines)
     elif path.suffix in TREE_SITTER and (loaded := _ts_load(str(path))) is not None:
         src, tree = loaded
@@ -1263,7 +1277,8 @@ def strip_comments(path: Path, text: str) -> str:
         lines = mask_c_family(text, strings=False, rust=path.suffix == ".rs").split("\n")
     else:
         return text
-    _keep_keys_hidden(text, lines)
+    # (1.7.10 sent the C++ files C_FAMILY does not name as written)
+    _keep_keys_hidden(text, lines, () if path.suffix in C_FAMILY else (text.split("\n"),))
     return "\n".join(lines)
 
 
@@ -1472,14 +1487,33 @@ def index_python_file(p: Path, text: str, syms: dict[str, Symbol], files: set[st
             full = _py_clean("\n".join(lines[a - 1:b]))
             if len(full) <= MAX_CODE_CHARS:
                 return full
-            out = lines[a - 1:node.body[0].lineno - 1] if node.body else []
+            # The outline is cut from the whole class cleaned at once, so a key whose marker was in a removed
+            # comment or docstring is hidden as in the whole class (see _keep_keys_hidden).
+            src = textwrap.dedent("\n".join(lines[a - 1:b]))
+            cl = src.split("\n")
+            try:
+                _py_cleaned(src, cl)
+            except SyntaxError:
+                cl = None
+            if cl is None:                                  # as before: cut from the raw lines, then cleaned
+                out = lines[a - 1:node.body[0].lineno - 1] if node.body else []
+                for st in node.body:
+                    sa, sb = seg(st)
+                    if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        out += lines[sa - 1:st.body[0].lineno - 1] + [" " * (st.col_offset + 4) + "..."]
+                    else:
+                        out += lines[sa - 1:sb]
+                return _py_clean("\n".join(out))
+            first = next((k for k in range(a - 1, b) if lines[k].strip()), a - 1)
+            margin = len(lines[first]) - len(src.split("\n")[first - a + 1])     # what dedent took
+            out = cl[:node.body[0].lineno - a] if node.body else []
             for st in node.body:
                 sa, sb = seg(st)
                 if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    out += lines[sa - 1:st.body[0].lineno - 1] + [" " * (st.col_offset + 4) + "..."]
+                    out += cl[sa - a:st.body[0].lineno - a] + [" " * (st.col_offset + 4 - margin) + "..."]
                 else:
-                    out += lines[sa - 1:sb]
-            return _py_clean("\n".join(out))
+                    out += cl[sa - a:sb - a + 1]
+            return tidy("\n".join(out))
         return go
 
     def rec(name: str, node: ast.AST, kind: str, value: str = "", loader=None, bare=True) -> Symbol:
@@ -1721,16 +1755,30 @@ def _ts_render(path: str, a: int, b: int, outline_types: tuple[str, ...] = ()) -
     body = node.child_by_field_name("body") if node is not None else None
     if body is None:
         return full
-    parts = [_ts_clean(src, start, body.start_byte + 1, node)]
+    # The lines of the whole class that a key check hides (see _keep_keys_hidden) are hidden in its outline too:
+    # a marker in a comment between members is not in any part.
+    plain = _ts_blank(src, start, b, scope).decode("utf-8", "replace").split("\n")
+    whole = list(plain)
+    _keep_keys_hidden(src[start:b].decode("utf-8", "replace"), whole)
+    hidden = {k for k, (x, y) in enumerate(zip(plain, whole)) if x != y}
+
+    def part(p_start: int, p_end: int, n) -> str:
+        out, at = _ts_clean(src, p_start, p_end, n).split("\n"), src.count(b"\n", start, p_start)
+        for j, line in enumerate(out):
+            if at + j in hidden and re.search(r"\w", line):
+                out[j] = line[:len(line) - len(line.lstrip())] + "<redacted>"
+        return "\n".join(out)
+
+    parts = [part(start, body.start_byte + 1, node)]
     for m in body.named_children:
         if m.type in _COMMENT_TYPES:
             continue
         inner = m.child_by_field_name("body")
         m_start = src.rfind(b"\n", 0, m.start_byte) + 1
         if inner is not None and m.type not in ("enum_body_declarations",):
-            parts.append(_ts_clean(src, m_start, inner.start_byte, m).rstrip() + " { … }")
+            parts.append(part(m_start, inner.start_byte, m).rstrip() + " { … }")
         else:
-            parts.append(_ts_clean(src, m_start, m.end_byte, m))
+            parts.append(part(m_start, m.end_byte, m))
     parts.append("}")
     return tidy("\n".join(parts))
 
@@ -4462,10 +4510,17 @@ class SpecSurvey:
     """What a project's documents say about which spec is current: one listing of the documents,
     the top of each file read at most once, one `git log` pass per prefetch."""
 
+    def _secret(self, f: str) -> bool:
+        try:
+            return _secret_named(Path(f), (self.root / f).resolve())
+        except (OSError, RuntimeError, ValueError):
+            return _secret_named(Path(f))
+
     def __init__(self, root: Path, ignore) -> None:
         self.root = Path(root).resolve()
         listed, self.tracked, self.is_git = _doc_listing(self.root, tuple(ignore))
-        self.docs = [f for f in listed if _utf8(f)]
+        # a secrets file (.env.md, or a link to one) is never read for hints nor offered as a spec
+        self.docs = [f for f in listed if _utf8(f) and not self._secret(f)]
         self.not_utf8 = [f for f in listed if not _utf8(f)]     # set aside: see _utf8
         self._groups: dict[str, list[str]] = {}
         for f in self.docs:
@@ -5953,7 +6008,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Your spec: one or more Markdown/.rst files, or folders (every .md and .rst file in "
                            "a folder, and below it, is used; anything in it that is not used is named in a "
                            "WARNING). Exactly what you name is used - nothing is refused or left out for its "
-                           "name or date. A sentence is paired automatically when it names, "
+                           "name or date, except a secrets file (.env, .env.md, a key file, or a link to one), "
+                           "which is refused, or left out of a folder with a WARNING. A sentence is paired automatically when it names, "
                            "in backticks, something that exists in the code: a function, class, constant, "
                            "endpoint or setting. Sentences it cannot pair are listed. Example: --docs "
                            "docs/spec.md, or --docs specification/final. Not sure which file is the spec? "

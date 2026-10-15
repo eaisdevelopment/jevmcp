@@ -325,8 +325,9 @@ def _unsearchable(agent: Path, inside) -> list[tuple[Path, OSError]]:
     return [(f, e) for f, e in out if e.errno not in _GONE]
 
 
-def find_rule_files(root: Path, files: list[str] | None = None) -> list[str]:
-    """Files that state the project's rules for its own code."""
+def find_rule_files(root: Path, files: list[str] | None = None, secrets: list[str] | None = None) -> list[str]:
+    """Files that state the project's rules for its own code. A secrets file in a rule file's place
+    (.claude/rules/.env.md) is never one: it goes to `secrets`, when given, to be named in a warning."""
     out = []
     for f in files or tracked_files(root):
         p = Path(f)
@@ -339,7 +340,9 @@ def find_rule_files(root: Path, files: list[str] | None = None) -> list[str]:
         if RULE_FILE_NAMES.search(p.name) or RULE_ONLY_DIRS.search(g) or CURSOR_RULES.search(g) \
                 or AGENT_RULE_DIRS.search(g) or (folder and RULE_NAME_WORDS.search(g[folder.end():])):
             out.append(f)
-    return sorted(set(out))
+    if secrets is not None:
+        secrets += sorted({f for f in out if _secret_file(Path(f).name)})
+    return sorted({f for f in out if not _secret_file(Path(f).name)})
 
 
 def candidate_rule_files(root: Path, files: list[str] | None = None) -> list[str]:
@@ -349,7 +352,7 @@ def candidate_rule_files(root: Path, files: list[str] | None = None) -> list[str
     files = files if files is not None else tracked_files(root)
     taken = set(find_rule_files(root, files)) if files else set()
     return sorted(f for f in files if f not in taken and Path(f).suffix.lower() in DOC_SUFFIXES
-                  and re.match(r"(?i)(?:claude|agents)", Path(f).name))
+                  and re.match(r"(?i)(?:claude|agents)", Path(f).name) and not _secret_file(Path(f).name))
 
 
 # ─────────────────────────────────────────────────────────────── 2. the rule map
@@ -718,7 +721,11 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
     files = tracked_files(root, shut)
     languages = {Path(f).suffix for f in files if Path(f).suffix in CODE_SUFFIXES}
     # (an empty list: the command line named files and none of them could be read, so there is nothing to draft)
-    sources = find_rule_files(root, files) if docs is None else docs
+    secret: list[str] = []
+    sources = find_rule_files(root, files, secret) if docs is None else docs
+    if secret and warnings is not None:
+        warnings.append(f"{len(secret)} secrets file(s) were left out, never read: "
+                        f"{', '.join(dd._readable(f) for f in secret)}.")
     if docs is None and warnings is not None:   # the rule files in such a folder cannot be named
         # (in git the ones it tracks are listed: they are not the ones left out)
         warnings += [f"{dd._readable(f)} could not be searched ({why}), so any "

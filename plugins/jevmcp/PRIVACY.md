@@ -34,14 +34,15 @@ The code paired with a requirement is cleaned before it is sent:
 
 - **Comments and docstrings removed** in Python (stub files, `.pyi`, included), Java,
   JavaScript/TypeScript and the other C-family languages (Kotlin, Scala, Groovy, Go, C#, C/C++,
-  Rust, Swift). A docstring on its own `def` or `class` line (`def f(): """..."""`) is sent as
-  `...` there; an empty one (`''`) is sent as written. In a Python file that Python cannot parse,
-  docstrings are sent as written. C++ files named `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` have
-  their comments removed too. A PEM private key or PGP block whose BEGIN or END marker was in a
-  removed comment or docstring is still hidden: its lines are sent as `<redacted>`. Other files —
-  for example PHP, Ruby or shell, which can only be paired by line range — are sent as written. A
-  code file's language is known by its suffix in lower case, so `UPPER.PY` or `Main.JAVA` is not
-  indexed and keeps its comments and docstrings.
+  Rust, Swift). A docstring on its own `def` or `class` line (`def f(): """..."""`), or on a line
+  it shares with other code (`"doc"; limit = 5`), is sent as `...` there; an empty one (`''`) is
+  sent as written. In a Python file that Python cannot parse, docstrings are sent as written. C++
+  files named `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` have their comments removed too. A PEM
+  private key or PGP block whose BEGIN or END marker was in a removed comment or docstring is
+  still hidden: its lines are sent as `<redacted>`. Other files — for example PHP, Ruby or shell,
+  which can only be paired by line range — are sent as written. A code file's language is known by
+  its suffix in lower case, so `UPPER.PY` or `Main.JAVA` is not indexed and keeps its comments and
+  docstrings.
 - **Secret-looking values redacted**:
   - everywhere, by shape: Stripe, GitHub, Slack, Google and OpenAI/Anthropic keys, GitLab, npm,
     PyPI and HashiCorp Vault tokens, Slack webhook addresses, AWS access key IDs, JWTs, PEM
