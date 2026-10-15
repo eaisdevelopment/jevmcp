@@ -453,7 +453,9 @@ The excerpt of the change is cleaned as well:
   them whole as fit in 400 characters, and when that leaves one of the four out, how many
   secret files are not named;
 - lines that only add or remove a comment are left out, in Python, shell, Ruby, YAML, TOML, Go,
-  Rust, Java, Kotlin, Scala, JavaScript, TypeScript, C, C++, C#, Swift and PHP files;
+  Rust, Java, Kotlin, Scala, JavaScript, TypeScript, C, C++, C#, Swift and PHP files (in a `.hpp`,
+  `.hh`, `.hxx`, `.cxx`, `.c++`, `.h++`, `.mjs`, `.cjs`, `.mts`, `.cts` or `.kts` file, a line that only
+  starts with `*`, or holds code after a comment, is sent: it may be code);
 - secret-looking values are redacted as in log lines, also in the code after a diff line's `+`,
   `-` or space, home folders are shown as `<user>` and email addresses as `<email>`;
 - a workspace path is removed only where 1.7.7 removed it (a Windows one also where its

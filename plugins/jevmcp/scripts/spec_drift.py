@@ -1011,12 +1011,12 @@ def _keep_keys_hidden(raw: str, lines: list[str], others: tuple[list[str], ...] 
     texts = ["\n".join(lines), raw, *("\n".join(o) for o in others)]
     spans = [[(first, start - text.rfind("\n", 0, start) - 1, last, end - text.rfind("\n", 0, end) - 1)
               for start, end, first, last in _pem_spans(text, one_line=True, wide=True)] for text in texts]
-    # The same keys, each from and to the same columns, and every marker 1.7.10's cleaning kept still there, in its
-    # place: a part of the text (a line range, an audit unit) cut from `lines` then holds every marker 1.7.10's cut
-    # from its own did, and pairs them as it did. (Counting is not enough: a marker kept on a line that 1.7.10
-    # blanked can stand in for one that is gone.)
-    have = _marker_places(texts[0])
-    if all(sp == spans[0] for sp in spans[1:]) and all(_marker_places(t) <= have for t in texts[2:]):
+    # The same keys, each from and to the same columns, and exactly the markers of 1.7.10's cleaning, each in its
+    # place: a part of the text (a line range, an audit unit) cut from `lines` then holds the very markers 1.7.10's
+    # cut from its own did, and pairs them as it did. Neither a marker gone (one in a removed docstring) nor one
+    # more (a marker string in code on a line 1.7.10 blanked) is allowed: either re-pairs a part.
+    if all(sp == spans[0] for sp in spans[1:]) and (
+            not texts[2:] or all(_marker_places(t) == (have := _marker_places(texts[0])) for t in texts[2:])):
         return
     keys = [(first, col, last) for sp in spans for first, col, last, _ in sp]
     for first, col, last in keys:
@@ -1028,9 +1028,14 @@ def _keep_keys_hidden(raw: str, lines: list[str], others: tuple[list[str], ...] 
 
 
 def _marker_places(text: str) -> set[tuple[int, int, str]]:
-    """Each key marker of `text` (see _KEY_MARKER) as its line (from 0), column and text."""
-    return {(text.count("\n", 0, m.start()), m.start() - text.rfind("\n", 0, m.start()) - 1, m.group(0))
-            for m in _KEY_MARKER.finditer(text)}
+    """Each key marker of `text` (see _KEY_MARKER) as its line (from 0), column and text, in one pass."""
+    out, line, start, last = set(), 0, 0, 0
+    for m in _KEY_MARKER.finditer(text):
+        if k := text.count("\n", last, m.start()):
+            line, start = line + k, text.rfind("\n", last, m.start()) + 1
+        last = m.start()
+        out.add((line, m.start() - start, m.group(0)))
+    return out
 
 
 def _hide_rest(lines: list[str], k: int, col: int, found: list) -> None:

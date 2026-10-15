@@ -43,9 +43,12 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   file, a line range, a code-audit unit and a class outline. Removing the comment took the marker,
   so the key was no longer seen as one: 1.7.10 sent its body for a marker in a `#` comment, in a
   docstring on its own line, or in a comment of Java, C, C++ and the other C-family languages (`//
-  -----BEGIN RSA PRIVATE KEY-----` above the key's strings). In a file where a removed comment or
-  docstring held such a marker, every key of the file is hidden this way, so code between two marker
-  strings (`BEGIN = "-----BEGIN ..."`, `END = "-----END ..."`) is hidden there too.
+  -----BEGIN RSA PRIVATE KEY-----` above the key's strings). When removing comments and docstrings
+  changes which key markers the file has, where they sit or how they pair - against the file as
+  written and against 1.7.10's cleaning (a marker in a docstring on a `def` line, in a removed
+  `.cxx` comment, or a marker string in code on a docstring's line that 1.7.10 blanked) - every key
+  of the file is hidden this way, so code between two marker strings (`BEGIN = "-----BEGIN ..."`,
+  `END = "-----END ..."`) is then hidden in a line range, a code-audit unit and a class outline too.
 - PRIVACY.md now says exactly what the code does in these places: a colonless default is not read in
   any secret-named variable's backtick string (a JavaScript template string or a Go raw string, so
   `` token := `${API_KEY-hunter22}` `` is sent as written, as in 1.7.10), but is read inside a
@@ -131,11 +134,14 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   always present.
 
 **CI triage**:
-- A file the errors name inside one of the project's git submodules counts as the project's; it is
-  not named apart as a file the project does not have.
-- Lines that only add or remove a comment are left out of the change excerpt also in files named
-  `.hpp`, `.hh`, `.hxx`, `.cxx`, `.c++`, `.h++`, `.mjs`, `.cjs`, `.mts`, `.cts` and `.kts`, as
-  PRIVACY.md says for C++, JavaScript, TypeScript and Kotlin; 1.7.10 sent them.
+- A file the errors name inside one of the project's git submodules counts as the project's when it
+  is named from the project root (`lib/x.c`) or after a leading folder the project's own files show
+  in the same errors (`r/lib/x.c` beside `r/src/app.py`); it is not named apart as a file the
+  project does not have.
+- Lines that only add or remove a `//` comment, or open or close a `/* */` one with no code after
+  it, are left out of the change excerpt also in files named `.hpp`, `.hh`, `.hxx`, `.cxx`, `.c++`,
+  `.h++`, `.mjs`, `.cjs`, `.mts`, `.cts` and `.kts`; 1.7.10 sent them. A line there that starts with
+  `*` is sent, as 1.7.10 sent it: it may be code (`*out = 2;`, `* height;`).
 - A secret file whose name is written in upper or mixed case (`.ENV`, `config/Prod.ENV`,
   `SERVER.PEM`, `ID_RSA`) is left out of the change excerpt, as one in lower case is; 1.7.10 sent
   its changed lines (a disk that ignores case, as macOS's and Windows' do by default, holds such
@@ -182,14 +188,14 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   names these files` and `None of the files the errors name is edited by this change.` are drawn
   only from the project's own. 1.7.10 named every relative path the errors held as the project's, so
   a fixture's file could argue against the change. A named file counts as the project's when it is a
-  project file's path, lies in one of the project's git submodules, or one of the two paths ends
-  with `/` and the other (`pkg/mod.py` and `src/pkg/mod.py`), letter case aside. Nothing changes
-  when git cannot list the project's files, or, for a GitHub run, when the run's commit is not in
-  the local repository (a checkout that is behind it). The two sentences name the same files 1.7.10
-  named, the first 12 the errors name, in their order, split between them; when none of those 12 is
-  the project's but a later one is, the first reads `None of the first 12 files the error output
-  names is in this project.`. `files_in_errors` lists the first 20 the errors name, in their order,
-  and the change excerpt puts first the files any named file matches, both as in 1.7.10.
+  project file's path, lies in one of the project's git submodules (see above), or one of the two
+  paths ends with `/` and the other (`pkg/mod.py` and `src/pkg/mod.py`), letter case aside. Nothing
+  changes when git cannot list the project's files, or, for a GitHub run, when the run's commit is
+  not in the local repository (a checkout that is behind it). The two sentences name the same files
+  1.7.10 named, the first 12 the errors name, in their order, split between them; when none of those
+  12 is the project's but a later one is, the first reads `None of the first 12 files the error
+  output names is in this project.`. `files_in_errors` lists the first 20 the errors name, in their
+  order, and the change excerpt puts first the files any named file matches, both as in 1.7.10.
 
 **Docs corrected** (the code is unchanged):
 - docs/tools.md, rule drafting: a third star shape (a bold span split by a sentence cut keeps its

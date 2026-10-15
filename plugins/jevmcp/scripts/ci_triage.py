@@ -962,10 +962,11 @@ _COMMENT_ONLY = {".py": r"#", ".sh": r"#", ".rb": r"#", ".yml": r"#", ".yaml": r
                  ".js": r"//|/\*|\*", ".ts": r"//|/\*|\*", ".tsx": r"//|/\*|\*", ".jsx": r"//|/\*|\*",
                  ".c": r"//|/\*|\*", ".cc": r"//|/\*|\*", ".cpp": r"//|/\*|\*", ".h": r"//|/\*|\*",
                  ".cs": r"//|/\*|\*", ".swift": r"//|/\*|\*", ".php": r"//|#|/\*|\*", ".scala": r"//|/\*|\*"}
-# the other names C++, JavaScript, TypeScript and Kotlin files go by; here a `*` counts only where it continues a
-# block comment (` * text`, ` */`), never as code (`*out = 2;`, a generator's `*gen() {`)
-_COMMENT_ONLY.update({x: r"//|/\*|\*(?=[\s/]|$)" for x in (".hpp", ".hh", ".hxx", ".cxx", ".c++", ".h++", ".mjs",
-                                                           ".cjs", ".mts", ".cts", ".kts")})
+# the other names C++, JavaScript, TypeScript and Kotlin files go by: a line that starts a `//` comment, or opens or
+# closes a `/* */` one with no code after it; a line that only starts with `*` may be code (`*out = 2;`,
+# `* height;`), and so may one with code after a comment (`/* c */ int x;`, `*/ int z = 3;`), so they are kept
+_COMMENT_ONLY.update({x: r"//|/\*(?!.*\*/.*\S)|\*/\s*$" for x in (".hpp", ".hh", ".hxx", ".cxx", ".c++", ".h++", ".mjs",
+                                                                ".cjs", ".mts", ".cts", ".kts")})
 
 
 def _is_secret_path(p: str) -> bool:
@@ -1715,10 +1716,19 @@ def set_apart_outside(fails: list[Failure], root: Path, changed: list[str] | Non
         q = q.lower()                              # macOS and Windows disks ignore case
         by_name.setdefault(q.rsplit("/", 1)[-1], []).append(q)
 
+    def plain(e: str) -> bool:
+        return any(q == e or q.endswith("/" + e) or e.endswith("/" + q) for q in by_name.get(e.rsplit("/", 1)[-1], ()))
+
+    # A submodule's files are named from the project root (`lib/x.c`), or after a leading folder the project's own
+    # files show in these errors too (`r/lib/x.c` beside `r/src/app.py`, a checkout into `path: r`); never after
+    # any other folder (`/usr/lib/...`, a test's `tmp/case/lib/...`).
+    named = {norm_path(e).lower() for f in fails for e in f.files}
+    lead = {""} | {e[:len(e) - len(q)] for e in named if plain(e)
+                   for q in by_name.get(e.rsplit("/", 1)[-1], ()) if e.endswith("/" + q)}
+
     def ours(e: str) -> bool:
         e = norm_path(e).lower()
-        return any(q == e or q.endswith("/" + e) or e.endswith("/" + q) for q in by_name.get(e.rsplit("/", 1)[-1], ())) \
-            or any(e == g or e.startswith(g + "/") for g in subs)
+        return plain(e) or any(e == p + g or e.startswith(p + g + "/") for g in subs for p in lead)
     for f in fails:
         f.named = list(f.files)
         f.files, f.outside = [p for p in f.files if ours(p)], [p for p in f.files if not ours(p)]
