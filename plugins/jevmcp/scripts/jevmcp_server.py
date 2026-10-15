@@ -1970,7 +1970,7 @@ class Server:
                 p = self._project_path(d, "rule file")
                 # a secrets file is refused by its name before anything opens it (a folder on its way that cannot
                 # be entered would otherwise answer first)
-                if audit._secret_file(Path(d).name) or audit._secret_file(p.name):
+                if not os.path.isdir(p) and (audit._secret_file(Path(d).name) or audit._secret_file(p.name)):
                     raise ToolError(f"{d} looks like a secrets file - refused, never read")
                 if not p.exists():
                     raise ToolError(f"rule file not found in the project: {d}")

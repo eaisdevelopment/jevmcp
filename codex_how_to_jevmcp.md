@@ -3,7 +3,7 @@
        plugins/jevmcp/skills/spec-drift/SKILL.md (sha256 dacb8346e13aed88...),
        plugins/jevmcp/skills/ci-triage/SKILL.md (sha256 347bbc4f83453d9f...),
        plugins/jevmcp/skills/code-audit/SKILL.md (sha256 e591c79801f5de49...),
-       plugins/jevmcp/scripts/jevmcp_server.py (INSTRUCTIONS and TOOLS; sha256 da643b97fab1ea61...).
+       plugins/jevmcp/scripts/jevmcp_server.py (INSTRUCTIONS and TOOLS; sha256 85b963337ad833b2...).
      Everything quoted is verbatim unless the text says it was reflowed. Do not edit by hand:
      change the plugin, then run the script. -->
 

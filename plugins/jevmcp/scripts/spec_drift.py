@@ -1011,10 +1011,12 @@ def _keep_keys_hidden(raw: str, lines: list[str], others: tuple[list[str], ...] 
     texts = ["\n".join(lines), raw, *("\n".join(o) for o in others)]
     spans = [[(first, start - text.rfind("\n", 0, start) - 1, last, end - text.rfind("\n", 0, end) - 1)
               for start, end, first, last in _pem_spans(text, one_line=True, wide=True)] for text in texts]
-    # The same keys, each from and to the same columns, and no marker gone that 1.7.10's cleaning kept: a part of
-    # the text (a line range, an audit unit) cut from `lines` pairs its markers as 1.7.10's cut from its own did.
-    left = len(_KEY_MARKER.findall(texts[0]))
-    if all(sp == spans[0] for sp in spans[1:]) and all(len(_KEY_MARKER.findall(t)) <= left for t in texts[2:]):
+    # The same keys, each from and to the same columns, and every marker 1.7.10's cleaning kept still there, in its
+    # place: a part of the text (a line range, an audit unit) cut from `lines` then holds every marker 1.7.10's cut
+    # from its own did, and pairs them as it did. (Counting is not enough: a marker kept on a line that 1.7.10
+    # blanked can stand in for one that is gone.)
+    have = _marker_places(texts[0])
+    if all(sp == spans[0] for sp in spans[1:]) and all(_marker_places(t) <= have for t in texts[2:]):
         return
     keys = [(first, col, last) for sp in spans for first, col, last, _ in sp]
     for first, col, last in keys:
@@ -1023,6 +1025,12 @@ def _keep_keys_hidden(raw: str, lines: list[str], others: tuple[list[str], ...] 
                 lines[k] = lines[k][:len(lines[k]) - len(lines[k].lstrip())] + "<redacted>"
         if re.search(r"\w", lines[first][col:]):
             lines[first] = lines[first][:col] + "<redacted>"
+
+
+def _marker_places(text: str) -> set[tuple[int, int, str]]:
+    """Each key marker of `text` (see _KEY_MARKER) as its line (from 0), column and text."""
+    return {(text.count("\n", 0, m.start()), m.start() - text.rfind("\n", 0, m.start()) - 1, m.group(0))
+            for m in _KEY_MARKER.finditer(text)}
 
 
 def _hide_rest(lines: list[str], k: int, col: int, found: list) -> None:
@@ -1175,7 +1183,8 @@ def _blank_py_docstrings(src: str, lines: list[str], def_line: bool = True) -> i
     columns (a comment after it is found where tokenize finds it); its other lines are blanked. An empty one
     (`''`) on such a line stays. Not in a text with a lone `\r`, which ast reads as a line break and `lines` do
     not, nor without def_line (as 1.7.10 left them: one on its def line kept, one on a line of its own blanked
-    with the line). Returns how many it cut out of a line, so 0 when 1.7.10 would have left the same lines."""
+    with the line). Returns how many it left otherwise than 1.7.10 did (cut out of a line, or a line kept that
+    1.7.10 blanked), so 0 when 1.7.10 would have left the same lines."""
     same_line, cut = def_line and "\r" not in src.replace("\r\n", ""), 0
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
@@ -1197,9 +1206,9 @@ def _blank_py_docstrings(src: str, lines: list[str], def_line: bool = True) -> i
                     for j in range(k, end + 1):
                         lines[j] = ""
                     continue
+                cut += bool(same_line and (own or first.value.value != ""))    # lines 1.7.10 left otherwise
                 if not same_line or first.value.value == "":    # an empty docstring (`''`) holds no text
                     continue
-                cut += 1
                 if end == k:
                     lines[k] = lines[k][:a] + ("...".ljust(b - a) if rest else "...") + rest
                 else:
@@ -1484,17 +1493,18 @@ def index_python_file(p: Path, text: str, syms: dict[str, Symbol], files: set[st
     def render_class(node: ast.ClassDef) -> Callable[[], str]:
         def go() -> str:
             a, b = seg(node)
-            full = _py_clean("\n".join(lines[a - 1:b]))
-            if len(full) <= MAX_CODE_CHARS:
-                return full
-            # The outline is cut from the whole class cleaned at once, so a key whose marker was in a removed
-            # comment or docstring is hidden as in the whole class (see _keep_keys_hidden).
+            # cleaned once: the whole class, and the outline cut from it (see below)
             src = textwrap.dedent("\n".join(lines[a - 1:b]))
             cl = src.split("\n")
             try:
                 _py_cleaned(src, cl)
             except SyntaxError:
                 cl = None
+            full = tidy("\n".join(cl)) if cl is not None else tidy(src)
+            if len(full) <= MAX_CODE_CHARS:
+                return full
+            # The outline is cut from the whole class cleaned at once, so a key whose marker was in a removed
+            # comment or docstring is hidden as in the whole class (see _keep_keys_hidden).
             if cl is None:                                  # as before: cut from the raw lines, then cleaned
                 out = lines[a - 1:node.body[0].lineno - 1] if node.body else []
                 for st in node.body:

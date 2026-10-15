@@ -311,7 +311,7 @@ key into an issue or pull request.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
   on Linux, macOS and Windows, from an empty uv cache, runs the seven free tools and checks that the
   three that send refuse without a key.
-- **3,026 automated tests.**
+- **3,032 automated tests.**
 
 ## Repository layout
 

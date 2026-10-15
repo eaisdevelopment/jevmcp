@@ -28,8 +28,9 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   """..."""`) is now removed and sent as `...`; 1.7.10 sent it as written. One that shares its line
   with code in another way (the signature closes on its line, or code follows it: `"doc"; limit =
   5`) is cut out the same way; 1.7.10 blanked the whole line, code included. An empty one (`''`,
-  `""""""`) is still sent as written, so no code after it moves; in a file Python cannot parse,
-  docstrings are sent as written, as before.
+  `""""""`) is sent as written, so no code after it moves (on a line of its own that it shares with
+  code, 1.7.10 blanked that line; now the line is sent); in a file Python cannot parse, docstrings
+  are sent as written, as before.
 - Spec drift: a Python class too long for the 2,600-character cap is sent as an outline (its
   members, bodies left out). When 1.7.10's outline did not parse (an `@overload` stub, for one), it
   was sent with its comments and docstrings; now the outline is cut from the class cleaned whole,
@@ -38,11 +39,13 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   as they already were from `.cpp` and `.hpp`; 1.7.10 sent them as written. (A code audit does not
   read files with these names, in 1.7.10 or now.)
 - Spec drift and code audit: a PEM private key or PGP block whose BEGIN or END marker is in a
-  comment or docstring that is removed is still hidden, its lines sent as `<redacted>`, in the
-  whole file, a line range, a code-audit unit and a class outline. Removing the comment took the
-  marker, so the key was no longer seen as one: 1.7.10 sent its body for a marker in a `#` comment,
-  in a docstring on its own line, or in a comment of Java, C, C++ and the other C-family languages
-  (`// -----BEGIN RSA PRIVATE KEY-----` above the key's strings).
+  comment or docstring that is removed is still hidden, its lines sent as `<redacted>`, in the whole
+  file, a line range, a code-audit unit and a class outline. Removing the comment took the marker,
+  so the key was no longer seen as one: 1.7.10 sent its body for a marker in a `#` comment, in a
+  docstring on its own line, or in a comment of Java, C, C++ and the other C-family languages (`//
+  -----BEGIN RSA PRIVATE KEY-----` above the key's strings). In a file where a removed comment or
+  docstring held such a marker, every key of the file is hidden this way, so code between two marker
+  strings (`BEGIN = "-----BEGIN ..."`, `END = "-----END ..."`) is hidden there too.
 - PRIVACY.md now says exactly what the code does in these places: a colonless default is not read in
   any secret-named variable's backtick string (a JavaScript template string or a Go raw string, so
   `` token := `${API_KEY-hunter22}` `` is sent as written, as in 1.7.10), but is read inside a
@@ -60,8 +63,9 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   with `X looks like a secrets file - refused, never sent` (exit 2 on the command line); a named
   folder is read only for `.md` and `.rst` files, and such a file (`.env.md`) or one that is a link
   to a secret file is left out with a warning; a map entry whose `spec` is one, or the map's `specs`
-  naming one, is a map problem, and such an entry is not checked. `.env.example`-style templates named in lower case are
-  used as before (`.ENV.EXAMPLE` is refused, as it already was as an entry's code).
+  naming one, is a map problem, and such an entry is not checked. `.env.example`-style templates
+  named in lower case are used as before (`.ENV.EXAMPLE` is refused, as it already was as an entry's
+  code).
 - `draft_spec_map` without `docs` no longer lists a secrets file (`docs/specs/.env.md`, or a link to
   one) among the candidates; 1.7.10 read its first lines for hints and quoted its title.
 - docs/tools.md now states exactly what the code does (no behaviour change):
@@ -117,9 +121,8 @@ thresholds, the model and spec drift's sentence reading are unchanged.
 - A secrets file in a rule file's place (`.claude/rules/.env.md`) is never taken as a rule file:
   drafting without `docs` leaves it out with the warning `N secrets file(s) were left out, never
   read: ...`, and `validate_rule_map` no longer lists it among the rule files the map does not use.
-  1.7.10 read it into the map. `draft_rule_map` refuses a named secrets file by its name, also when a
-  folder on its way cannot be entered (1.7.10 answered with a permission error, after reading the
-  files named before it).
+  1.7.10 read it into the map. `draft_rule_map` refuses a named secrets file by its name, also when
+  a folder on its way cannot be entered (1.7.10 answered with a permission error).
 - `code_audit.py --dry-run --show-payload`: 1.7.10 printed the states of the first 50 requests only;
   now it prints every one, as PRIVACY.md says. A dry run without `--show-payload` still names the
   first 50, and now ends that list with `... and N more (--show-payload prints every one)`.
@@ -147,12 +150,13 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   longer excerpt is what 1.7.10 sent with its end taken off (whole hunks of the last file sent,
   whole lines when its first hunk alone is too long, else that file) until it fits, so no line of
   the change that 1.7.10 left out is sent, except where a file now left out (a secret file named in
-  upper or mixed case, below) or a comment-only line now left out frees room for the files after it. The secret files' note names the first four secret files
-  as 1.7.10 did while their paths fit in 400 characters; past that it names as many of them whole as
-  fit and says how many more there are (`... and 2 more secret file(s); secret files are never
-  sent`), where 1.7.10 named all four however long. Apart from that note and those files and lines,
-  an excerpt 1.7.10 kept within 5,000 characters is sent as before. In the 73-run CI corpus, 6 of 121 states change, all of
-  them excerpts 1.7.10 sent at 5,016 to 5,128 characters.
+  upper or mixed case, above) or a comment-only line now left out frees room for the files after it.
+  The secret files' note names the first four secret files as 1.7.10 did while their paths fit in
+  400 characters; past that it names as many of them whole as fit and says how many more there are
+  (`... and 2 more secret file(s); secret files are never sent`), where 1.7.10 named all four
+  however long. Apart from that note and those files and lines, an excerpt 1.7.10 kept within 5,000
+  characters is sent as before. In the 73-run CI corpus, 6 of 121 states change, all of them
+  excerpts 1.7.10 sent at 5,016 to 5,128 characters.
 - In a log file of which only the last 25 MB was read, written as `gh run view --log` writes it
   (`job<TAB>step<TAB>time ...`), the step the kept part opens with is not timed, as the docs say.
   1.7.10 timed it from the first line it read, so its run time was too short and its longest silence
@@ -178,14 +182,14 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   names these files` and `None of the files the errors name is edited by this change.` are drawn
   only from the project's own. 1.7.10 named every relative path the errors held as the project's, so
   a fixture's file could argue against the change. A named file counts as the project's when it is a
-  project file's path, or one of the two paths ends with `/` and the other (`pkg/mod.py` and
-  `src/pkg/mod.py`), letter case aside. Nothing changes when git cannot list the project's files,
-  or, for a GitHub run, when the run's commit is not in the local repository (a checkout that is
-  behind it). The two sentences name the same files 1.7.10 named, the first 12 the errors name, in
-  their order, split between them; when none of those 12 is the project's but a later one is, the
-  first reads `None of the first 12 files the error output names is in this project.`.
-  `files_in_errors` lists the first 20 the errors name, in their order, and the change excerpt puts
-  first the files any named file matches, both as in 1.7.10.
+  project file's path, lies in one of the project's git submodules, or one of the two paths ends
+  with `/` and the other (`pkg/mod.py` and `src/pkg/mod.py`), letter case aside. Nothing changes
+  when git cannot list the project's files, or, for a GitHub run, when the run's commit is not in
+  the local repository (a checkout that is behind it). The two sentences name the same files 1.7.10
+  named, the first 12 the errors name, in their order, split between them; when none of those 12 is
+  the project's but a later one is, the first reads `None of the first 12 files the error output
+  names is in this project.`. `files_in_errors` lists the first 20 the errors name, in their order,
+  and the change excerpt puts first the files any named file matches, both as in 1.7.10.
 
 **Docs corrected** (the code is unchanged):
 - docs/tools.md, rule drafting: a third star shape (a bold span split by a sentence cut keeps its
