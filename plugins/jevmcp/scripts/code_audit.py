@@ -181,6 +181,22 @@ def tracked_files(root: Path, shut: list[tuple[str, str]] | None = None) -> list
                        if own.name == ".gitignore" and why == "Too many levels of symbolic links" else "Fix it.")
                 raise Stop(f"git could not read {what} ({why}), so which files it ignores (a local .env, build output, "
                            f"credentials) cannot be told apart, and no code was read. {fix}")
+        # A .git folder below the repository git found, that holds something but that git does not take for a
+        # repository (its HEAD or refs gone), git passes by and lists the files as the repository's above it: that
+        # folder's own ignored files cannot be told apart, so none is read, as where git finds no repository at all
+        if (gitdir := _git_folder_on_gits_way_up(root)) is not None:
+            above = subprocess.run(dd.git_argv("-C", str(root), "rev-parse", "--show-toplevel"),
+                                   capture_output=True, timeout=15, stdin=subprocess.DEVNULL).stdout.strip()
+            # (only one git cannot read even when named: with GIT_DIR set, git takes that repository and passes by
+            # a sound one below it)
+            if above and Path(os.fsdecode(above)).resolve() in gitdir.parent.parents and subprocess.run(
+                    dd.git_argv("--git-dir", str(gitdir), "rev-parse", "--git-dir"), capture_output=True, timeout=15,
+                    stdin=subprocess.DEVNULL,
+                    env={k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}).returncode:
+                raise Stop(f"git could not list this project's files, so none was read: {gitdir} holds a repository "
+                           f"git cannot read, whose ignored files (a local .env, build output, credentials) cannot "
+                           f"be told apart; git passed it by and took the files for those of "
+                           f"{os.fsdecode(above)}.")
         out = res.stdout
         # a folder git cannot open it only warns about, and lists none of the files in it it does not track: in an
         # agent's folder, rule files left out without a word (outside git such a folder gets a note). Named from the
@@ -714,6 +730,15 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
             warnings.append(f"{len(unusable)} rule file(s) were left out because their names are not valid UTF-8, so "
                             f"a map cannot record them: {', '.join(dd._readable(f) for f in unusable)}. Rename them "
                             f"if they hold rules.")
+    # a secrets file (.env, a key, .netrc) named in docs, by its name or the one a link leads to, stops the draft
+    # before any file is read: its lines would land in the map, and be sent
+    for src in sources if docs else []:
+        try:
+            names = (Path(src).name, (root / src).resolve().name)
+        except (OSError, RuntimeError, ValueError):     # a link loop: refused below, as before
+            names = (Path(src).name,)
+        if any(_secret_file(n) for n in names):
+            raise Stop(f"{dd._readable(src)} looks like a secrets file - refused, never read")
     entries, seen, read = [], set(), set()
     top = root.resolve()
     # a real file before a link to it (os.path.islink: False, not an error, in a folder that cannot be entered)
@@ -734,6 +759,12 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
             if not stat.S_ISREG(st.st_mode) or real in seen or not real.is_relative_to(top):
                 continue
             seen.add(real)
+            # a secrets file found in a folder, by its name or the one a link leads to, is never read, as the
+            # audit never reads one (a named one stopped the draft above)
+            if any(_secret_file(n) for n in (Path(src).name, real.name)):
+                if docs:
+                    raise Stop(f"{dd._readable(src)} looks like a secrets file - refused, never read")
+                continue
             sentences = rule_sentences(path, keep_all=bool(docs))
         except (OSError, RuntimeError) as e:                # RuntimeError: a link loop, on Python 3.12 and older
             if docs:                                         # a file the user named: they should hear why
@@ -1089,6 +1120,12 @@ def _secretish(f: str) -> bool:
     return bool(dd._SECRET_FILE.search(name)) or name in (".npmrc", ".pypirc", ".netrc", ".git-credentials")
 
 
+def _secret_file(f: str) -> bool:
+    """A secrets file a rule-map draft never reads: one _secretish names, not an env template (`.env.example`, in
+    any case)."""
+    return _secretish(f) and not dd._ENV_TEMPLATES.match(Path(f).name.lower())
+
+
 # What pathlib's is_file answered False for without a word: no file there (gone from disk, its folder now a file, a
 # link loop on the way). Any other error (no permission) is a file that is there but cannot be read.
 _GONE = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EBADF)
@@ -1109,7 +1146,14 @@ def _unreadable(p: Path) -> bool:
 
 def _named_left_out(root: Path, src: str) -> str | None:
     """The warning for a rule file named on the command line that is not there or cannot be read (a link to
-    nothing, a link loop, no permission), in the words draft_map has for a found one; None for one it can read."""
+    nothing, a link loop, no permission), in the words draft_map has for a found one; None for one it can read,
+    and for a secrets file however it reads (draft_map refuses it, as draft_rule_map does)."""
+    try:
+        if any(_secret_file(n) for n in (Path(src).name, (root / src).resolve().name)):
+            return None
+    except (OSError, RuntimeError, ValueError):
+        if _secret_file(Path(src).name):
+            return None
     try:
         if stat.S_ISREG((root / src).stat().st_mode):   # through a link, as draft_map reads it; a folder is not opened
             with open(root / src, "rb"):
@@ -1475,7 +1519,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path)
     ap.add_argument("--key-file", type=Path)
     ap.add_argument("--jobs", type=int, default=8)
-    ap.add_argument("--samples", type=int, default=SAMPLES)
+    ap.add_argument("--samples", type=int, default=SAMPLES, help=f"answers per request, at most {SAMPLES} (default)")
     ap.add_argument("--no-cache", action="store_true")
     a = ap.parse_args(argv)
     root = a.src.resolve()
@@ -1522,10 +1566,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"code_audit: {n}", file=sys.stderr)
         est = jevkit.estimate_cost(items)
         if a.dry_run:
-            for it in items[:50]:
+            # every state with --show-payload: what is shown is all that a run would send
+            shown = items if a.show_payload else items[:50]
+            for it in shown:
                 print(f"{it.name}")
                 if a.show_payload:
                     print(json.dumps(it.state, indent=1, ensure_ascii=False))
+            if len(shown) < len(items):
+                print(f"... and {len(items) - len(shown)} more (--show-payload prints every one)")
             print(f"\n(dry run: {len(items)} request(s), ~${est:.5f}; nothing was sent)")
             return 0
         if not items:
@@ -1535,7 +1583,8 @@ def main(argv: list[str] | None = None) -> int:
             raise Stop(f"{len(items)} requests (~${est:.4f}) is more than --max-requests {a.max_requests}; "
                        f"narrow the scope or raise the limit.")
         key = dd._load_key(a.key_file, dotenv=False)
-        results, run = check(items, key, jobs=a.jobs, samples=a.samples, use_cache=not a.no_cache)
+        # at most SAMPLES, as check_code_rules takes it: an unsettled request is sent up to twice more, never N-1 times
+        results, run = check(items, key, jobs=a.jobs, samples=min(a.samples, SAMPLES), use_cache=not a.no_cache)
     except dd.Stop as e:
         print(f"code_audit: {e}", file=sys.stderr)
         return 3 if isinstance(e, dd.VendorStop) else 2

@@ -183,6 +183,7 @@ def _is_test(file: str) -> bool:
 
 C_FAMILY = {".java", ".kt", ".kts", ".scala", ".groovy", ".ts", ".tsx", ".mts", ".cts", ".js",
             ".jsx", ".mjs", ".cjs", ".go", ".cs", ".c", ".h", ".cc", ".cpp", ".hpp", ".rs", ".swift"}
+C_COMMENTS = C_FAMILY | {".cxx", ".c++", ".hh", ".hxx", ".h++"}   # C++ files whose comments are removed too
 JS_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs"}
 TS_SUFFIXES = {".ts", ".tsx", ".mts", ".cts"}
 TREE_SITTER = {".java": ("Java", "tree-sitter-java", "tree_sitter_java", "language"),
@@ -445,7 +446,7 @@ def _hide_spans(text: str, spans: list[tuple[int, int]]) -> str:
 
 def _redact_secret_values(text: str) -> str:
     """redact()'s rules for a secret's value: a secret-named variable's string, a connection-string password."""
-    # in backticks (a JavaScript template string) `${A-B}` is code, never a default: colonless=False
+    # in backticks (a JavaScript template string; a Go raw string too) `${A-B}` is code, never a default
     text = _SECRET_LITERAL.sub(lambda m: f"{m.group(1)}{m.group(2)}{_redacted(m.group(3), m.group(2) != '`')}"
                                          f"{m.group(2)}", text)
     return _SECRET_PARAM.sub(_param_redacted, text)
@@ -499,18 +500,28 @@ def _keep_placeholders(value: str, _nested: int = 0, colonless: bool = True) -> 
     written in one (`${DB_PASSWORD:hunter2}`, `${DB_PASS:-hunter2}`, and with no colon, a shell's and
     Docker Compose's `${DB_PASS-hunter2}`, `${DB_PASS=hunter2}`: only after an environment variable's
     upper-case name, so that a kebab-case key `${jwt-secret}` stays a name, and not with colonless=False,
-    for a JavaScript template string, where `${HMAC-SHA256(...)}` is code) and any text next to one
+    for a secret-named variable's backtick string, any language's (a JavaScript template string, where
+    `${HMAC-SHA256(...)}` is code, or a Go raw string); a connection-string password in a backtick string has
+    such a default read, and redacted) and any text next to one
     (`${PREFIX}hunter2`) is the secret itself and becomes <redacted>. Kept whole: a value of GitHub
     Actions expressions (`${{ secrets.TOKEN }}`, a cache `key: ${{ runner.os }}-pip-${{ ... }}`), an
     editor variable's name (`${env:TOKEN}`, `${input:token}`, `${ENV:TOKEN}` - there the colon is part of
     the name; a default after it is not kept: `${env:TOKEN:-...}`, `${env:TOKEN, '...'}`), text with no
     letter or digit between placeholders (`${HOST}:${PORT}`), and a trailing
     ` # comment`. Kept too, as they are not secrets: a default or text under 4 characters (as a quoted
-    value is), the message of `${1:?message}`, and a path in or after a placeholder that names a folder
-    or a file (`${WORK_DIR}/token.json`, `${KEY_FILE:-/etc/app/key.pem}`)."""
+    value is), the message of `${1:?message}`, and a path in or right after a placeholder that names a
+    folder or a file (`${WORK_DIR}/token.json`, `${KEY_FILE:-/etc/app/key.pem}`); a path after any other
+    placeholder is redacted, also when an earlier one names a folder (`${WORK_DIR}/x${HOOK}/T0/B0/abcdef`),
+    except a file name's end with no `/` there (`${work_dir}/${label}.token.json`)."""
     if value.startswith("${{"):
         return value
-    out, i, n, in_path = [], 0, len(value), False
+    out, i, n, in_path, folder = [], 0, len(value), False, False
+
+    def kept_path(text: str) -> bool:
+        """A path right after a folder's or a file's placeholder; after another one, once an earlier placeholder
+        named a folder, only a file name's end with no `/` or `\\` (`${work_dir}/${label}.token.json`)."""
+        return _a_path(text) and (in_path or folder and not re.search(r"[/\\]", text))
+
     while i < n:
         if value.startswith("${", i):
             depth, j = 1, i + 2
@@ -531,8 +542,9 @@ def _keep_placeholders(value: str, _nested: int = 0, colonless: bool = True) -> 
                 name = f"{name}:{var}"
             op = default[:1] if default[:1] in ("-", "=", "?", "+") else ""
             default = default[len(op):]
-            in_path = in_path or bool(_PATH_PLACEHOLDER.search(name))
-            if len(default) >= 4 and op != "?" and not (in_path and _a_path(default)):
+            in_path = bool(_PATH_PLACEHOLDER.search(name))      # the text right after this placeholder only
+            folder = folder or in_path
+            if len(default) >= 4 and op != "?" and not kept_path(default):
                 default = (_keep_placeholders(default, _nested + 1, colonless) if default.startswith("${") and
                            _nested < 8 else "<redacted>")
             out.append("${" + name + colon + op + default + ("}" if depth == 0 else ""))
@@ -544,7 +556,7 @@ def _keep_placeholders(value: str, _nested: int = 0, colonless: bool = True) -> 
         if re.match(r"\s+#", text):                 # a YAML or shell comment after the value
             out.append(value[i:])
             break
-        kept = len(text) < 4 or not re.search(r"[^\W_]", text) or (in_path and _a_path(text))
+        kept = len(text) < 4 or not re.search(r"[^\W_]", text) or kept_path(text)
         out.append(text if kept else "<redacted>")
         i = j
     return "".join(out)
@@ -984,6 +996,29 @@ def _hide_pem_lines(lines: list[str], keys: list[tuple[int, int]]) -> None:
             _hide_rest(lines, last, len(_pem_line(lines[last])[0]), found)
 
 
+def _keep_keys_hidden(raw: str, lines: list[str], others: tuple[list[str], ...] = ()) -> None:
+    """`lines` are raw's lines with comments or docstrings removed, as many as raw has; `others`, the same lines as
+    1.7.10 removed them, where it removed less. redact() finds a PEM key (or PGP block) by its BEGIN and END markers,
+    and a removed comment or docstring may have held one: the markers left then pair in other ways, and a key's
+    body can stand outside every pair. When the keys of `lines` are not those of raw and of each of `others`
+    (their lines and columns), every key of all of them is hidden in `lines`: from its BEGIN marker's column on,
+    its other lines but for their indentation (a line with no letter or digit left as it is)."""
+    if "-----" not in raw or len(lines) != raw.count("\n") + 1 or any(len(o) != len(lines) for o in others):
+        return
+    texts = ["\n".join(lines), raw, *("\n".join(o) for o in others)]
+    spans = [[(first, start - text.rfind("\n", 0, start) - 1, last, end - text.rfind("\n", 0, end) - 1)
+              for start, end, first, last in _pem_spans(text, one_line=True, wide=True)] for text in texts]
+    if all(sp == spans[0] for sp in spans[1:]):     # the same keys, each from and to the same columns
+        return
+    keys = [(first, col, last) for sp in spans for first, col, last, _ in sp]
+    for first, col, last in keys:
+        for k in range(first + 1, last + 1):
+            if re.search(r"\w", lines[k]):
+                lines[k] = lines[k][:len(lines[k]) - len(lines[k].lstrip())] + "<redacted>"
+        if re.search(r"\w", lines[first][col:]):
+            lines[first] = lines[first][:col] + "<redacted>"
+
+
 def _hide_rest(lines: list[str], k: int, col: int, found: list) -> None:
     """Line k sent as `<redacted>` from `col` on, keeping its trailing backslashes. A key whose BEGIN was in that part
     and whose next END of its kind is on a later line goes too, down to that END, as its END line goes (see
@@ -1039,9 +1074,12 @@ def _hide_keys(text: str) -> str:
 
 def _head(text: str, limit: int = MAX_CODE_CHARS) -> str:
     """The first `limit` characters of `text` (see _value_cut); a cut that would split a PEM key that spans lines
-    first hides every such key (_hide_keys), so no part of one is sent."""
-    at = _value_cut(text, limit)
-    if len(text) > limit and (_split_key(text, limit) or _split_key(text, at)):
+    first hides every such key (_hide_keys), so no part of one is sent. A cut that could not be made right before a
+    value it would split (see _value_cuts) is sent as made, unless the cut at `limit` splits such a key: what it
+    sends is a prefix of what the cut at `limit` sends (hiding keys first could pair a BEGIN with another END and
+    reach further)."""
+    before, at = _value_cuts(text, limit)
+    if len(text) > limit and (_split_key(text, limit) or _split_key(text, at) and at == before):
         text = _hide_keys(text)
         at = _value_cut(text, limit)
     return text[:at]
@@ -1050,8 +1088,15 @@ def _head(text: str, limit: int = MAX_CODE_CHARS) -> str:
 def _value_cut(text: str, limit: int) -> int:
     """Where a cut of `text` to `limit` characters ends: before a secret-named variable's value or a connection-string
     password that it would split (redact() would not see the part before the cut), else at `limit`."""
+    return _value_cuts(text, limit)[1]
+
+
+def _value_cuts(text: str, limit: int) -> tuple[int, int]:
+    """_value_cut's cut right before the value it would split (`limit` when it splits none), and the cut it makes:
+    that one, unless it would send what the cut at `limit` hid; then the last line start before it at which a cut
+    sends neither that nor any part of the value (at worst none of `text`)."""
     if len(text) <= limit:
-        return limit
+        return limit, limit
     # such a value is on the cut's line; its name on that line or on the last line above it that is not blank, or
     # the one above that when that line is only the `=` (`password\n=\n"..."`), at most 16,384 characters each way
     # (a minified file's one line is not read whole)
@@ -1071,8 +1116,17 @@ def _value_cut(text: str, limit: int) -> int:
     while at != cut:                    # (a value the new cut falls in moves it again)
         at = cut
         cut = min([a for a, b in spans if a < cut <= b] + [cut])         # (a cut right before the closing quote too)
-    # never a cut that sends what the cut at `limit` hid
-    return cut if cut == limit or redact(text[:limit]).startswith(redact(text[:cut])) else limit
+    # never a cut that sends what the cut at `limit` hid (`a = "-----BEGIN ..."` above a value that holds an END
+    # marker: the shape hides from the BEGIN on); a cut at `limit` would send the part of the value before it
+    if cut == limit or (head := redact(text[:limit])).startswith(redact(text[:cut])):
+        return cut, cut
+    before, tries = cut, 0
+    while cut > 0:
+        tries += 1
+        cut = text.rfind("\n", 0, cut - 1) + 1 if tries <= 64 else 0
+        if head.startswith(redact(text[:cut])):
+            break
+    return before, cut
 
 
 def _open_brackets(value: str, toml: bool = False) -> int:
@@ -1108,16 +1162,62 @@ def _is_config_file(path: Path) -> bool:
         or bool(_ENV_TEMPLATES.match(path.name.lower()))
 
 
-def _blank_py_docstrings(src: str, lines: list[str]) -> None:
-    """Blank every module, class and function docstring in `lines` (line count kept)."""
+def _blank_py_docstrings(src: str, lines: list[str], def_line: bool = True) -> None:
+    """Blank every module, class and function docstring in `lines` (line count kept). One that starts on its
+    `def` or `class` line (`def f(): '''...'''`) becomes `...` there, the line's other characters kept in their
+    columns (a comment after it is found where tokenize finds it); its other lines are blanked. Not in a text with
+    a lone `\r`, which ast reads as a line break and `lines` do not, nor without def_line (as 1.7.10 left them)."""
+    same_line = def_line and "\r" not in src.replace("\r\n", "")
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
             first = node.body[0]
             if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
-                    and isinstance(first.value.value, str)
-                    and (isinstance(node, ast.Module) or first.lineno > node.lineno)):
-                for k in range(first.lineno - 1, first.end_lineno):
-                    lines[k] = ""
+                    and isinstance(first.value.value, str)):
+                if isinstance(node, ast.Module) or first.lineno > node.lineno:
+                    for k in range(first.lineno - 1, first.end_lineno):
+                        lines[k] = ""
+                    continue
+                if not same_line:
+                    continue
+                k, end = first.lineno - 1, first.end_lineno - 1
+                mark = len(lines[k]) - len(lines[k].lstrip("\ufeff")) if k == 0 else 0   # ast reads it without one
+                # ast's columns count UTF-8 bytes
+                a = mark + len(lines[k][mark:].encode("utf-8")[:first.col_offset].decode("utf-8", "replace"))
+                b = mark * (end == 0) + len(lines[end][mark * (end == 0):].encode("utf-8")[:first.end_col_offset]
+                                            .decode("utf-8", "replace"))
+                rest = lines[end][b:]
+                rest = rest if rest.strip() else ""         # (a comment after it is found in its columns)
+                if first.value.value == "":         # an empty docstring (`''`, `""""""`) holds no text
+                    continue
+                if end == k:
+                    lines[k] = lines[k][:a] + ("...".ljust(b - a) if rest else "...") + rest
+                else:
+                    lines[k] = lines[k][:a] + "..."
+                    for j in range(k + 1, end):
+                        lines[j] = ""
+                    lines[end] = " " * b + rest if rest else ""
+
+
+def _py_strip(src: str, lines: list[str], def_line: bool = True) -> None:
+    """Python's docstrings (see _blank_py_docstrings) and comments removed from `lines`, src's lines, in place.
+    Raises SyntaxError when src does not parse."""
+    _blank_py_docstrings(src, lines, def_line)
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.COMMENT:
+                r, c = tok.start
+                lines[r - 1] = lines[r - 1][:c].rstrip()
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+
+
+def _py_cleaned(src: str, lines: list[str]) -> None:
+    """_py_strip, a key whose marker was in a removed docstring or comment kept hidden (see _keep_keys_hidden)."""
+    _py_strip(src, lines)
+    if "-----" in src:
+        before = src.split("\n")                     # as 1.7.10 removed them: no docstring on its def line
+        _py_strip(src, before, def_line=False)
+        _keep_keys_hidden(src, lines, (before,))
 
 
 def _py_clean(src: str) -> str:
@@ -1130,39 +1230,41 @@ def _py_clean(src: str) -> str:
     src = textwrap.dedent(src)
     lines = src.split("\n")
     try:
-        _blank_py_docstrings(src, lines)
+        _py_cleaned(src, lines)
     except SyntaxError:
         return tidy(src)
-    try:
-        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-            if tok.type == tokenize.COMMENT:
-                r, c = tok.start
-                lines[r - 1] = lines[r - 1][:c].rstrip()
-    except (tokenize.TokenError, IndentationError, SyntaxError):
-        pass
     return tidy("\n".join(lines))
 
 
 def strip_comments(path: Path, text: str) -> str:
     """A whole file (for line-range refs) with comments blanked, line numbers kept."""
     if path.suffix in (".py", ".pyi"):                      # a stub file is Python too
-        lines = text.split("\n")
-        with contextlib.suppress(SyntaxError, ValueError):
-            _blank_py_docstrings(text.removeprefix("\ufeff"), lines)   # as Python reads a byte-order mark
-        try:
-            for tok in tokenize.generate_tokens(io.StringIO(text).readline):
-                if tok.type == tokenize.COMMENT:
-                    r, c = tok.start
-                    lines[r - 1] = lines[r - 1][:c].rstrip()
-        except (tokenize.TokenError, IndentationError, SyntaxError):
-            pass
+        def cleaned(def_line: bool) -> list[str]:
+            lines = text.split("\n")
+            with contextlib.suppress(SyntaxError, ValueError):
+                _blank_py_docstrings(text.removeprefix("\ufeff"), lines, def_line)  # as Python reads a byte-order mark
+            try:
+                for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+                    if tok.type == tokenize.COMMENT:
+                        r, c = tok.start
+                        lines[r - 1] = lines[r - 1][:c].rstrip()
+            except (tokenize.TokenError, IndentationError, SyntaxError):
+                pass
+            return lines
+        lines = cleaned(True)
+        if "-----" in text:                                 # as 1.7.10 removed them: no docstring on its def line
+            _keep_keys_hidden(text, lines, (cleaned(False),))
         return "\n".join(lines)
-    if path.suffix in TREE_SITTER and (loaded := _ts_load(str(path))) is not None:
+    elif path.suffix in TREE_SITTER and (loaded := _ts_load(str(path))) is not None:
         src, tree = loaded
-        return _ts_blank(src, 0, len(src), tree.root_node).decode("utf-8", "replace")
-    if path.suffix in C_FAMILY:
-        return mask_c_family(text, strings=False, rust=path.suffix == ".rs")
-    return text
+        lines = _ts_blank(src, 0, len(src), tree.root_node).decode("utf-8", "replace").split("\n")
+        text = src.decode("utf-8", "replace")
+    elif path.suffix in C_COMMENTS:
+        lines = mask_c_family(text, strings=False, rust=path.suffix == ".rs").split("\n")
+    else:
+        return text
+    _keep_keys_hidden(text, lines)
+    return "\n".join(lines)
 
 
 # ───────────────────────────────────────── 1b. routes, paths and config keys
@@ -1579,6 +1681,13 @@ def _ts_blank(src: bytes, a: int, b: int, scope) -> bytes:
     return bytes(buf)
 
 
+def _ts_clean(src: bytes, a: int, b: int, scope) -> str:
+    """src[a:b] as text, comments blanked (see _ts_blank), a key whose marker was in one kept hidden."""
+    lines = _ts_blank(src, a, b, scope).decode("utf-8", "replace").split("\n")
+    _keep_keys_hidden(src[a:b].decode("utf-8", "replace"), lines)
+    return "\n".join(lines)
+
+
 def _ts_node_at(path: str, a: int, b: int, types: tuple[str, ...]):
     loaded = _ts_load(path)
     if loaded is None:
@@ -1605,23 +1714,23 @@ def _ts_render(path: str, a: int, b: int, outline_types: tuple[str, ...] = ()) -
     scope = tree.root_node.descendant_for_byte_range(a, max(a, b - 1)) or tree.root_node
     while scope.parent is not None and (scope.start_byte > a or scope.end_byte < b):
         scope = scope.parent
-    full = tidy(_ts_blank(src, start, b, scope).decode("utf-8", "replace"))
+    full = tidy(_ts_clean(src, start, b, scope))
     if len(full) <= MAX_CODE_CHARS or not outline_types:
         return full
     _, node = _ts_node_at(path, a, b, outline_types)
     body = node.child_by_field_name("body") if node is not None else None
     if body is None:
         return full
-    parts = [_ts_blank(src, start, body.start_byte + 1, node).decode("utf-8", "replace")]
+    parts = [_ts_clean(src, start, body.start_byte + 1, node)]
     for m in body.named_children:
         if m.type in _COMMENT_TYPES:
             continue
         inner = m.child_by_field_name("body")
         m_start = src.rfind(b"\n", 0, m.start_byte) + 1
         if inner is not None and m.type not in ("enum_body_declarations",):
-            parts.append(_ts_blank(src, m_start, inner.start_byte, m).decode("utf-8", "replace").rstrip() + " { … }")
+            parts.append(_ts_clean(src, m_start, inner.start_byte, m).rstrip() + " { … }")
         else:
-            parts.append(_ts_blank(src, m_start, m.end_byte, m).decode("utf-8", "replace"))
+            parts.append(_ts_clean(src, m_start, m.end_byte, m))
     parts.append("}")
     return tidy("\n".join(parts))
 
@@ -3386,6 +3495,12 @@ _SECRET_FILE = re.compile(r"^\.env(?:\..+)?$|.\.env$|\.(?:pem|key|p12|jks|pfx|kd
                           r"^credentials[\w.-]*\.json$|service-account[\w.-]*\.json$", re.I)
 
 
+def _secret_named(*paths: Path) -> bool:
+    """A file that holds secrets by its name, as _read_ref refuses one: any of `paths` (the name a spec
+    file was given, the file a link leads to) is a _SECRET_FILE and not an env template."""
+    return any(_SECRET_FILE.search(p.name) and not _ENV_TEMPLATES.match(p.name) for p in paths)
+
+
 def _close(word: str, options) -> str:
     import difflib
     near = difflib.get_close_matches(word, list(options), n=3, cutoff=0.6)
@@ -3666,6 +3781,9 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
         if e.get("spec") and spec_file is None:
             fail(f"{where}: spec file {e['spec']!r} " + ("cannot be read (no permission)" if any(
                 kind == "unreadable" for _, kind in probes) else "not found") + " - NOT checked."); continue
+        if spec_file is not None and _secret_named(spec_file, spec_file.resolve()):
+            fail(f"{where}: spec file {e['spec']!r} looks like a secrets file - refused, never sent - NOT checked.")
+            continue
         line = _as_line(e.get("line"))
         text = e.get("text")
         if not text and spec_file is not None and line:
@@ -4605,12 +4723,13 @@ def _named_folder_docs(root: Path, rel: str, ignore, also_named=()) -> tuple[lis
       file it leads to are one document); a link to a folder is not followed - its files are used
       when the folder it leads to is in this one or is named too, and it is named in a warning
       otherwise - and so is a link that leads out of the project or nowhere;
-    - a folder or file that cannot be read is named in a warning;
+    - a folder or file that cannot be read is named in a warning, and so is a file named as a secrets
+      file or a link to one (_secret_named), which is never used;
     - in a git project, files git does not list (it ignores them, or they belong to another
       repository) are used too, with a warning: where they are not present - a fresh clone, CI - the
       map's entries for them are problems. A project folder that git lists nothing of at all (a
       repository it sits in ignores it) is treated as outside git. When git cannot list the project,
-      every file is used and a warning quotes git."""
+      every file on disk is used except in skipped folders, and a warning quotes git."""
     base = root if rel == "." else root / rel
     base_real = base.resolve()
     real_rel = base_real.relative_to(root).as_posix() if base_real != root else "."
@@ -4645,7 +4764,7 @@ def _named_folder_docs(root: Path, rel: str, ignore, also_named=()) -> tuple[lis
                                              (rel + real[len(real_rel):] if real_rel != "." else f"{rel}/{real}"))
     inside = {as_named(f) for f in tracked if (real_rel == "." or f.startswith(real_rel + "/"))
               and PurePosixPath(f).suffix.lower() in SPEC_SUFFIXES}
-    files, skipped, out, nowhere, unreadable = [], [], [], [], []
+    files, skipped, out, nowhere, unreadable, secret = [], [], [], [], [], []
 
     def usable(f: Path) -> bool:
         name = f.relative_to(root).as_posix()
@@ -4660,6 +4779,9 @@ def _named_folder_docs(root: Path, rel: str, ignore, also_named=()) -> tuple[lis
                     out.append(name)
                     return False
             if not f.is_file():
+                return False
+            if _secret_named(f, f.resolve()):               # `.env.md`, or a link to a `.env`: never sent
+                secret.append(name)
                 return False
             if not os.access(f, os.R_OK):
                 unreadable.append(name)
@@ -4715,6 +4837,9 @@ def _named_folder_docs(root: Path, rel: str, ignore, also_named=()) -> tuple[lis
     if unreadable:
         dropped.append(f"not used - {len(set(unreadable))} file(s) or folder(s) in {where} cannot be read (no "
                        f"permission): {', '.join(_readable(x) for x in sorted(set(unreadable)))}.")
+    if secret:
+        dropped.append(f"not used - {len(set(secret))} file(s) in {where} named as a secrets file, or a link to "
+                       f"one, never sent: {', '.join(_readable(x) for x in sorted(set(secret)))}.")
     if listed is not None and (unlisted := [f for f in files
                                             if (root / f).resolve().relative_to(root).as_posix() not in listed]):
         notes.append(f"git does not list {len(unlisted)} of the files in {where} - it ignores them, or they belong to "
@@ -4731,12 +4856,14 @@ def expand_docs(root: Path, docs: list[str], ignore, dropped: list | None = None
     every .md and .rst file on disk in it and below it - see _named_folder_docs for the few things
     that are not followed, each named in a warning. Nothing named is second-guessed: which spec is
     current is the user's call, so no file is refused, left out or flagged for its name, its date or
-    what its top says. A path is refused only when it cannot be used: missing, outside the project
-    (a link that leads out included), a folder with no .md or .rst file, or a named file whose name
-    is not valid UTF-8 (a map cannot record it; in a folder such a file is left out with a warning), or
-    cannot be read. An empty name names nothing and is refused. `dropped`, when given, collects the
-    warnings about spec files in a named folder that were NOT used; `also_named` are other paths the
-    user named (a skipped folder or a folder link that is one of them is not warned about)."""
+    what its top says - except a file named as a secrets file is (_secret_named: `.env`, `.env.md`, a
+    link to one), since its text would be sent. Otherwise a path is refused only when it cannot be
+    used: missing, outside the project (a link that leads out included), a folder with no .md or .rst
+    file, or a named file whose name is not valid UTF-8 (a map cannot record it; in a folder such a
+    file is left out with a warning), or cannot be read. An empty name names nothing and is refused.
+    `dropped`, when given, collects the warnings about spec files in a named folder that were NOT
+    used; `also_named` are other paths the user named (a skipped folder or a folder link that is one
+    of them is not warned about)."""
     root = Path(root).resolve()
     files: list[Path] = []
     warnings: list[str] = []
@@ -4761,6 +4888,8 @@ def expand_docs(root: Path, docs: list[str], ignore, dropped: list | None = None
                 raise Stop(f"spec not found in the project: {_readable(d)} - it is outside the project ({root}), "
                            f"refused")
             rel = named.relative_to(root).as_posix()
+            if _secret_named(named, real):
+                raise Stop(f"{_readable(d)} looks like a secrets file - refused, never sent")
             if not _utf8(rel):
                 raise Stop(f"the name of {_readable(rel)} is not valid UTF-8, so a map cannot record it - rename it, "
                            f"then name it again")
@@ -5520,8 +5649,9 @@ def _relevant_slice(source: str, claim: str, budget: int) -> tuple[str, bool]:
     Returns the text and whether anything was left out.
     """
     out, cut, sent = _slice(source, claim, budget)
-    if cut and (_split_key(source, sent) or _key_line_sent(source, sent, out)
-                or isinstance(sent, int) and _split_key(source, budget)):     # (as at the cap: see _value_cut)
+    # (as at the cap: see _head; a head cut made before the value it could not be made right before is kept)
+    if cut and (_split_key(source, sent) and not (isinstance(sent, int) and sent < _value_cuts(source, budget)[0])
+                or _key_line_sent(source, sent, out) or isinstance(sent, int) and _split_key(source, budget)):
         out, cut, _ = _slice(_hide_keys(source), claim, budget)
     return out, cut
 

@@ -1,5 +1,206 @@
 # Changelog
 
+## 1.7.11 — 2026-10-15
+
+**What jevmcp found in its own code, fixed.** jevmcp 1.7.10 was run on its own code with its own
+tools: spec drift over its whole spec map, a code audit against six engineering rules, and CI triage
+of a staged failure. Its findings, checked one by one, held 44 real problems: gaps in what is kept
+back (a secrets file read as a spec or as a rule file, values redaction missed), code that did not
+do what the docs said, and docs that did not say what the code does. Each is fixed here, in the code
+or by a corrected sentence. Nothing that 1.7.10 hid is sent. The fixed questions, their options, the
+thresholds, the model and spec drift's sentence reading are unchanged.
+
+**Secret redaction and comment removal** (spec drift and code audit):
+- Spec drift: a path after a placeholder that names no folder or file is now redacted even when an
+  earlier placeholder in the same value names a folder. 1.7.10 sent
+  `${WORK_DIR}/x${HOOK}/T0000/B0000/abcdef` as written; now it goes as
+  `${WORK_DIR}/x${HOOK}<redacted>`. After such an earlier placeholder, the only thing still kept is
+  the end of a file name: it has a `.` and no `/` or `\` (`${work_dir}/${label}.token.json`), as in
+  1.7.10. `${WORK_DIR}/${SUB}/token.json` is now sent as `${WORK_DIR}/${SUB}<redacted>`.
+- Spec drift: if the 2,600-character cap, or a claim's share that is the first characters of the
+  code, would cut inside a secret-named value or a connection-string password, and a cut just before
+  the value would send something the cap hid (a `-----BEGIN` marker string above a value holding an
+  END marker), 1.7.10 cut at the cap and sent the start of the value. Now the cut goes at the start
+  of an earlier line whose redacted text is the start of what the cut at the cap would send, and at
+  worst none of that code is sent. PEM keys are hidden first only when the cut at the cap would
+  split one, as in 1.7.10.
+- Spec drift and code audit: a Python docstring on its own `def` or `class` line (`def f():
+  """..."""`) is now removed and sent as `...`; 1.7.10 sent it as written. An empty one (`''`,
+  `""""""`) is still sent as written, so no code after it moves; in a file Python cannot parse,
+  docstrings are sent as written, as before.
+- Spec drift and code audit: comments are now removed from C++ files named `.cxx`, `.c++`, `.hh`,
+  `.hxx` or `.h++`, as they already were from `.cpp` and `.hpp`; 1.7.10 sent them as written.
+- Spec drift and code audit: a PEM private key or PGP block whose BEGIN or END marker is in a
+  comment or docstring that is removed is still hidden, its lines sent as `<redacted>`. Removing the
+  comment took the marker, so the key was no longer seen as one: 1.7.10 sent its body for a marker
+  in a `#` comment, in a docstring on its own line, or in a comment of Java, C, C++ and the other
+  C-family languages (`// -----BEGIN RSA PRIVATE KEY-----` above the key's strings).
+- PRIVACY.md now says exactly what the code does in these places: a colonless default is not read in
+  any secret-named variable's backtick string (a JavaScript template string or a Go raw string, so
+  `` token := `${API_KEY-hunter22}` `` is sent as written, as in 1.7.10), but is read inside a
+  connection string in one; redaction leaves lines where they are, but the excerpt is tidied
+  afterwards (trailing whitespace, blank-line runs, shared indentation); a `;` line shaped like a
+  YAML key ends a secret key's value; and a multi-line PEM key runs to the next END marker of its
+  own kind.
+
+**Spec drift**:
+- A secret file is never read as a spec. 1.7.10 refused a secret file (`.env`, `.env.*`, `*.env`, a
+  key, certificate or credentials file, as listed in PRIVACY.md) only as an entry's code: named as
+  the spec to draft from (`draft_spec_map`, `--docs`) or as a map entry's `spec`, its text was read,
+  could be drafted into the map, and was sent with the claim; named in the map's `specs`, it was
+  read to list unmapped sentences. Now such a file, or a link to one, named as a spec is refused
+  with `X looks like a secrets file - refused, never sent` (exit 2 on the command line); a named
+  folder is read only for `.md` and `.rst` files, and such a file (`.env.md`) or one that is a link
+  to a secret file is left out with a warning; a map entry whose `spec` is one, or the map's `specs`
+  naming one, is a map problem, and such an entry is not checked. `.env.example`-style templates are
+  used as before.
+- docs/tools.md now states exactly what the code does (no behaviour change):
+  - where a sentence ends in text with Chinese, Japanese or Korean in it: also at `．` and `｡`, after
+    a bracket that closes a whole sentence, and before `#`, `-` and `*` after a Latin stop and a
+    space; not at a `！` or `？` before `と` or `っ`, after `e.g.`-like abbreviations or in `SDKMAN! 的`;
+    a straight quote, unlike a closing bracket or typographic quote, does not let a Latin stop end a
+    sentence before a lower-case word;
+  - an added space in a code span is not noticed only when the reviewed `spec_text` has no such
+    space anywhere;
+  - `--samples`: a re-ask cut short by a rejected key exits 2, not 3; the exit-2 row names a
+    rejected key;
+  - the 401/403 and 402 error rows: these words are inside the `INCOMPLETE` block, after the
+    `spec-drift check` line and `the run stopped early:`, `the run stopped early - N item(s) keep
+    their first answer's label:` or `re-asking stopped early - N item(s) keep their first answer's
+    label:`, never the start of the text;
+  - an age word in a name counts once version numbers, dates and words such as `final` or `copy` are
+    left out (`spec-old-final` looks old);
+  - which partial declarations are flagged: a `Superseded-By:` field with a value always counts; a
+    status field or a banner counts when its state word is followed by the end of the line, `.`,
+    `,`, `:`, `;`, `!`, a bracket, a dash or `|` (not `?`, `/`, `…` or a quote), `by`, `in favour
+    of`, `see` or `use`, so a part word after a bracket, a comma or the `by ...` is not read
+    (`Status: Superseded (in part) by ADR-9` is flagged), while one right before or after the state
+    word stops the line from counting (`Status: superseded in part by ADR-9`, `Partly superseded by
+    ADR-9` are not flagged);
+  - a bare `Deprecated.` also counts on a line that starts with a quote, an alert or an emphasis
+    mark;
+  - when git cannot list the project, files in skipped folders are not used, tracked ones included;
+  - a version number or date is held against a newest or only version when a word in its path or its
+    first lines already mark it old, and `last_commit_not_found` can also say git could not be run.
+
+**Code audit**:
+- Command line, `code_audit.py --samples N`: 1.7.10 sent a request the first answer did not settle
+  up to N-1 more times; now at most 3 answers are taken, as `check_code_rules` takes them, so such a
+  request is sent up to twice more, as PRIVACY.md says.
+- A `.git` folder that is not empty but that git does not take for a repository (its `HEAD` or
+  `refs` gone): 1.7.10 stopped the audit only when git found no repository at all; below a
+  repository git can read, git passed it by, listed the files as that repository's, and they were
+  audited (that folder's own `info/exclude` not applied). Now that stops the audit, the draft and
+  the validation too, as PRIVACY.md and docs/tools.md say. It costs one more `git
+  rev-parse` call (about 2 ms) each time the project's files are listed in a repository. A sound
+  repository that git passes by only because `GIT_DIR` is set (a git hook) does not stop it: git is
+  asked to read that folder first: one more call whenever the `.git` found is below the repository's
+  top.
+- Drafting a rule map (`draft_rule_map`, `code_audit.py --draft-map --docs`): 1.7.10 read a secrets
+  file named in `docs` (`.env`, `id_rsa`, `.netrc`, in any case, or a link to one), and its lines
+  became entries in rule_map.json, sent once reviewed; now it is refused with `<name> looks like a
+  secrets file - refused, never read`, also when it cannot be read, and nothing is read or written.
+  A template such as `.env.example` is still read, in any case (`.ENV.EXAMPLE` too). In a folder
+  named in `docs`, 1.7.10 read a secrets file it found there too (`docs/.env.md`); now it is left
+  out with a warning, `N secrets file(s) in X were left out, never read: ...`, and the rest of the
+  folder is drafted.
+- `code_audit.py --dry-run --show-payload`: 1.7.10 printed the states of the first 50 requests only;
+  now it prints every one, as PRIVACY.md says. A dry run without `--show-payload` still names the
+  first 50, and now ends that list with `... and N more (--show-payload prints every one)`.
+- `draft_spec_map` without `docs`: 1.7.10 left `index_notes` out of the structured result; now it is
+  there, empty, and the outputSchema lists it as required, as docs/tools.md says every field is
+  always present.
+
+**CI triage**:
+- A secret file whose name is written in upper or mixed case (`.ENV`, `config/Prod.ENV`,
+  `SERVER.PEM`, `ID_RSA`) is left out of the change excerpt, as one in lower case is; 1.7.10 sent
+  its changed lines (a disk that ignores case, as macOS's and Windows' do by default, holds such
+  files). Such a log file was already refused.
+- Log files given together are one run: jobs that failed at the same step with the same first error
+  are one failure, one request, also when each job's log is its own file (`job-py311.log`,
+  `job-py312.log`). 1.7.10 merged them only within one file or one GitHub run, so the same matrix
+  failure was sent, and paid for, once per file. Each JUnit report is still a failure of its own.
+- The change excerpt (`d_change`) is at most 5,000 characters in all: the line breaks between files
+  and the notes on what was left out (the rest of a file, how many files, the secret files) now
+  count. 1.7.10 counted only the files' own text, and sent up to a few hundred characters more. A
+  longer excerpt is what 1.7.10 sent with its end taken off (whole hunks of the last file sent,
+  whole lines when its first hunk alone is too long, else that file) until it fits, so no line of
+  the change that 1.7.10 left out is sent. The secret files' note names the first four secret files
+  as 1.7.10 did while their paths fit in 400 characters; past that it names as many of them whole as
+  fit and says how many more there are (`... and 2 more secret file(s); secret files are never
+  sent`), where 1.7.10 named all four however long. Apart from that note, an excerpt 1.7.10 kept
+  within 5,000 characters is sent as before. In the 73-run CI corpus, 6 of 121 states change, all of
+  them excerpts 1.7.10 sent at 5,016 to 5,128 characters.
+- In a log file of which only the last 25 MB was read, written as `gh run view --log` writes it
+  (`job<TAB>step<TAB>time ...`), the step the kept part opens with is not timed, as the docs say.
+  1.7.10 timed it from the first line it read, so its run time was too short and its longest silence
+  could be wrong.
+- The first line of such a cut log file is the rest of a line. Its job and step prefix and its
+  GitHub timestamp, or what the cut left of the timestamp, are now removed, as from every other line
+  (also when the line's own text holds a tab), and its text joins the job the next line names, when
+  that name ends with what is left of the first line's (the cut fell in the name, or right before
+  it): one failure, one request. 1.7.10 made a job of the cut part of the name (`ld` for `build`),
+  so the line's error went to a failure of its own and the real job's lost it, two requests where
+  one was due. When the cut fell inside the step's name, 1.7.10 sent the rest of that name and the
+  timestamp in the error lines; now only the line's own text is sent, under the job named after the
+  file, as before. A first line of another job (`lint` before `build`) is also read as the job named
+  after the file, where 1.7.10 named it `lint`.
+- A line that holds `FAILURE:` at the end of a longer word (`ok   triage_ci_failure: ...`,
+  `test_failure: passed`) is no longer an error marker on its own, so a passing line is not offered
+  as an error line for that. `FAILURE:` on its own (Gradle's `FAILURE: Build failed`) and a class
+  name's (`org.junit.ComparisonFailure:`) still are. 1.7.10 read `failure:` anywhere in a line.
+- For log files, and for a run of the project's own repository, a file the errors name that the
+  project does not have (none of the files git lists, none the change edits, and for a GitHub run
+  none of the run's commit; a test's own temporary project's `app.py`) is named apart: `The error
+  output also names files that are not in this project: app.py.`, and the facts `The error output
+  names these files` and `None of the files the errors name is edited by this change.` are drawn
+  only from the project's own. 1.7.10 named every relative path the errors held as the project's, so
+  a fixture's file could argue against the change. A named file counts as the project's when it is a
+  project file's path, or one of the two paths ends with `/` and the other (`pkg/mod.py` and
+  `src/pkg/mod.py`), letter case aside. Nothing changes when git cannot list the project's files,
+  or, for a GitHub run, when the run's commit is not in the local repository (a checkout that is
+  behind it). The two sentences name the same files 1.7.10 named, the first 12 the errors name, in
+  their order, split between them; when none of those 12 is the project's but a later one is, the
+  first reads `None of the first 12 files the error output names is in this project.`.
+  `files_in_errors` lists the first 20 the errors name, in their order, and the change excerpt puts
+  first the files any named file matches, both as in 1.7.10.
+
+**Docs corrected** (the code is unchanged):
+- docs/tools.md, rule drafting: a third star shape (a bold span split by a sentence cut keeps its
+  closing mark) is said to be one 1.7.7 had but did not list, not one of its two known issues; the
+  1.7.8 CHANGELOG entry says the same.
+- docs/tools.md, rule drafting: a sentence with no rule wording in a named file is kept as a draft,
+  or excluded when it is also about process, a linter or the assistant; a one-word sentence is not
+  kept.
+- docs/tools.md, `check_code_rules`: the order is BREAKS, `review` from 0.3 up, `??`, anything not
+  checked, then the rest of `review`.
+- docs/tools.md, windows of a long unit: only Python triple-quoted strings, backtick strings and `/*
+  */` comments are seen as running over lines; other multi-line strings and heredocs are not, so a
+  window can end inside one.
+- docs/tools.md, `check_code_rules` errors: also the `project` errors, the argument errors and `the
+  server is shutting down`, every `validate_rule_map` error, the stops under *Which code is
+  audited*, `file X is outside the project - refused`, a file error (`PermissionError: ...`) and `a
+  git or gh command failed, so nothing was sent`.
+- docs/tools.md, rule map fields: a reviewed entry with no `rule`, or an empty one, sends its `text`
+  instead.
+- PRIVACY.md and docs/tools.md: a self-hosted Windows workspace written with `\` is removed right
+  after a one-letter word and `:` too (`-v /x:C:\opt\_work\a\b\f.py` is sent as `-v /x:f.py`); only
+  the `/` forms keep such a path whole. The code comment that said every guarded cut has this guard
+  now names the exception.
+- PRIVACY.md: after `/workspace/`, a GitHub-hosted, Docker action's, Jenkins or CircleCI workspace
+  is cut out of the middle (`/workspace/var/lib/jenkins/workspace/j/x` is sent as `/workspacex`), as
+  docs/tools.md already said.
+- PRIVACY.md: `ci_triage.py` without `--dry-run` sends too, not only `triage_ci_failure`, and the
+  command line's `--any-repo` reads a repository that is not a remote of the project.
+- PRIVACY.md and docs/tools.md: another user's log file is refused on Linux and macOS; on Windows
+  the file's owner is not checked. The refusal of a file in the inbox names the file, not a path.
+- docs/tools.md: a runner installed two or more folders below `~/work` keeps `_work/<a>/<b>/` in its
+  paths, but an error file is still matched to a changed file its path ends with (the docs said such
+  paths were not matched).
+- docs/tools.md: which unknown facts are stated (the change under test, a re-run, the default
+  branch, and for a test step a failing test name that could not be read) and which are left out (an
+  exit code, run time, time limit or cancel state); the docs said every unknown fact is stated.
+
 ## 1.7.10 — 2026-10-14
 
 **The older gaps 1.7.9 listed, fixed.** 1.7.9's review rounds recorded 33 older gaps that 1.7.8
@@ -834,8 +1035,9 @@ item is narrower than the 1.7.7 known issue, or older than it):
   `win-x64` keep two failures apart. `preview_ci_triage` still fails with an internal error on a CI
   log whose own name is not valid UTF-8, as in 1.7.7.
 - Code audit: rule drafting reads bold and bold-italic marks, masks, splats and powers as 1.7.7 did,
-  so 1.7.7's two known issues about stars are not fixed. A Python splat or a power that ends a
-  sentence (`must accept **kwargs.`) can lose its `**` when the next sentence of the paragraph has a
+  so 1.7.7's two known issues about stars, and a third shape 1.7.7 had but did not list, are not
+  fixed. A Python splat or a power that ends a sentence (`must accept **kwargs.`) can lose its `**`
+  when the next sentence of the paragraph has a
   power or a mask (`x**2`, `sk-***`), and a power there loses its stars too; a mask written with
   separators (`***-***-1234`, `192.168.***.***`, `***@***.com`, `10.0.**.**`) is taken for bold and
   loses its stars; and a bold span that a sentence cut splits can keep its closing mark

@@ -34,9 +34,14 @@ The code paired with a requirement is cleaned before it is sent:
 
 - **Comments and docstrings removed** in Python (stub files, `.pyi`, included), Java,
   JavaScript/TypeScript and the other C-family languages (Kotlin, Scala, Groovy, Go, C#, C/C++,
-  Rust, Swift). Other files — for example PHP, Ruby or shell, which can only be paired by line
-  range — are sent as written. A code file's language is known by its suffix in lower case, so
-  `UPPER.PY` or `Main.JAVA` is not indexed and keeps its comments and docstrings.
+  Rust, Swift). A docstring on its own `def` or `class` line (`def f(): """..."""`) is sent as
+  `...` there; an empty one (`''`) is sent as written. In a Python file that Python cannot parse,
+  docstrings are sent as written. C++ files named `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` have
+  their comments removed too. A PEM private key or PGP block whose BEGIN or END marker was in a
+  removed comment or docstring is still hidden: its lines are sent as `<redacted>`. Other files —
+  for example PHP, Ruby or shell, which can only be paired by line range — are sent as written. A
+  code file's language is known by its suffix in lower case, so `UPPER.PY` or `Main.JAVA` is not
+  indexed and keeps its comments and docstrings.
 - **Secret-looking values redacted**:
   - everywhere, by shape: Stripe, GitHub, Slack, Google and OpenAI/Anthropic keys, GitLab, npm,
     PyPI and HashiCorp Vault tokens, Slack webhook addresses, AWS access key IDs, JWTs, PEM
@@ -209,8 +214,9 @@ The code paired with a requirement is cleaned before it is sent:
     `# password: x`, has its value redacted, as below; any other comment, a commented-out item or
     value such as `# - sk-old...` or `#   hunter22` included, is sent as written, as in 1.7.7). A
     `;` line is not a comment in YAML: one indented deeper than the key is read as part of the value
-    and redacted; one at the key's column or to its left ends the value, and what follows is read
-    line by line. A placeholder there is read as on the key's line, so `- ${API_KEY}`,
+    and redacted, unless it has a key's shape (`; note: x`), which ends the value as any key below
+    it does; one at the key's column or to its left ends the value, and what follows is read line
+    by line. A placeholder there is read as on the key's line, so `- ${API_KEY}`,
     `${GOOGLE_SECRET}` and `- ${{ secrets.TOKEN }}` are kept, a default written in one or text glued
     to one is redacted (`${DB_PASS:hunter2}` is sent as `${DB_PASS:<redacted>}`), a quoted
     placeholder, or one after a tag or an anchor, is redacted whole, as `password: "${KEY}"` is, and
@@ -252,7 +258,9 @@ The code paired with a requirement is cleaned before it is sent:
     it or not; the marker, the key and that comment are kept (in a `.properties` file the text after
     the value is part of the value, and is redacted with it). A comment whose value is several
     words, a note, is sent as written. A PEM private key over several lines, from its `-----BEGIN`
-    marker to the first `-----END` marker of a private key after it, has its inner lines redacted
+    marker to the next `-----END` marker of its kind (a PEM key's BEGIN runs on past a PGP
+    block's END, and a PGP block's BEGIN past a PEM key's END; keys that overlap are hidden as
+    one), has its inner lines redacted
     before these rules read the file: each inner line with text on it becomes `<redacted>`, keeping
     its indentation and its line-continuation backslashes, so every line stays where it was, a line
     range names the same lines, and a value that goes on after the END line (a `.properties`
@@ -285,22 +293,35 @@ The code paired with a requirement is cleaned before it is sent:
     of it is sent. The name is looked for on the cut's line and up to the last line above it that is
     not blank (one more when that line is only the `=`), within 16,384 characters of the cut; a name
     of more than 256 characters is not, and a cut made earlier is never one that would send what
-    the cut at the cap hid.
-    Redacted lines stay on their own lines, so line numbers never move, except that a PEM private key
-    hidden whole is sent as one `<redacted>` line, as in 1.7.7. A line with nothing to redact is sent
-    exactly as written.
+    the cut at the cap hid. When the cut before the value would (a `-----BEGIN` marker string above
+    a value that holds an END marker: the shape hides from one to the other), the cut is made at the
+    start of an earlier line whose redacted text is the start of what the cut at the cap would send,
+    at worst sending none of that code, where 1.7.10 cut inside the value. PEM keys are hidden first
+    there only when the cut at the cap would split one, as above.
+    Redaction keeps every line on its own line, so it never moves a line, except that a PEM private
+    key hidden whole is sent as one `<redacted>` line, as in 1.7.7, and it leaves a line with
+    nothing to redact as written. The excerpt is then tidied before it is sent: trailing spaces,
+    tabs and `\r` are dropped, a run of blank lines is sent as one, blank lines at its start and end
+    are dropped and the indentation its lines share is removed, so a line after such a run, or after
+    blank lines at the start, is not at its offset from the `file:line` the excerpt is headed with.
     Placeholders such as `${DB_PASSWORD}` are kept: they reveal nothing. A default written into one
     (`${DB_PASSWORD:hunter2}`, `${DB_PASSWORD:-hunter2}`, and without a colon, as shells and Docker
     Compose write it, `${DB_PASSWORD-hunter2}` or `${DB_PASSWORD=hunter2}`) and text glued to one
     (`${PREFIX}hunter2`) are redacted when they are four characters or longer, as a quoted value is.
     A default without a colon is read only after an upper-case environment variable's name, so
-    `${jwt-secret}` stays a name, and never in a JavaScript template string in code, where `${A-B}`
-    is code. Kept: a GitHub Actions expression (`${{ secrets.TOKEN }}`) whole; an editor variable's
+    `${jwt-secret}` stays a name, and not in a secret-named variable's backtick string in code (a
+    JavaScript template string, where `` const token = `${A-B}` `` is code, or a Go raw string), so
+    `` token := `${API_KEY-hunter22}` `` is sent as written; a connection-string password in a
+    backtick string (`` `Password=${PW-hunter22}` ``) has such a default read, and redacted. Kept: a
+    GitHub Actions expression (`${{ secrets.TOKEN }}`) whole; an editor variable's
     name (`${env:TOKEN}`, `${input:token}`), while a default after the name is redacted as above
     (Log4j2's `${env:TOKEN:-...}`, the Serverless Framework's `${env:TOKEN, '...'}`); the message of
-    `${1:?message}`; and a path in or after a placeholder that names a folder or a file
+    `${1:?message}`; and a path in or right after a placeholder that names a folder or a file
     (`${WORK_DIR}/token.json`, `${KEY_FILE:-/etc/app/key.pem}`). A path after any other placeholder
-    is redacted, as a webhook address carries its token in the path.
+    is redacted, as a webhook address carries its token in the path, also when an earlier
+    placeholder in the value names a folder (`${WORK_DIR}/x${HOOK}/T0/B0/abcdef` is sent as
+    `${WORK_DIR}/x${HOOK}<redacted>`, where 1.7.10 sent it as written); after such an earlier one,
+    only a file name's end with a `.` and no `/` or `\` is kept (`${work_dir}/${label}.token.json`).
 
   A value that matches none of these (for example `DATABASE_DSN = "..."` written in code, or a
   quoted password of three characters) is sent as written. A code or configuration file is read
@@ -311,7 +332,8 @@ The code paired with a requirement is cleaned before it is sent:
 ### CI triage
 
 A CI triage sends one request per distinct failure of the run — a failed step, counted once
-however many jobs of a matrix failed the same way. A failed job whose log was not read (it could
+however many jobs of a matrix failed the same way, in one GitHub run or in all the log files given
+together; each JUnit report is a failure of its own. A failed job whose log was not read (it could
 not be downloaded, or reading stopped after 40 jobs or 50 MB of logs) sends nothing: it is listed
 as not checked. Each request holds:
 
@@ -320,7 +342,7 @@ as not checked. Each request holds:
 | Facts about the run | sentences computed on your machine: the failed step, its kind and exit code, the job names, how long the step ran and its longest silence, whether GitHub reports the job cancelled or stopped at its time limit, the other jobs of the run where the same step passed, the failing tests and the files the errors name, the paths of the files the change edits, a name, or up to 80 characters of a string's text, that an error line holds and the change adds or removes (read from the change's redacted lines, never from a secret file), whether a later attempt passed, and how the same job fared in the last run on the default branch before this one |
 | Candidate error lines | up to 30 lines of the failed step's output that look like errors, each at most 240 characters; for a Python traceback, also where it was in your project's own code, as `path:line in function: source line` |
 | The end of the failed step's output | at most 5,000 characters |
-| An excerpt of the change under test | at most 5,000 characters of its diff, starting with the files the errors name |
+| An excerpt of the change under test | at most 5,000 characters of its diff, the notes on what was left out included, starting with the files the errors name |
 | Fixed questions | identical for every failure; the question about which line states the error is asked when two or more lines are offered, and its options are those lines |
 
 From a GitHub Actions log, only the output of the steps that failed is used; a log from another
@@ -350,7 +372,9 @@ cleaning:
   `>` and `|` also end a word, so a path after a URL in a JSON or `key=value` line is removed):
   `file:///home/you/work/r/r/x` is sent as `file:///home/<user>/work/r/r/x`. A container job's, a self-hosted runner's or a hosted Windows
   workspace written with `/` is removed only where a path starts (not right after a letter, a
-  digit, `_`, `.`, `~`, `-`, `/`, or a one-letter word and `:`, a drive), and where its `<a>` and
+  digit, `_`, `.`, `~`, `-`, `/`, or a one-letter word and `:`, a drive; a self-hosted one written
+  with `\` is removed right after a one-letter word and `:` too, as in 1.7.10:
+  `-v /x:C:\opt\_work\a\b\f.py` is sent as `-v /x:f.py`), and where its `<a>` and
   `<b>` hold no `:`, `;` or `,`: a workspace path that such a list separator ends
   (`-v /__w/r/r:/app`, `PATH=C:\actions-runner\_work\w\w;C:\...`, `PATH=D:/a/r/r;...`) is sent as written,
   as in 1.7.7, except that of a runner installed in `~/work` or `X:\a\`, or one folder below either:
@@ -359,7 +383,10 @@ cleaning:
   a space or at the end of the line, or is inside a URL. A path under another workspace that holds a
   `_work/<a>/<b>/` loses everything up to the first one, as a self-hosted runner's would, and so
   does a line that starts with `/workspace/` (with no such `_work/<a>/<b>/`, only `/workspace/`
-  comes off, as in 1.7.7). In a log or JUnit report read from a file, the project folder is removed
+  comes off, as in 1.7.7, unless a GitHub-hosted, Docker action's, Jenkins or CircleCI workspace
+  follows it: that one is cut out of the middle instead, so
+  `/workspace/var/lib/jenkins/workspace/j/x` is sent as `/workspacex`). In a log or JUnit report
+  read from a file, the project folder is removed
   from the start of a path, a Windows one in any letter case, with doubled backslashes and with `\` and `/`
   mixed too, and one whose name is not valid UTF-8 as the log's text reads it. The name of any other home folder is shown as `<user>`: after
   `/home/` or `/Users/`, and on Windows after a drive's `Users` folder in any letter case, written
@@ -421,7 +448,9 @@ The excerpt of the change is cleaned as well:
   (`.pem`, `.key`, `.p12`, `.pfx`, `.jks`), `.kdbx`, SSH private keys (`id_rsa`, `id_ed25519`,
   `id_ecdsa`, `id_dsa`), `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `kubeconfig`, Terraform
   state and variable files, `credentials*.json` and service-account JSON files. Only its path is
-  mentioned, with a note that its content is withheld;
+  mentioned, with a note that its content is withheld: the paths of the first four, as many of
+  them whole as fit in 400 characters, and when that leaves one of the four out, how many
+  secret files are not named;
 - lines that only add or remove a comment are left out, in Python, shell, Ruby, YAML, TOML, Go,
   Rust, Java, Kotlin, Scala, JavaScript, TypeScript, C, C++, C#, Swift and PHP files;
 - secret-looking values are redacted as in log lines, also in the code after a diff line's `+`,
@@ -444,7 +473,8 @@ them (a commit-message lint, `git log`) puts it in its log, and that log line is
 
 **Reading GitHub.** To triage a GitHub Actions run, jevmcp reads it with your own `gh` login. It
 uses GET requests to GitHub's REST API only, and only for a repository that is a GitHub remote of
-the project. It reads the run, its jobs, the failed jobs' logs, the annotations of a failed job
+the project (the `ci_triage.py` command line reads another one too when given `--any-repo`). It
+reads the run, its jobs, the failed jobs' logs, the annotations of a failed job
 that was cancelled or timed out (where GitHub says a time limit was reached), the repository's
 record (for its default branch), the change under test, and the last completed run of the same
 workflow on the default branch from before this run, with its jobs. For a pull-request URL it
@@ -453,12 +483,14 @@ request's title and description are never sent. For a scheduled or manual run, t
 test is what changed since the last run of the workflow on the same branch that passed before
 this run. Both of those earlier runs are the branch's own: a pull request's run, a fork's
 included, is never used as either. `gh` runs without the TypeSafe key in its environment. Reading GitHub is free: only the
-cleaned excerpts above go to TypeSafe, and only when `triage_ci_failure` runs.
+cleaned excerpts above go to TypeSafe, and only when `triage_ci_failure` runs, or `ci_triage.py`
+without `--dry-run`.
 
 **Log files from another CI** are read only when they are inside your project or in the server's
 private inbox. Symbolic links, files under any `.git` folder (a vendored repository's too), secret
-files, other users' files, the server's own results folder and other sessions' temporary folders
-are refused, on Windows as on Linux and macOS.
+files, the server's own results folder and other sessions' temporary folders are refused, on
+Windows as on Linux and macOS; on Linux and macOS, other users' files are refused too (on Windows
+the file's owner is not checked).
 
 ### Code audit
 
@@ -481,11 +513,13 @@ Which code can be sent:
   read permission or that is a symbolic link, which git 2.32 and later does not follow,
   `.git/info/exclude`, the global excludes file, but not git's default one in a folder that cannot be
   entered while `core.excludesFile` is not set, from which git applies nothing), as git then lists the files it would ignore; a `.gitignore` in a folder that cannot be entered does not stop it, as the files it
-  rules cannot be read either. So it does at a `.git` folder in the folder or above it, up to any
-  ceiling or mount point where git stops looking, that is not empty but that git does not take for a
-  repository (its `HEAD` or `refs` gone, as a copy or sync tool that drops empty folders can leave
-  it), as its ignored files cannot be told apart either. In a folder that is not a git repository
-  there is nothing to ignore (an empty `.git` folder in it or above it does not make it one, nor
+  rules cannot be read either. So it does at a `.git` folder in the folder or above it, up to the
+  repository git finds or any ceiling or mount point where git stops looking, that is not empty but
+  that git does not take for a repository (its `HEAD` or `refs` gone, as a copy or sync tool that
+  drops empty folders can leave it), as its ignored files cannot be told apart either, also when git
+  passes it by and takes the files for those of a repository above it. In a folder that is not a
+  git repository there is nothing to ignore (an empty `.git` folder in it or above it does not make
+  it one, nor
   does a repository above a `GIT_CEILING_DIRECTORIES` entry or, unless
   `GIT_DISCOVERY_ACROSS_FILESYSTEM` is set, past a mount point, as git does not look there): every
   code file outside the skipped folders (`node_modules`, `.venv`, `build` and the like) can be read,
@@ -523,11 +557,15 @@ the command line refuses more than `--max-requests` (500 by default).
   key and certificate files (`.pem`, `.key`, `.p12`, `.jks`, `.pfx`), `.kdbx`, SSH private keys
   (`id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`), `.npmrc`, `.pypirc`, `.netrc`,
   `.git-credentials`, `kubeconfig`, Terraform state and variable files (`.tfstate`, `.tfvars`),
-  `credentials*.json` and service-account JSON files. A spec-map entry pointing at one is
-  refused, and a code audit never reads one, whatever the case of its name (`.ENV`, `ID_RSA`,
-  `server.PEM`: a disk that ignores case, as macOS does by default, opens `.env` for `.ENV`); a
-  CI triage leaves one out of the change excerpt and refuses one as a log when its name is
-  written as above, in lower case.
+  `credentials*.json` and service-account JSON files. A spec-map entry pointing at one, as its
+  code or as its spec, and one named as a spec to draft a map from are refused (a named folder
+  is read only for `.md` and `.rst` files: such a file, as `.env.md`, or one that is a link to a
+  secret file is left out with a warning), and a code audit never reads one, nor does drafting
+  a rule map (one named in `draft_rule_map`'s `docs` or the command line's `--docs` is refused,
+  one found in a folder named in `docs` is left out with a warning), whatever the case of its
+  name (`.ENV`, `ID_RSA`, `server.PEM`: a disk that ignores case, as macOS does by default, opens
+  `.env` for `.ENV`); a CI triage refuses one as a log and leaves one out of the change excerpt,
+  whatever the case of its name too.
 - Anything outside your project folder: a map entry pointing there is refused. The one exception
   is a CI log you save in the server's private inbox for a triage.
 - For spec drift, code that no requirement points at: an entry in the map, or, with

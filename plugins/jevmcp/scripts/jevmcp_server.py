@@ -92,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.10"
+VERSION = "1.7.11"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -503,7 +503,7 @@ SPEC_DRIFT_TOOLS = [
                              "description": "without docs: files that look like versions of one document"},
                 "index_notes": _INDEX_NOTES, "next_step": {"type": "string"}},
             "required": ["project", "drafted", "out", "specs", "entries", "warnings", "candidates", "families",
-                         "next_step"],
+                         "index_notes", "next_step"],
         },
     },
 ]
@@ -1488,7 +1488,7 @@ class Server:
         """Without docs: the candidate spec files for the user to choose from - nothing is drafted.
         With docs: the map, drafted from exactly those files."""
         empty = {"project": str(self.root), "drafted": False, "out": None, "specs": [], "entries": 0,
-                 "warnings": [], "candidates": [], "families": []}
+                 "warnings": [], "candidates": [], "families": [], "index_notes": []}
         if not docs:
             survey = dd.SpecSurvey(self.root, self.ignore)
             found = dd.spec_candidates(self.root, self.ignore, survey=survey)
@@ -1618,7 +1618,7 @@ class Server:
             state = it.state if len(json.dumps(it.state, ensure_ascii=False)) <= room else None
             room -= len(json.dumps(state, ensure_ascii=False)) if state else 0
             failures.append({"index": n, "step": f.step, "kind": f.kind, "jobs": f.jobs[:20], "job_count": len(f.jobs),
-                             "exit_code": f.exit_code, "failing_tests": f.tests[:20], "files_in_errors": f.files[:20],
+                             "exit_code": f.exit_code, "failing_tests": f.tests[:20], "files_in_errors": (f.named or f.files)[:20],
                              "facts": it.state["a_facts"].split("\n"),
                              "untrusted_candidate_lines": [f"L{i}: {c}" for i, c in enumerate(f.candidates, 1)],
                              "state": state, "estimated_tokens": jevkit.estimate_tokens(it)})
@@ -1992,6 +1992,12 @@ class Server:
                         warns.append(f"{len(bad)} rule file(s) in {d} were left out because their names are not valid "
                                      f"UTF-8, so a map cannot record them: {', '.join(dd._readable(f) for f in bad)}. "
                                      f"Rename them if they hold rules.")
+                    # A secrets file found in the folder (.env.md, a key) is never read, as the finder never reads
+                    # one; only one named itself stops the draft
+                    if secret := [f for f in found if f not in bad and audit._secret_file(f)]:
+                        warns.append(f"{len(secret)} secrets file(s) in {d} were left out, never read: "
+                                     f"{', '.join(dd._readable(f) for f in secret)}.")
+                        found = [f for f in found if f not in secret]
                     # and one git still lists but that is gone from disk is not read, so not a source either; one
                     # in a folder that cannot be entered, or that cannot be read, is left out with a warning
                     shut = sorted([f for f in found if f not in bad and _unreadable(self.root / f)]

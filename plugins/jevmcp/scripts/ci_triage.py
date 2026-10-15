@@ -97,6 +97,7 @@ class Stop(dd.Stop):
 # Colour and cursor codes, also as the caret text '^[[36;1m' some log exports write instead of ESC.
 _ANSI = re.compile(r"(?:\x1b|\^\[)\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
 _TS = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
+_TS_TAIL = re.compile(r"^\ufeff?[\d:.T-]{0,27}Z ")      # the end of one, where a cut log's first line begins
 # Each CI's default workspace folder. GitHub Actions (and Azure Pipelines' hosted agents, whose
 # vsts/work/1/s/ under /home and D:\a\1\s\ have the same shape), GitLab (/builds/ only at the start of a path:
 # unanchored it cut the middle out of other paths, such as Buildkite's), Jenkins, CircleCI, Travis,
@@ -105,7 +106,8 @@ _TS = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
 # action's own code, _temp, _tool: a Python or Node it installed, Azure's _tasks) are not the project's.
 # The container and self-hosted cuts (new in 1.7.8, _GUARDED) start a path, never inside a URL: no word character,
 # '.', '~', '-' or '/' before the start (a URL's '//', file:///), nor a one-letter word and ':' (a drive, D:/__w/,
-# -v /x:/opt/...), and (_outside_url) no '://' in the path's own word (the non-space characters before it), as in
+# -v /x:/opt/...; not in the self-hosted cut written with '\', _WORK_PATH_WIN: '-v /x:C:\opt\_work\a\b\f.py' reads
+# '-v /x:f.py'), and (_outside_url) no '://' in the path's own word (the non-space characters before it), as in
 # https://[::1]/_work/. A GitHub-hosted Windows workspace written with '/' (D:/a/..., Git Bash's /d/a/...) is never
 # taken for a runner's install folder.
 # A ']' alone does not stop them: '##[error]/opt/r/_work/w/w/x.ts' is cut. A self-hosted <install folder>/_work/
@@ -264,6 +266,8 @@ class Failure:
     tail: list[str]
     tests: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
+    outside: list[str] = field(default_factory=list)     # files the errors name that the project does not have
+    named: list[str] = field(default_factory=list)       # with `outside`: every file the errors name, their order
     signature: str = ""
     # What is known of the first job's run of the step (None: not known).
     seconds: int | None = None           # how long the step ran
@@ -288,12 +292,15 @@ _EXIT = re.compile(r"(?:Process completed with exit code|failed with exit code|e
 # fetch', '3 failed', 'failed: x.test.js', 'x.py:5: Failed'), not in prose or a name such as failed.log.
 # (Measured on the 73-run corpus: dropping lower case altogether lost apt's 'E: Failed to fetch' and
 # pytest's ': Failed' lines, and left 13 failures with no error line at all.)
+# FAILURE: not at the end of a word ('test_failure: passed', 'ok   triage_ci_failure: ...' pass), except a
+# class name's ('org.junit.ComparisonFailure: expected ...').
 _STRONG = re.compile(
     r"##\[error\]|^\s*E\s{2,}\S|^FAILED |^ERROR[: ]|\bERROR\b:|(?:^|\s)error(?:\[E\d+\])?:|^error\b|"
     r"--- FAIL|^FAIL\b|(?-i:(?<![\w./\\-])FAILED(?![\w/\\-]|\.\w))|\.{3,}\s*Failed$|^panic:|panicked at|"
     r"\bfailed to \w|(?<![\w.,])[1-9]\d* failed\b|^failed:(?!\s*0\b)|:\s*Failed$|\b(?:jobs?|tests?|checks?) failed\b|"
     r"Traceback \(most recent call last\)|"
-    r"\b\w+(?:Error|Exception)\b:|\bnpm ERR!|^\s*[●✕✖×✗]\s|\berror TS\d+|\[ERROR\]|BUILD FAILED|FAILURE:|"
+    r"\b\w+(?:Error|Exception)\b:|\bnpm ERR!|^\s*[●✕✖×✗]\s|\berror TS\d+|\[ERROR\]|BUILD FAILED|"
+    r"(?<![\w.-])FAILURE:|(?-i:[a-z]Failure:)|"
     r"Segmentation fault|\bKilled\b|\btimed? out\b|The operation was canceled|\bundefined:|"
     r"^\s*-->\s*[\w./\\-]+:\d+|\bCVE-\d{4}-\d+|\bTotal: \d+ \(|"
     r"- hook id: |files were modified by this hook|\b(?:Found|Fixed) \d+ errors?\b|^\s*\d+ × \S|"
@@ -396,19 +403,46 @@ def parse_log(text: str, default_job: str = "job", failed_steps: dict[str, list[
     - several raw job logs joined with a '===== job: NAME =====' line before each.
     `cut` names the jobs whose log lost its beginning (only the end of a long log is read): the step
     their log opens with has no known start. `own_failure` names the cancelled jobs whose first failed
-    step, by GitHub's record, failed on its own before the cancel."""
+    step, by GitHub's record, failed on its own before the cancel. When `default_job` is cut (a log file of
+    which only the end was read), so is the job its first `gh run view --log` line names before any header:
+    that job's log began before the part read."""
     jobs: dict[str, list[str]] = {}
     current = default_job
-    for raw in text.splitlines():
+    opening, headed, held = None, False, None
+    for i, raw in enumerate(text.splitlines()):
         h = _JOB_HEADER.match(raw.strip().lstrip("\ufeff"))
         if h:
-            current = _job_name(h.group(1).strip(), failed_steps or {})
+            current, headed = _job_name(h.group(1).strip(), failed_steps or {}), True
             continue
         parts = raw.split("\t", 2)
+        if not i and default_job in cut:
+            # A cut log's first line is the rest of a 'job<TAB>step<TAB>time ...' line: its job's name (or its
+            # step's, the job's then gone) may be cut too, so it names no job. Its own text joins the job the
+            # next such line names when that name ends with what is left of it, else the job named after the file.
+            # The line's own text may hold a tab; a cut inside its timestamp leaves the end of one, removed.
+            if len(parts) == 3 and _TS.match(parts[2].lstrip("\ufeff")):
+                held = (parts[0], parts[2])
+                continue
+            if len(rest := raw.split("\t", 1)) == 2 and _TS.match(rest[1].lstrip("\ufeff")):
+                held = (None, rest[1])
+                continue
+            if (tail := _TS_TAIL.match(raw)) and not _TS.match(raw.lstrip("\ufeff")):
+                raw = raw[tail.end():]
+                parts = [raw]
         if len(parts) == 3 and _TS.match(parts[2].lstrip("\ufeff")):
             jobs.setdefault(parts[0], []).append(parts[2])
+            if opening is None and not headed:
+                opening = parts[0]
         else:
             jobs.setdefault(current, []).append(raw)
+    if held is not None:
+        into = opening if opening is not None and held[0] is not None and opening.endswith(held[0]) else default_job
+        if into in jobs:
+            jobs[into].insert(0, held[1])
+        else:
+            jobs = {into: [held[1]], **jobs}
+    if opening is not None and default_job in cut and (held is None or held[0] is None or opening.endswith(held[0])):
+        cut = {*cut, opening}           # (a held line of another job: the opening job's log began after it)
     if set(jobs) == {default_job} and len(failed_steps or {}) == 1:
         jobs = {next(iter(failed_steps)): jobs[default_job]}        # one job's log, saved without a header
     steps: list[Step] = []
@@ -787,9 +821,10 @@ def _signature(f: Failure) -> str:
     return f"{f.kind}|{_masked(first)[:160]}"
 
 
-def failures_from_steps(steps: list[Step]) -> list[Failure]:
-    """Every failed step, merged when several jobs failed the same way (a matrix): one cause x N jobs."""
-    merged: dict[tuple[str, str], Failure] = {}
+def failures_from_steps(steps: list[Step], merged: dict | None = None) -> list[Failure]:
+    """Every failed step, merged when several jobs failed the same way (a matrix): one cause x N jobs.
+    `merged`, when given, holds the failures of earlier calls (other log files), and these merge into them."""
+    merged = {} if merged is None else merged
     for s in steps:
         if not s.failed:
             continue
@@ -930,6 +965,8 @@ _COMMENT_ONLY = {".py": r"#", ".sh": r"#", ".rb": r"#", ".yml": r"#", ".yaml": r
 
 
 def _is_secret_path(p: str) -> bool:
+    """A secret file's path, whatever its letter case (`.ENV`, `SERVER.PEM`: a disk that ignores case opens it)."""
+    p = p.lower()
     return bool(_SECRET_PATH.search(p)) and not p.endswith((".example", ".sample", ".template"))
 
 
@@ -1258,6 +1295,8 @@ def from_github(ref: str, repo: str | None = None, root: Path | None = None, any
     ctx.default_branch_when = when
     if record is not None:
         ctx.history = {"default_branch_jobs": record}
+    if root is not None and not any_repo and re.fullmatch(r"[0-9a-f]{40}", str(sha or "")):
+        set_apart_outside(fails, root, ctx.changed, sha)      # a run of this project: its files are its own
     return fails, ctx
 
 
@@ -1582,8 +1621,8 @@ _UTF16 = {b"\xff\xfe": "utf-16-le", b"\xfe\xff": "utf-16-be"}
 
 def from_files(logs: list[Path], junit: list[Path], root: Path | None, base: str | None,
                inbox: Path | None = None) -> tuple[list[Failure], Context]:
-    fails: list[Failure] = []
     notes: list[str] = []
+    merged: dict = {}           # the logs' failures, merged across files: a matrix's jobs saved one file each
     for p in logs:
         real = safe_file(p, root, inbox)
         size = real.stat().st_size
@@ -1598,8 +1637,9 @@ def from_files(logs: list[Path], junit: list[Path], root: Path | None, base: str
         if cut:
             notes.append(_cut_note(clean_line(real.name), job=False))
         # a cut file's first lines, before any job header, are read as the job named after the file
-        fails.extend(failures_from_steps(parse_log(project_relative(text, root), real.name,
-                                                   cut={real.name} if cut else frozenset())))
+        failures_from_steps(parse_log(project_relative(text, root), real.name, cut={real.name} if cut else frozenset()),
+                            merged)
+    fails: list[Failure] = list(merged.values())
     reports: list[str] = []
     for p in junit:
         real = safe_file(p, root, inbox)
@@ -1615,7 +1655,51 @@ def from_files(logs: list[Path], junit: list[Path], root: Path | None, base: str
         ctx.changed = changed_files(ctx.diff)
     if not fails:
         raise Stop("no failure was found in the given file(s): no failed step, error line or failed test case.")
+    if root is not None:
+        set_apart_outside(fails, root, ctx.changed)
     return fails, ctx
+
+
+def _project_files(root: Path, commit: str | None = None) -> list[str] | None:
+    """The project's files relative to root, as git lists them (tracked, and untracked but not ignored), and
+    those of `commit` (a CI run's: the checkout may be behind it); None when git cannot list them (no
+    repository, no git, the commit not in the local repository)."""
+    out: list[str] = []
+    lists = [("ls-files", "-z", "-co", "--exclude-standard")]
+    if commit:
+        lists.append(("ls-tree", "-z", "-r", "--name-only", commit))
+    for args in lists:
+        try:
+            r = subprocess.run(dd.git_argv("-C", str(root), *args), capture_output=True, timeout=60,
+                               stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if r.returncode != 0:
+            return None
+        out += [os.fsdecode(p) for p in r.stdout.split(b"\0") if p]
+    return out
+
+
+def set_apart_outside(fails: list[Failure], root: Path, changed: list[str] | None, commit: str | None = None) -> None:
+    """A file the errors name that is no file of the project (a test's own temporary project, a fixture's
+    `app.py`) is moved to `outside`: the facts name it apart, and say nothing of the change from it. A named
+    file is the project's when it is one of git's files or a changed file, or one ends with the other (a log
+    of a subfolder, a workspace prefix kept). `commit` (a GitHub run's) adds its files; when git cannot list
+    the project's files, or that commit's, nothing is moved."""
+    have = _project_files(root, commit)
+    if not have:
+        return
+    by_name: dict[str, list[str]] = {}
+    for q in [*have, *(changed or [])]:
+        q = q.lower()                              # macOS and Windows disks ignore case
+        by_name.setdefault(q.rsplit("/", 1)[-1], []).append(q)
+
+    def ours(e: str) -> bool:
+        e = norm_path(e).lower()
+        return any(q == e or q.endswith("/" + e) or e.endswith("/" + q) for q in by_name.get(e.rsplit("/", 1)[-1], ()))
+    for f in fails:
+        f.named = list(f.files)
+        f.files, f.outside = [p for p in f.files if ours(p)], [p for p in f.files if not ours(p)]
 
 
 # ─────────────────────────────────────────────────────────────── 4. what is shown to Jev
@@ -1663,8 +1747,14 @@ def facts(f: Failure, ctx: Context) -> tuple[list[str], dict]:
                  + (" and more." if len(f.tests) > 8 else "."))
     elif f.kind == "test":
         s.append("No failing test name could be read from the output.")
-    s.append(f"The error output names these files: {', '.join(f.files[:MAX_FACT_FILES])}." if f.files
+    # The first MAX_FACT_FILES files the errors name, in their order: the project's, then the others.
+    first = (f.named or f.files)[:MAX_FACT_FILES]
+    ours, others = [p for p in first if p not in f.outside], [p for p in first if p in f.outside]
+    s.append(f"The error output names these files: {', '.join(ours)}." if ours
+             else f"None of the first {len(first)} files the error output names is in this project." if f.files
              else "The error output names no project file.")
+    if others:
+        s.append(f"The error output also names files that are not in this project: {', '.join(others)}.")
     flags = {"change_known": ctx.changed is not None, "overlap": [], "ci_config": [], "deps": [], "tests": [],
              "files_named": bool(f.files), "trusted": ctx.trusted}
     if ctx.changed is None:
@@ -1711,8 +1801,9 @@ def facts(f: Failure, ctx: Context) -> tuple[list[str], dict]:
 
 
 def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
-    """The change, cut to what matters: files the errors name first, then the rest; whole hunks;
-    secrets redacted; comment-only lines and secret files left out. Never the first N characters."""
+    """The change, cut to what matters: files the errors name first, then the rest; whole hunks (whole lines
+    where only that keeps it within the cap); secrets redacted; comment-only lines and secret files left out.
+    Never the first N characters."""
     if diff is None:
         return "(the change under test is not known)", []
     if not diff.strip():                       # known, and empty: the facts say it edits no file
@@ -1738,31 +1829,62 @@ def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
         body = _redact_diff("\n".join(lines))
         # a long line is cut, then cleaned too (as a log line, but with only 1.7.7's workspace cuts: it is code)
         body = "\n".join(_scrub(light_clean(x[:2000], _CHANGE_ROOTS)) for x in body.split("\n"))
-        (named if path and any(norm_path(e).endswith(path) or path.endswith(norm_path(e)) for e in f.files)
+        (named if path and any(norm_path(e).endswith(path) or path.endswith(norm_path(e)) for e in f.named or f.files)
          else other).append(body)
-    out, size, cut = [], 0, 0
+    out, size, cut = [], 0, 0              # (text, cut short) of each file sent
     for body in named + other:
         if size + len(body) > MAX_DIFF_CHARS:
             room = MAX_DIFF_CHARS - size
             if room > 400:
-                hunks = re.split(r"(?m)^(?=@@ )", body)
-                keep = hunks[0]
-                for h in hunks[1:]:
-                    if len(keep) + len(h) > room:
-                        break
-                    keep += h
-                out.append(keep.rstrip() + "\n# ... the rest of this file's change was not sent")
+                keep = _hunks_within(body, room)
+                out.append((keep, True))
                 size += len(keep)
             cut += 1
             continue
-        out.append(body)
+        out.append((body, False))
         size += len(body)
-    text = "\n".join(out)
-    if cut:
-        text += f"\n# ... {cut} more changed file(s) were not sent"
-    if withheld:
-        text += f"\n# the change also edits {', '.join(withheld[:4])}; secret files are never sent"
+    # The secret files' note names the first 4 whole while their names fit in 400 characters, and counts the rest.
+    names = withheld[:4]
+    while len(", ".join(names)) > 400:
+        names = names[:-1]
+    note = ", ".join(names)
+    if len(names) < len(withheld[:4]):
+        k = len(withheld) - len(names)
+        note += f" and {k} more secret file(s)" if names else f"{k} secret file(s)"
+    secret = f"\n# the change also edits {note}; secret files are never sent" if withheld else ""
+
+    def whole(parts: list[tuple[str, bool]], cut: int) -> str:
+        return ("\n".join(t.rstrip() + _REST if short else t for t, short in parts)
+                + (f"\n# ... {cut} more changed file(s) were not sent" if cut else "") + secret)
+    # The whole excerpt is at most MAX_DIFF_CHARS, the line breaks between files and the notes included: what is
+    # over comes off the end of the last file sent, whole hunks (whole lines when its first hunk alone is too long),
+    # else that file. Never more than the loop above chose.
+    text = whole(out, cut)
+    while out and len(text) > MAX_DIFF_CHARS:
+        body, short = out.pop()
+        cut += 0 if short else 1
+        room = MAX_DIFF_CHARS - len(whole(out, cut)) - (1 if out else 0) - len(_REST)
+        keep = _hunks_within(body, room) if room > 400 else ""
+        if len(keep) > room or keep == re.split(r"(?m)^(?=@@ )", body)[0]:     # no whole hunk fits
+            keep = body[:body.rfind("\n", 0, room) + 1] if room > 400 else ""
+        if keep and len(keep) < len(body):
+            out.append((keep, True))
+        text = whole(out, cut)
     return text or "(the change edits only files that are not sent)", withheld
+
+
+_REST = "\n# ... the rest of this file's change was not sent"
+
+
+def _hunks_within(body: str, room: int) -> str:
+    """A file's change cut to its header and the whole hunks that fit in `room` characters (the header always)."""
+    hunks = re.split(r"(?m)^(?=@@ )", body)
+    keep = hunks[0]
+    for h in hunks[1:]:
+        if len(keep) + len(h) > room:
+            break
+        keep += h
+    return keep
 
 
 # What an offered line names that the change adds or removes: a name in code of 6+ characters in
@@ -2114,7 +2236,7 @@ def result_for(s: jevkit.Screened, ctx: Context) -> dict:
     f: Failure = s.item.meta["failure"]
     out = {"step": f.step, "kind": f.kind, "jobs": f.jobs, "job_count": len(f.jobs), "exit_code": f.exit_code,
            "failing_tests": f.tests[:20], "failing_test_count": len(f.tests),
-           "files_in_errors": f.files[:20], "facts": s.item.state["a_facts"].split("\n")}
+           "files_in_errors": (f.named or f.files)[:20], "facts": s.item.state["a_facts"].split("\n")}
     if s.error:
         return {**out, "label": "not checked", "why": s.error,
                 "next_step": "Not a pass: this failure was not checked. Triage again once TypeSafe answers."}

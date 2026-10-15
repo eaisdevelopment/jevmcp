@@ -302,9 +302,10 @@ key into an issue or pull request.
   rule drafts stay as 1.7.7 had them. 1.7.9 fixes the three known issues 1.7.8 listed and 20 of
   the 21 older gaps its review rounds recorded; a password after a `;` is read as in 1.7.8 (the
   CHANGELOG says where a fix is narrower). 1.7.10 fixes the 33 older gaps 1.7.9's review rounds
-  recorded.
+  recorded. 1.7.10 was then run on its own code with its own three tools again; 1.7.11 fixes the
+  44 problems that found, in the code or by a corrected sentence.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (917 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (944 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
