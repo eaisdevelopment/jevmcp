@@ -37,6 +37,7 @@ import datetime
 import functools
 import json
 import os
+import posixpath
 import re
 import shutil
 import stat
@@ -962,11 +963,6 @@ _COMMENT_ONLY = {".py": r"#", ".sh": r"#", ".rb": r"#", ".yml": r"#", ".yaml": r
                  ".js": r"//|/\*|\*", ".ts": r"//|/\*|\*", ".tsx": r"//|/\*|\*", ".jsx": r"//|/\*|\*",
                  ".c": r"//|/\*|\*", ".cc": r"//|/\*|\*", ".cpp": r"//|/\*|\*", ".h": r"//|/\*|\*",
                  ".cs": r"//|/\*|\*", ".swift": r"//|/\*|\*", ".php": r"//|#|/\*|\*", ".scala": r"//|/\*|\*"}
-# the other names C++, JavaScript, TypeScript and Kotlin files go by: a line that starts a `//` comment, or opens or
-# closes a `/* */` one with no code after it; a line that only starts with `*` may be code (`*out = 2;`,
-# `* height;`), and so may one with code after a comment (`/* c */ int x;`, `*/ int z = 3;`), so they are kept
-_COMMENT_ONLY.update({x: r"//|/\*(?!.*\*/.*\S)|\*/\s*$" for x in (".hpp", ".hh", ".hxx", ".cxx", ".c++", ".h++", ".mjs",
-                                                                ".cjs", ".mts", ".cts", ".kts")})
 
 
 def _is_secret_path(p: str) -> bool:
@@ -1723,12 +1719,19 @@ def set_apart_outside(fails: list[Failure], root: Path, changed: list[str] | Non
     # files show in these errors too (`r/lib/x.c` beside `r/src/app.py`, a checkout into `path: r`); never after
     # any other folder (`/usr/lib/...`, a test's `tmp/case/lib/...`).
     named = {norm_path(e).lower() for f in fails for e in f.files}
-    lead = {""} | {e[:len(e) - len(q)] for e in named if plain(e)
-                   for q in by_name.get(e.rsplit("/", 1)[-1], ()) if e.endswith("/" + q)}
+    lead = {"", Path(root).resolve().name.lower() + "/"} | {
+        e[:len(e) - len(q)] for e in named if plain(e)
+        for q in by_name.get(e.rsplit("/", 1)[-1], ()) if e.endswith("/" + q)}
 
     def ours(e: str) -> bool:
         e = norm_path(e).lower()
-        return plain(e) or any(e == p + g or e.startswith(p + g + "/") for g in subs for p in lead)
+        if plain(e):
+            return True
+        if "/../" in "/" + e:                          # `build/../ext/lib/x.c`; one that climbs out is not ours
+            e = posixpath.normpath(e)
+            if e == ".." or e.startswith("../"):
+                return False
+        return any(e == p + g or e.startswith(p + g + "/") for g in subs for p in lead)
     for f in fails:
         f.named = list(f.files)
         f.files, f.outside = [p for p in f.files if ours(p)], [p for p in f.files if not ours(p)]

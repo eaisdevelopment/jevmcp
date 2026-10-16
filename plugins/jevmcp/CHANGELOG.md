@@ -7,7 +7,8 @@ tools: spec drift over its whole spec map, a code audit against six engineering 
 of a staged failure. Its findings, checked one by one, held 44 real problems: gaps in what is kept
 back (a secrets file read as a spec or as a rule file, values redaction missed), code that did not
 do what the docs said, and docs that did not say what the code does. Each is fixed here, in the code
-or by a corrected sentence. Nothing that 1.7.10 hid is sent. The fixed questions, their options, the
+or by a corrected sentence. Nothing that 1.7.10 hid is sent; four review rounds checked that,
+with leak fuzzers against 1.7.10. The fixed questions, their options, the
 thresholds, the model and spec drift's sentence reading are unchanged.
 
 **Secret redaction and comment removal** (spec drift and code audit):
@@ -24,31 +25,17 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   of an earlier line whose redacted text is the start of what the cut at the cap would send, and at
   worst none of that code is sent. PEM keys are hidden first only when the cut at the cap would
   split one, as in 1.7.10.
-- Spec drift and code audit: a Python docstring on its own `def` or `class` line (`def f():
-  """..."""`) is now removed and sent as `...`; 1.7.10 sent it as written. One that shares its line
-  with code in another way (the signature closes on its line, or code follows it: `"doc"; limit =
-  5`) is cut out the same way; 1.7.10 blanked the whole line, code included. An empty one (`''`,
-  `""""""`) is sent as written, so no code after it moves (on a line of its own that it shares with
-  code, 1.7.10 blanked that line; now the line is sent); in a file Python cannot parse, docstrings
-  are sent as written, as before.
-- Spec drift: a Python class too long for the 2,600-character cap is sent as an outline (its
-  members, bodies left out). When 1.7.10's outline did not parse (an `@overload` stub, for one), it
-  was sent with its comments and docstrings; now the outline is cut from the class cleaned whole,
-  so they are removed, as everywhere else.
-- Spec drift: comments are now removed from C++ files named `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++`,
-  as they already were from `.cpp` and `.hpp`; 1.7.10 sent them as written. (A code audit does not
-  read files with these names, in 1.7.10 or now.)
-- Spec drift and code audit: a PEM private key or PGP block whose BEGIN or END marker is in a
-  comment or docstring that is removed is still hidden, its lines sent as `<redacted>`, in the whole
-  file, a line range, a code-audit unit and a class outline. Removing the comment took the marker,
-  so the key was no longer seen as one: 1.7.10 sent its body for a marker in a `#` comment, in a
-  docstring on its own line, or in a comment of Java, C, C++ and the other C-family languages (`//
-  -----BEGIN RSA PRIVATE KEY-----` above the key's strings). When removing comments and docstrings
-  changes which key markers the file has, where they sit or how they pair - against the file as
-  written and against 1.7.10's cleaning (a marker in a docstring on a `def` line, in a removed
-  `.cxx` comment, or a marker string in code on a docstring's line that 1.7.10 blanked) - every key
-  of the file is hidden this way, so code between two marker strings (`BEGIN = "-----BEGIN ..."`,
-  `END = "-----END ..."`) is then hidden in a line range, a code-audit unit and a class outline too.
+- Comment and docstring removal is 1.7.10's, unchanged, in spec drift, code audit and CI triage.
+  The self-audit found that PRIVACY.md promised more than it does; in review, removing more text
+  before redaction (a docstring on its `def` line, comments in `.cxx`-style files, comment lines of
+  more file types in a change excerpt) or hiding keys afterwards each sent, in some files, a secret
+  that 1.7.10's redaction caught, because redaction reads the text around a secret. So the code
+  stays as it was, and PRIVACY.md now says what it does: a docstring on its `def` or `class` line
+  is sent as written, as are the docstrings of a file Python cannot parse; one on a line of its own
+  is blanked with that line; C++ files named `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` are sent as
+  written; the change excerpt leaves out comment lines only for the file types it names; and a
+  private key whose BEGIN or END marker is in a removed comment or docstring, or on a comment line
+  left out of a change excerpt, is no longer seen as one, so its body can be sent.
 - PRIVACY.md now says exactly what the code does in these places: a colonless default is not read in
   any secret-named variable's backtick string (a JavaScript template string or a Go raw string, so
   `` token := `${API_KEY-hunter22}` `` is sent as written, as in 1.7.10), but is read inside a
@@ -135,13 +122,9 @@ thresholds, the model and spec drift's sentence reading are unchanged.
 
 **CI triage**:
 - A file the errors name inside one of the project's git submodules counts as the project's when it
-  is named from the project root (`lib/x.c`) or after a leading folder the project's own files show
-  in the same errors (`r/lib/x.c` beside `r/src/app.py`); it is not named apart as a file the
-  project does not have.
-- Lines that only add or remove a `//` comment, or open or close a `/* */` one with no code after
-  it, are left out of the change excerpt also in files named `.hpp`, `.hh`, `.hxx`, `.cxx`, `.c++`,
-  `.h++`, `.mjs`, `.cjs`, `.mts`, `.cts` and `.kts`; 1.7.10 sent them. A line there that starts with
-  `*` is sent, as 1.7.10 sent it: it may be code (`*out = 2;`, `* height;`).
+  is named from the project root (`lib/x.c`), after the project folder's own name, or after a leading
+  folder the project's own files show in the same errors (`r/lib/x.c` beside `r/src/app.py`), a
+  `build/..` folded away; it is not named apart as a file the project does not have.
 - A secret file whose name is written in upper or mixed case (`.ENV`, `config/Prod.ENV`,
   `SERVER.PEM`, `ID_RSA`) is left out of the change excerpt, as one in lower case is; 1.7.10 sent
   its changed lines (a disk that ignores case, as macOS's and Windows' do by default, holds such
@@ -156,11 +139,11 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   longer excerpt is what 1.7.10 sent with its end taken off (whole hunks of the last file sent,
   whole lines when its first hunk alone is too long, else that file) until it fits, so no line of
   the change that 1.7.10 left out is sent, except where a file now left out (a secret file named in
-  upper or mixed case, above) or a comment-only line now left out frees room for the files after it.
+  upper or mixed case, above) frees room for the files after it.
   The secret files' note names the first four secret files as 1.7.10 did while their paths fit in
   400 characters; past that it names as many of them whole as fit and says how many more there are
   (`... and 2 more secret file(s); secret files are never sent`), where 1.7.10 named all four
-  however long. Apart from that note and those files and lines, an excerpt 1.7.10 kept within 5,000
+  however long. Apart from that note and those files, an excerpt 1.7.10 kept within 5,000
   characters is sent as before. In the 73-run CI corpus, 6 of 121 states change, all of them
   excerpts 1.7.10 sent at 5,016 to 5,128 characters.
 - In a log file of which only the last 25 MB was read, written as `gh run view --log` writes it
