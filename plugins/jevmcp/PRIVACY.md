@@ -38,12 +38,16 @@ The code paired with a requirement is cleaned before it is sent:
   `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` is sent as written, comments included. A Python
   docstring on a line of its own is blanked with that line, code that shares the line included;
   one on its `def` or `class` line (`def f(): """..."""`) is sent as written, and so are the
-  docstrings of a Python file that Python cannot parse. A PEM private key or PGP block whose BEGIN
-  or END marker is in a comment or docstring that is removed is no longer seen as one, so its body
-  can be sent; keep keys out of code paired with a spec. Other files — for example PHP, Ruby or
-  shell, which can only be paired by line range — are sent as written. A code file's language is
-  known by its suffix in lower case, so `UPPER.PY` or `Main.JAVA` is not indexed and keeps its
-  comments and docstrings.
+  docstrings of a Python file that Python cannot parse, with its comments from the first line
+  Python cannot read into tokens on (an indentation that matches no outer level, a tab and space
+  mix, an unclosed string). A Python class too long for the 2,600-character cap is sent as an
+  outline of its members; when that outline is not valid Python (an `@overload` stub, a one-line
+  method under a decorator), it is sent with its docstrings and comments. A PEM private key or PGP
+  block whose BEGIN or END marker is in a comment or docstring that is removed is no longer seen
+  as one, so its body can be sent; keep keys out of code paired with a spec. Other files — for
+  example PHP, Ruby or shell, which can only be paired by line range — are sent as written. A code
+  file's language is known by its suffix in lower case, so `UPPER.PY` or `Main.JAVA` is not
+  indexed and keeps its comments and docstrings.
 - **Secret-looking values redacted**:
   - everywhere, by shape: Stripe, GitHub, Slack, Google and OpenAI/Anthropic keys, GitLab, npm,
     PyPI and HashiCorp Vault tokens, Slack webhook addresses, AWS access key IDs, JWTs, PEM

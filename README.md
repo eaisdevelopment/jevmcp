@@ -305,7 +305,7 @@ key into an issue or pull request.
   recorded. 1.7.10 was then run on its own code with its own three tools again; 1.7.11 fixes the
   44 problems that found, in the code or by a corrected sentence.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (944 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (945 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,

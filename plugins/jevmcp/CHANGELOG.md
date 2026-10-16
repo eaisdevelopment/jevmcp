@@ -25,17 +25,19 @@ thresholds, the model and spec drift's sentence reading are unchanged.
   of an earlier line whose redacted text is the start of what the cut at the cap would send, and at
   worst none of that code is sent. PEM keys are hidden first only when the cut at the cap would
   split one, as in 1.7.10.
-- Comment and docstring removal is 1.7.10's, unchanged, in spec drift, code audit and CI triage.
-  The self-audit found that PRIVACY.md promised more than it does; in review, removing more text
-  before redaction (a docstring on its `def` line, comments in `.cxx`-style files, comment lines of
-  more file types in a change excerpt) or hiding keys afterwards each sent, in some files, a secret
-  that 1.7.10's redaction caught, because redaction reads the text around a secret. So the code
-  stays as it was, and PRIVACY.md now says what it does: a docstring on its `def` or `class` line
-  is sent as written, as are the docstrings of a file Python cannot parse; one on a line of its own
-  is blanked with that line; C++ files named `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` are sent as
-  written; the change excerpt leaves out comment lines only for the file types it names; and a
-  private key whose BEGIN or END marker is in a removed comment or docstring, or on a comment line
-  left out of a change excerpt, is no longer seen as one, so its body can be sent.
+- Comment and docstring removal is 1.7.10's, unchanged, in spec drift, code audit and CI triage. The
+  self-audit found that PRIVACY.md promised more than it does; in review, removing more text before
+  redaction (a docstring on its `def` line, comments in `.cxx`-style files, comment lines of more
+  file types in a change excerpt) or hiding keys afterwards each sent, in some files, a secret that
+  1.7.10's redaction caught, because redaction reads the text around a secret. So the code stays as
+  it was, and PRIVACY.md now says what it does: a docstring on its `def` or `class` line is sent as
+  written, as are the docstrings of a file Python cannot parse (and its comments from the first line
+  Python cannot read into tokens on); a long class's outline that is not valid Python (an
+  `@overload` stub) is sent with its docstrings and comments; one on a line of its own is blanked
+  with that line; C++ files named `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` are sent as written; the
+  change excerpt leaves out comment lines only for the file types it names; and a private key whose
+  BEGIN or END marker is in a removed comment or docstring, or on a comment line left out of a
+  change excerpt, is no longer seen as one, so its body can be sent.
 - PRIVACY.md now says exactly what the code does in these places: a colonless default is not read in
   any secret-named variable's backtick string (a JavaScript template string or a Go raw string, so
   `` token := `${API_KEY-hunter22}` `` is sent as written, as in 1.7.10), but is read inside a
