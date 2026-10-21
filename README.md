@@ -7,7 +7,7 @@ screens everything in seconds, at a fraction of a cent per item; the agent spend
 only on what the fast model flags. Jev is a classifier from TypeSafe (<https://typesafe.ai>), not a chat model: it picks one of the
 answers it is offered and gives a probability for each.
 
-Current release: **1.7.11** (2026-10-15) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
+Current release: **1.7.12** (2026-10-21) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
 
 ## One plugin, installed once
 
@@ -297,13 +297,14 @@ key into an issue or pull request.
   released 1.7.6, and every finding was checked by reading the code. That found what 1.7.7 fixes:
   Windows text encoding, gaps in secret redaction, a re-ask that could pass an item, CI facts taken
   from runs made after the failure, and 37 doc sentences that the code contradicted or that said
-  more than the code does (the CHANGELOG has the list). 1.7.8 fixes 25 of the 27 known issues
-  that 1.7.7 listed, or narrows them where a full fix would need a guess; the two about stars in
-  rule drafts stay as 1.7.7 had them. 1.7.9 fixes the three known issues 1.7.8 listed and 20 of
-  the 21 older gaps its review rounds recorded; a password after a `;` is read as in 1.7.8 (the
-  CHANGELOG says where a fix is narrower). 1.7.10 fixes the 33 older gaps 1.7.9's review rounds
-  recorded. 1.7.10 was then run on its own code with its own three tools again; 1.7.11 fixes the
-  44 problems that found, in the code or by a corrected sentence.
+  more than the code does (the CHANGELOG has the list). 1.7.8 fixes 25 of the 27 known issues that
+  1.7.7 listed, or narrows them where a full fix would need a guess; the two about stars in rule
+  drafts stay as 1.7.7 had them. 1.7.9 fixes the three known issues 1.7.8 listed and 20 of the 21
+  older gaps its review rounds recorded; a password after a `;` is read as in 1.7.8 (the CHANGELOG
+  says where a fix is narrower). 1.7.10 fixes the 33 older gaps 1.7.9's review rounds recorded.
+  1.7.10 was then run on its own code with its own three tools again; 1.7.11 fixes the 44 problems
+  that found, in the code or by a corrected sentence. 1.7.12 closes the gap 1.7.11 documented: a
+  private key whose marker stood in a removed comment or docstring is no longer sent.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
   by sentence to its own code (945 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation

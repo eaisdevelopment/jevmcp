@@ -34,20 +34,44 @@ The code paired with a requirement is cleaned before it is sent:
 
 - **Comments and docstrings removed** in Python (stub files, `.pyi`, included), Java,
   JavaScript/TypeScript and the other C-family languages (Kotlin, Scala, Groovy, Go, C#, C/C++,
-  Rust, Swift). A C or C++ file is one named `.c`, `.h`, `.cc`, `.cpp` or `.hpp`; one named
-  `.cxx`, `.c++`, `.hh`, `.hxx` or `.h++` is sent as written, comments included. A Python
-  docstring on a line of its own is blanked with that line, code that shares the line included;
-  one on its `def` or `class` line (`def f(): """..."""`) is sent as written, and so are the
-  docstrings of a Python file that Python cannot parse, with its comments from the first line
-  Python cannot read into tokens on (an indentation that matches no outer level, a tab and space
-  mix, an unclosed string). A Python class too long for the 2,600-character cap is sent as an
-  outline of its members; when that outline is not valid Python (an `@overload` stub, a one-line
-  method under a decorator), it is sent with its docstrings and comments. A PEM private key or PGP
-  block whose BEGIN or END marker is in a comment or docstring that is removed is no longer seen
-  as one, so its body can be sent; keep keys out of code paired with a spec. Other files — for
-  example PHP, Ruby or shell, which can only be paired by line range — are sent as written. A code
-  file's language is known by its suffix in lower case, so `UPPER.PY` or `Main.JAVA` is not
-  indexed and keeps its comments and docstrings.
+  Rust, Swift). A C or C++ file is one named `.c`, `.h`, `.cc`, `.cpp` or `.hpp`; one named `.cxx`,
+  `.c++`, `.hh`, `.hxx` or `.h++` is sent as written, comments included. A Python docstring on a
+  line of its own is blanked with that line, code that shares the line included; one on its `def` or
+  `class` line (`def f(): """..."""`) is sent as written, and so are the docstrings of a Python file
+  that Python cannot parse, with its comments from the first line Python cannot read into tokens on
+  (an indentation that matches no outer level, a tab and space mix, an unclosed string). A Python
+  class too long for the 2,600-character cap is sent as an outline of its members; when that outline
+  is not valid Python (an `@overload` stub, a one-line method under a decorator), it is sent with
+  its docstrings and comments. A PEM private key or PGP block whose BEGIN or END marker is in a
+  comment or docstring that is removed is no longer paired by the redaction of the cleaned code, so
+  the last step before the code is sent takes each file's key material out of that file's part of
+  the code (with the files of the symbols it shows, such as a route's handler): each run of base64
+  characters that the redaction of the file as written hides between a pair of private-key markers
+  that shows a key is there is sent as `<redacted>`, also inside a longer run, and so is a piece of
+  8 characters or more cut from its start or end; a run under 16 characters is hidden only on a
+  key's own line or next to a line where a run was hidden. A key shows itself by its own bytes (a
+  DER private key, OpenSSH's `openssh-key-v1`, a PGP secret key packet), by a legacy `Proc-Type:` or
+  `DEK-Info:` line or a PGP armor header first in its own text, by a PGP checksum line (`=AbCd`) in
+  code, by a marker in its own value, or by lines wrapped as a key's (two of 64 or 76 characters, or
+  one and a shorter last line, in one value; or five or more separate values of 64 or 76
+  characters); where a marker stands in a sentence or after a label (a `# Test key:` before it),
+  only the key's own bytes or header count. This step adds, moves and removes nothing else, and it
+  is the same when a line range, a symbol or a unit cuts a key away from its markers; a run shorter
+  than `<redacted>` makes the code that many characters longer than the cap. It never hides code
+  between marker strings, marker names in comments and docstrings, digests (hex, base64 after
+  `sha256-` or `sha384-`, two to four base64 values of one width), pins, salts, tokens, a
+  certificate's or a public key's base64, DER that is no private key (an OCSP response, an SNMP
+  message), or a run that also stands in the file outside the key. Still sent, as in 1.7.11: a
+  made-up key body that does not start as a key's bytes and has no key header, written on one line
+  or as two to four values of one width; a key wrapped under 16 characters a line in fewer than six
+  statements (an Ed25519 key at 12); runs of one to three characters; the IV in a legacy key's
+  `DEK-Info:` line; a key written as hex bytes (`0x30, 0x82, ...`). Hidden though it is no key: a
+  value of 64- or 76-character lines that stands right between two marker constants with nothing
+  else between them, and five or more separate base64 values of 64 or 76 characters between two
+  private-key markers. Keep keys out of code paired with a spec. Other files — for example PHP, Ruby
+  or shell, which can only be paired by line range — are sent as written. A code file's language is
+  known by its suffix in lower case, so `UPPER.PY` or `Main.JAVA` is not indexed and keeps its
+  comments and docstrings.
 - **Secret-looking values redacted**:
   - everywhere, by shape: Stripe, GitHub, Slack, Google and OpenAI/Anthropic keys, GitLab, npm,
     PyPI and HashiCorp Vault tokens, Slack webhook addresses, AWS access key IDs, JWTs, PEM
@@ -457,11 +481,16 @@ The excerpt of the change is cleaned as well:
   mentioned, with a note that its content is withheld: the paths of the first four, as many of
   them whole as fit in 400 characters, and when that leaves one of the four out, how many
   secret files are not named;
-- lines that only add or remove a comment are left out, in files named `.py`, `.sh`, `.rb`,
-  `.yml`, `.yaml`, `.toml`, `.go`, `.rs`, `.java`, `.kt`, `.scala`, `.js`, `.jsx`, `.ts`, `.tsx`,
-  `.c`, `.h`, `.cc`, `.cpp`, `.cs`, `.swift` and `.php` (other names, such as `.hpp`, `.mjs` or
-  `.kts`, keep theirs) - before the redaction, so a private key whose BEGIN or END marker is on
-  such a line is no longer seen as one, and its body can be sent;
+- lines that only add or remove a comment are left out, in files named `.py`, `.sh`, `.rb`, `.yml`,
+  `.yaml`, `.toml`, `.go`, `.rs`, `.java`, `.kt`, `.scala`, `.js`, `.jsx`, `.ts`, `.tsx`, `.c`,
+  `.h`, `.cc`, `.cpp`, `.cs`, `.swift` and `.php` (other names, such as `.hpp`, `.mjs` or `.kts`,
+  keep theirs) - before the redaction, so a private key whose BEGIN or END marker is on such a line
+  is no longer paired by it. As the excerpt's last step, after its 5,000-character cap and its
+  notes, each file's part of the excerpt has that file's key material taken out, as for spec drift,
+  read from that file's lines of the change as written (its hunks, its new side and its old side,
+  each by itself), never from another file's part. Only whole runs of base64 characters become
+  `<redacted>`, so a run shorter than `<redacted>` makes the excerpt that many characters longer
+  than the cap. The `line Ln contains X, which the change adds` fact quotes the log line as before;
 - secret-looking values are redacted as in log lines, also in the code after a diff line's `+`,
   `-` or space, home folders are shown as `<user>` and email addresses as `<email>`;
 - a workspace path is removed only where 1.7.7 removed it (a Windows one also where its
@@ -543,7 +572,9 @@ The code is cleaned before it is sent:
 
 - comments and docstrings are removed, in the languages listed under spec drift, and each unit is
   sent with its path and the lines of the file it came from; other files, such as shell, Ruby, PHP
-  or SQL, are sent as written;
+  or SQL, are sent as written. As its last step, each unit has its file's key material taken out as
+  for spec drift; a unit too long for the 2,600-character cap is cut where 1.7.11 cut it, then has
+  the material taken out;
 - secret-looking values are redacted, as for spec drift, and a PEM private key written as a key
   (as defined for spec drift) that the cut between two units splits has its lines sent as
   `<redacted>` in both units. A key with other text on its lines (a Kotlin or Scala `|` margin,

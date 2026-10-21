@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.7.12 — 2026-10-21
+
+**A private key whose marker cleaning removed is no longer sent.** Spec drift and code audit remove
+comments and docstrings before redaction, and CI triage's change excerpt leaves out comment-only
+lines. In 1.7.11, a PEM private key or PGP block whose BEGIN or END marker stood in that text was no
+longer paired by the redaction, so its body was sent: whole file, line range, symbol, code-audit
+unit, CI excerpt. A line range, symbol or unit that cut a key away from its markers sent its body
+too.
+
+Cleaning, redaction, the caps and the budgets stay exactly as in 1.7.11. One last step is added
+where each request is built:
+- spec drift's code: each symbol's part, with the key material of the files it was read from;
+- each code-audit unit: its own file's material, after the cut 1.7.11 made;
+- CI's change excerpt: each file's part, with that file's own material.
+
+That step only puts `<redacted>` in place of runs of base64 characters: the runs that the redaction
+of the file as written hides between a pair of private-key markers that shows a key is there. It
+adds, moves and removes no line, so nothing 1.7.11 or 1.7.10 hid is sent. A run shorter than
+`<redacted>` makes the text that many characters longer than its cap. Material is read from the
+text itself, never carried from one file to another; an error in the step sends the text as 1.7.11
+sent it.
+
+- **What shows a key:** its own bytes (DER PKCS#1, PKCS#8, SEC1 or DSA, encrypted PKCS#8, OpenSSH,
+  a PGP secret key packet); its legacy `Proc-Type:` or `DEK-Info:` line or a PGP armor header; a
+  PGP checksum line in code; a marker in the key's own value; lines wrapped as a key's (see
+  PRIVACY.md). Markers after a label or in a sentence (`# Test key: -----BEGIN ...`), keys written
+  a builder statement per line (`sb.append("...")`, `K += "..."`) and keys of one or two lines with
+  code next to their markers are covered, by the key's own bytes or header.
+- **Still sent as before:** code between marker strings, marker names in comments, digests (hex,
+  `sha384-...`, two to four base64 values of one width), pins, salts, tokens, certificates, public
+  keys, DER that is no private key (OCSP, SNMP), and any run that also stands in the file outside a
+  key. PRIVACY.md lists the key shapes still sent, and the two shapes hidden though no key is there.
+
+Measured offline against 1.7.11 and 1.7.10:
+- The leak fuzzers send nothing either version hides: only_new is 0 per path in gap_fuzz (1,000
+  files against 1.7.11, 600 against 1.7.10) and in every fuzz_vs_release figure against both.
+- Of the files where removing comments made 1.7.11 send a key (748 of 1,000), 1.7.12 sends none on
+  the paths this fixes; against 1.7.10, 2 of 600 files still send a made-up body with no key bytes.
+- A 395-case corpus of key shapes and key-free code: 0 cases where key-free code is hidden, 0 where
+  a file's text depends on another file or on what the process read before; 12 key shapes still
+  sent, all sent by 1.7.11 too and listed in PRIVACY.md.
+- jevmcp's own 945 spec states, 4,152 code-audit states and 121 CI states are byte-identical to
+  1.7.11.
+
 ## 1.7.11 — 2026-10-15
 
 **What jevmcp found in its own code, fixed.** jevmcp 1.7.10 was run on its own code with its own

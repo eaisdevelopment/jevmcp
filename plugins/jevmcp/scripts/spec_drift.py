@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import binascii
 import bisect
 import codecs
 import contextlib
@@ -66,8 +67,9 @@ import time
 import tokenize
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import local as _threading_local
 from typing import Callable
 
 API = "https://api.typesafe.ai/v1/systemone"
@@ -100,21 +102,43 @@ class Symbol:
     thousands of symbols, and only the few that get paired are ever shown to
     the model.
     """
-    __slots__ = ("name", "kind", "file", "line", "value", "_source", "_loader")
+    __slots__ = ("name", "kind", "file", "line", "value", "_source", "_loader", "_raws")
 
     def __init__(self, name: str, kind: str, file: str, line: int, source: str | None = None,
-                 value: str = "", loader: Callable[[], str] | None = None):
+                 value: str = "", loader: Callable[[], str] | None = None,
+                 raws: dict[str, KeyMaterial | None] | None = None):
         self.name, self.kind, self.file, self.line, self.value = name, kind, file, line, value
         self._source, self._loader = source, loader
+        self._raws = dict(raws) if raws is not None else None
 
     @property
     def source(self) -> str:
         if self._source is None:
+            stack = _RENDERING.__dict__.setdefault("stack", [])
+            raws = dict(self._raws or {})
+            stack.append(raws)
             try:
                 self._source = _head(self._loader() if self._loader else "")
             except Exception as e:  # noqa: BLE001 - a broken render must not stop a run
                 self._source = f"(source unavailable: {type(e).__name__})"
+            finally:
+                stack.pop()
+            if self.file:
+                raws.setdefault(self.file, None)
+            self._raws = raws
+        if stack := getattr(_RENDERING, "stack", None):      # a symbol rendered inside another's source
+            _add_raws(stack[-1], self.raws)
         return self._source
+
+    @property
+    def raws(self) -> dict[str, KeyMaterial | None]:
+        """The files whose text went into `source` (this symbol's own, and those of the symbols it shows: a route's
+        handler, a composite's parts), each with the key material of the text the render read (see key_material),
+        or None (not known: build_state reads the file): build_state hides it in this symbol's part of the code (see
+        scrub_key_material)."""
+        if self._raws is None:
+            return {self.file: None} if self.file else {}
+        return self._raws
 
     @source.setter
     def source(self, value: str) -> None:
@@ -122,6 +146,40 @@ class Symbol:
 
     def __repr__(self) -> str:
         return f"Symbol({self.kind} {self.name} @ {self.file}:{self.line})"
+
+
+_RENDERING = _threading_local()          # per thread: the files read by the symbols being rendered, innermost last
+
+
+def _add_raws(into: dict, raws: dict) -> None:
+    """Each file of `raws` into `into`, with what is known of it when `into` does not know that yet."""
+    for f, text in raws.items():
+        if into.get(f) is None:
+            into[f] = text
+
+
+def _note_read(path: str, text: str | bytes) -> None:
+    """A render read `path` as `text`: the symbol being rendered keeps its key material (see Symbol.raws), never the
+    text itself. The text of a file's symbols is one object (the parsed file's), so its material is found once, not
+    once for each symbol (see _NOTED)."""
+    if stack := getattr(_RENDERING, "stack", None):
+        if (seen := _NOTED.get(id(text))) is None or seen[0] is not text:
+            if isinstance(text, bytes):
+                material = _text_material(text.decode("utf-8", "replace")) if b"PRIVATE KEY" in text else NO_MATERIAL
+            else:
+                material = _text_material(text)
+            try:
+                while len(_NOTED) >= _NOTED_KEPT:
+                    _NOTED.pop(next(iter(_NOTED)), None)
+            except RuntimeError:            # (another thread changed it: it is only a cache)
+                pass
+            _NOTED[id(text)] = seen = (text, material)
+        stack[-1][path] = seen[1]
+
+
+# the key material of the last texts renders read, by the text object (kept with it, so its id stays its own)
+_NOTED: dict[int, tuple[str | bytes, "KeyMaterial"]] = {}
+_NOTED_KEPT = 16
 
 
 # (resolved file, name) -> Symbol. A map entry names its file, so lookups must
@@ -441,6 +499,907 @@ def _hide_spans(text: str, spans: list[tuple[int, int]]) -> str:
         out += [text[i:a], "<redacted>"]
         i = b
     return "".join(out) + text[i:]
+
+
+# ── A private key whose marker cleaning removed (1.7.12)
+# Cleaning runs before redact(): comments and docstrings are removed, and CI's change excerpt leaves out comment-only
+# lines. A private key whose BEGIN or END marker stood in that text is then no longer paired, and its body could be
+# sent. Cleaning and redact() stay exactly as 1.7.11 has them: every change to the text redaction reads sent something
+# it had hidden (four review rounds of 1.7.11). Instead the key material of the text as written (key_material) is
+# taken out of the outgoing text as its very last step (scrub_key_material). That step only puts `<redacted>` in place
+# of whole runs of base64 characters: it adds nothing, moves nothing and is followed by nothing that reads the text,
+# so it hides more and never less (a run shorter than `<redacted>` makes the text that much longer: a cap such as
+# MAX_DIFF_CHARS is kept before this step). Key material is what redaction hides between a key's pair of markers
+# there that holds key text and shows a key is there (see key_material, _KeyPair.evident); code between marker strings,
+# marker names in sentences, hashes, pins, salts, tokens, a certificate's or a public key's base64 between markers
+# with no key, and every name that also stands outside the key are no key, and are sent as 1.7.11 sends them.
+_KEY_RUN = re.compile(r"[A-Za-z0-9+/]+=*")      # a run of base64 characters, its `=` padding with it
+_LONG_RUN = 16          # material this long is hidden wherever it stands: whole, inside a longer run, or a piece of
+_PIECE = 8              # ... this many characters or more cut from its start or its end (at a cap, at a line's end)
+_EVIDENCE = 40          # a key's base64 line has this many characters or more (see _key_text) ...
+_SHARE = 0.6            # ... and a key written as short pieces is 60% of what stands between its markers
+_NEAR = 256             # how far along its line a marker is read (see _marker_kind): the work stays linear
+# what may stand on a key's line besides the run itself: indentation, comment leaders, quotes, `\n` escapes, the
+# joiners of literals, brackets, a trailing backslash, a PGP checksum's `=`, a diff's mark, a margin's `|` (Kotlin's
+# trimMargin, Scala's stripMargin)
+_LINE_NOISE = frozenset(" \t\r\f\v\ufeff\"'`,.;()[]{}=*#\\-+/|")
+_ANY_MARKER = re.compile(r"-----(?:BEGIN|END) [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+# an armored block that is no private key (a certificate, a public key, a CRL): its base64 is never key material
+_ARMOR = re.compile(r"-----(BEGIN|END) ([A-Z0-9 ]{1,60})-----")
+_ANY_ARMOR = re.compile(r"-----(?:BEGIN|END) [A-Z0-9 ]{1,60}-----")
+# a line that opens a value: `K = (`, `char *k =`, `k: str = \`, `K = """`
+_HEAD = re.compile(r"""(?:[=(\[+]|=\s*\{|\\|"{3}|'{3}|`)\s*$""")
+# a key's header (a legacy encrypted key's `Proc-Type: 4,ENCRYPTED`, a PGP block's `Version: GnuPG v2`), also after a
+# `\n` in a value; and with its value, in a literal
+_ARMOR_HEADER = re.compile(r"(?:(?<=\\n)|\b)(Version|Comment|Hash|Charset|MessageID|Proc-Type|DEK-Info): ")
+_HEADER_TEXT = re.compile(_ARMOR_HEADER.pattern + r"[^\\\"'`]*")
+_ENCRYPTED = ("Proc-Type", "DEK-Info")
+_ARMOR_HEADER_NAMES = ("Version", "Comment", "Hash", "Charset", "MessageID") + _ENCRYPTED
+_STRING_PREFIX = frozenset(["r", "R", "b", "B", "u", "U", "f", "F", "L", "rb", "br", "Rb", "bR", "RB", "BR", "u8"])
+# a word of a sentence (`see`, `Reads`), never base64 (`AbCd`, `AQAB`, `MIIEow...`)
+_WORD = re.compile(r"(?<![A-Za-z0-9+/=\\])[A-Za-z][a-z]+(?![A-Za-z0-9+/=])")
+_ESCAPE = re.compile(r"\\[nrt]")
+_LINE_BREAK = re.compile(r"\n|\r(?!\n)")
+_ASSIGNED = re.compile(r"\w\s*:?=\s*$|\w\s*:\s*$")         # `NAME = `, `name: `, `k := ` before a value
+_VALUE_HEAD = re.compile(r"^\s*[\w.\-]+\s*[:=]\s*[|>]?[-+]?\s*")      # `key: `, `key = ` before a value
+_DOC_OPEN = re.compile(r"[+\- ]?\s*[rRuUbB]?(?:\"\"\"|\'\'\')")
+_DEF_LINE = re.compile(r"[+\- ]?\s*(?:async\s+)?(?:def|class)\s+\w+.*:\s*$")
+_BARE, _CONST, _PROSE = 0, 1, 2         # how a marker stands on its line (see _marker_kind)
+_LONG, _WHOLE = 1, 2                    # how a run has a key line's shape (see _KeyText.shaped)
+# what shows a key between two markers (see _KeyPair.evident): a DER private key's first bytes (a SEQUENCE, then its
+# version or an encryption's algorithm: PKCS#5's and PKCS#12's), OpenSSH's `openssh-key-v1`
+_PBE_OIDS = (b"\x2a\x86\x48\x86\xf7\x0d\x01\x05", b"\x2a\x86\x48\x86\xf7\x0d\x01\x0c")
+_OPENSSH_MAGIC = "b3BlbnNzaC1rZXktdjE"
+_HEX = frozenset("0123456789abcdefABCDEF")
+# a key's first line that is its header: right after the BEGIN in one literal, or first on its line (in a literal, after
+# the name it is given to: `KEY = ("Proc-Type: 4,ENCRYPTED\n"`)
+_HEADER_AFTER = re.compile(r"(?:\\[nr])+" + _ARMOR_HEADER.pattern)
+_HEADER_LINE = re.compile(r"[\s|+]*(?:(?:[\w$.*\[\]]+\s+)*[\w$.*\[\]]+\s*(?::\s*[\w.\[\]]+\s*)?[+:]?=\s*[(\[{]?\s*)?"
+                          r"[rRbBuUfFL]{0,2}(?:\"{1,3}|'{1,3}|`)?(?:\\[nr])*" + _ARMOR_HEADER.pattern)
+_PGP_CHECKSUM = re.compile(r"(?m)(?:^[+\- ]?[ \t]*[\"'`]?|\\n)=[A-Za-z0-9+/]{4}(?![A-Za-z0-9+/=])")    # `=AbCd`
+_PEM_WIDTHS = (64, 76)                  # a PEM body's line (OpenSSL, PGP) and a MIME one
+_APART = 5                              # values of one width standing apart that read as a key's lines (see _wrapped)
+_JOINED = re.compile(r"(?:[\s\"'`+,.|]|\\[nr]?)*")      # what stands between the lines of one value: quotes, joiners
+_DIGEST_NAME = re.compile(r"(?i)(?<![A-Za-z0-9])(?:sha|md)-?\d{1,3}[-:]$")     # `sha384-` before a digest's base64
+_BASE64 = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+
+
+@dataclass(frozen=True)
+class KeyMaterial:
+    """What scrub_key_material hides: the base64 runs of key text (see key_material), long ones (16 or more
+    characters, hidden wherever they stand) and short ones (a key's last line, a literal piece, a PGP checksum:
+    hidden only as a whole run on a line of its own, on or next to a line this hid a run on, or as a literal on a
+    line that such literals make up most of); and the runs of the file outside its keys that a piece of a long one
+    would hide (`P256_PREFIX = "MIGHAgEAMBMG..."`, a key's first characters as a constant): never hidden as a piece."""
+    long: frozenset = frozenset()
+    short: frozenset = frozenset()
+    code: frozenset = frozenset()
+
+    def __bool__(self) -> bool:
+        return bool(self.long or self.short)
+
+    @functools.cached_property
+    def _index(self) -> tuple[dict, list, list]:
+        starts: dict[str, set[int]] = {}         # a long run's first characters -> the lengths of the runs they start
+        for k in self.long:
+            starts.setdefault(k[:_LONG_RUN], set()).add(len(k))
+        return starts, sorted(self.long), sorted(k[::-1] for k in self.long)
+
+    def hides(self, run: str) -> bool:
+        """`run` (a whole run of the outgoing text) is long material, holds one, or is a piece of 8 or more
+        characters from one's start or end (and not a run that stands in the file outside its keys)."""
+        if run in self.long:
+            return True
+        starts = self._index[0]
+        if len(run) > _LONG_RUN and any(run[i:i + n] in self.long for i in range(len(run) - _LONG_RUN + 1)
+                                        for n in starts.get(run[i:i + _LONG_RUN], ())):
+            return True
+        return run not in self.code and self._piece(run)
+
+    def _piece(self, run: str) -> bool:
+        if len(run) < _PIECE:
+            return False
+        _, ordered, backwards = self._index
+        j = bisect.bisect_left(ordered, run)
+        if j < len(ordered) and ordered[j].startswith(run):
+            return True
+        back = run[::-1]
+        j = bisect.bisect_left(backwards, back)
+        return j < len(backwards) and backwards[j].startswith(back)
+
+
+NO_MATERIAL = KeyMaterial()
+
+
+def _joined(found: list[KeyMaterial]) -> KeyMaterial:
+    """The material of several texts read as one (a file's views, the files of one symbol)."""
+    found = [m for m in found if m]
+    if len(found) <= 1:
+        return found[0] if found else NO_MATERIAL
+    return KeyMaterial(*(frozenset().union(*(getattr(m, f) for m in found)) for f in ("long", "short", "code")))
+
+
+def _runs(line: str, diff: bool) -> list[re.Match]:
+    """The base64 runs of one line; in a diff, after its `+` or `-` mark."""
+    return list(_KEY_RUN.finditer(line, 1 if diff and line[:1] in "+-" else 0))
+
+
+def _noise_run(line: str, m: re.Match) -> bool:
+    """A run that is part of a line's noise: `+` and `/` alone (joiners, `//`, `+=`), an escape's letter (`\\n"`), a
+    string's prefix (`b"`, `u8"`)."""
+    r = m.group()
+    if not r.rstrip("=").strip("+/"):
+        return True
+    if len(r) == 1 and r in "nrt" and line[m.start() - 1:m.start()] == "\\":
+        return True
+    return r in _STRING_PREFIX and line[m.end():m.end() + 1] in ("\"", "'", "`")
+
+
+def _body_run(line: str, runs: list[re.Match]) -> re.Match | None:
+    """The one run of a line that holds nothing else but noise (see _LINE_NOISE): a key's line as written in a file,
+    in a string literal or in a diff; never a name a value is given to (`TESTKEY = (`, `k: str = \\`)."""
+    real = [m for m in runs if not _noise_run(line, m)]
+    if len(real) != 1:
+        return None
+    i = 0
+    for m in runs:
+        if any(c not in _LINE_NOISE for c in line[i:m.start()]):
+            return None
+        i = m.end()
+    if not all(c in _LINE_NOISE for c in line[i:]):
+        return None
+    after = line[real[0].end():].lstrip(" \t")
+    return None if after[:1] in ("=", ":") and after[:2] != "==" else real[0]
+
+
+_QUOTE_OR_ESCAPE = ("\"", "'", "`", "\\")
+
+
+def _literal_run(line: str, m: re.Match, first: int, last: int) -> bool:
+    """`m` is a string literal's whole text, one of its lines between `\\n` escapes (`"\\nMIIE...\\n"`: the escape's
+    letter starts the run), or the first or the last line of one that goes on over lines (`r"MIIE...`, a template,
+    a text block); a PGP checksum's `=` before it (`"=AbCd\\n"`). (first, last: where the line's text starts, and
+    where it ends before blanks and trailing backslashes.)"""
+    a = m.start() - (line[m.start() - 1:m.start()] == "=")
+    left = line[a - 1:a] in _QUOTE_OR_ESCAPE
+    right = line[m.end():m.end() + 1] in _QUOTE_OR_ESCAPE
+    return left and (right or m.end() >= last) or right and a <= first
+
+
+def _bounds(line: str) -> tuple[int, int]:
+    """Where a line's text starts (after a margin's `|`: Kotlin's trimMargin, Scala's stripMargin), and where it ends
+    before blanks and trailing backslashes (see _literal_run)."""
+    return len(line) - len(line.lstrip().lstrip("|")), len(line.rstrip(" \t\r\\"))
+
+
+def _comment_at(line: str, i: int = 0) -> int:
+    """Where the comment on a line starts (`#`, `//`, `/*` outside quotes and never inside a run of base64, or a
+    block comment's `*` or `--` that starts the line), or its length: cleaning removes what stands there, so its
+    words are never code."""
+    j = len(line) - len(line[i:].lstrip(" \t\ufeff"))
+    if line[j:j + 1] == "*" or line.startswith(("--", "<!--"), j):
+        return j
+    q, n, k = "", len(line), j
+    while k < n:
+        c = line[k]
+        if q:
+            if c == "\\":
+                k += 1
+            elif c == q:
+                q = ""
+        elif c in "\"'`":
+            q = c
+        elif c == "#" or c == "/" and line[k + 1:k + 2] in ("/", "*") and not (k > j and line[k - 1] in _BASE64):
+            return k
+        k += 1
+    return n
+
+
+def _marker_kind(line: str, x: int, y: int, comment: int) -> int:
+    """How the marker at `x`-`y` of `line` stands there: _PROSE in a sentence (`# a file starts with -----BEGIN
+    PRIVATE KEY-----`, a docstring that names it), _CONST as a string that holds it alone on a line of code that ends
+    there, given to a name (`HEADER = "-----BEGIN PRIVATE KEY-----"`, a loader's constant), else _BARE: as a key's
+    marker is written (alone in a comment, a docstring or on its line, or opening a value that goes on:
+    `KEY = ("-----BEGIN ...-----\\n" +`; first in its comment, with a note after it: `# -----BEGIN ...-----  # nosec`,
+    `(test only)`)."""
+    if comment <= x:
+        before = line[max(comment, x - _NEAR):x]
+        if not before.strip(" \t#/*!:-<"):          # the comment starts with the marker: what follows is a note
+            return _BARE
+        near = before + " " + line[y:y + _NEAR]
+        return _PROSE if _WORD.search(_ANY_ARMOR.sub(" ", near)) else _BARE
+    left = line[max(0, x - _NEAR):x]
+    q = max(left.rfind(c) for c in "\"'`")
+    if q < 0:                               # on its line alone, in a text that goes on over lines (a docstring)
+        near = _VALUE_HEAD.sub("", left) + " " + line[y:y + _NEAR]     # (`key: -----BEGIN ...`: a value)
+        return _PROSE if _WORD.search(_ANY_ARMOR.sub(" ", near)) else _BARE
+    right = line[y:min(len(line), comment, y + _NEAR)]
+    e = min((p for p in (right.find(c) for c in "\"'`") if p >= 0), default=-1)
+    inside = left[q + 1:] + " " + (right[:e] if e >= 0 else right)
+    inside = _ANY_ARMOR.sub(" ", _ESCAPE.sub(" ", _HEADER_TEXT.sub(" ", inside)))
+    # (quoted in a docstring: `"""It starts with "-----BEGIN ..."`)
+    t = max(left.rfind('"""', 0, q), left.rfind("'''", 0, q))
+    if len(_WORD.findall(inside)) > 1 or t >= 0 and _WORD.search(left[t + 3:q]):
+        return _PROSE
+    if e < 0 or inside.strip(" \t\r"):      # a value that goes on (a text block, a key on one line)
+        return _BARE
+    end = min(len(line), comment)           # (read from the line's end: the work stays linear in its markers)
+    while end > y and line[end - 1] in " \t\r":
+        end -= 1
+    ends = line[end - 1:end] in ("+", ",", "(", "[", "{", "=", ".", "&", "|", "\\")     # (the line goes on)
+    code = line[max(0, x - _NEAR):min(end, y + _NEAR)]
+    shut = sum(code.count(c) for c in "([{") == sum(code.count(c) for c in ")]}")
+    return _CONST if _ASSIGNED.search(left[:q]) and shut and not ends else _BARE
+
+
+def _armored(raw: str) -> list[tuple[int, int]]:
+    """Where each armored block that is no private key stands (`-----BEGIN CERTIFICATE-----` to its END), sorted."""
+    spans, open_ = [], {}
+    for m in _ARMOR.finditer(raw):
+        name = m.group(2)
+        if "PRIVATE" in name:
+            continue
+        if m.group(1) == "BEGIN":
+            open_.setdefault(name, m.start())
+        elif name in open_:
+            spans.append((open_.pop(name), m.end()))
+    return sorted(spans)
+
+
+def key_material(raw: str, redacted: str | None = None, diff: bool = False) -> KeyMaterial:
+    """The key material of `raw`, a text as written (before any cleaning; with diff, one file's lines of a diff).
+
+    Its runs are base64 runs that redaction hides there (redact(raw) unless `redacted` is given, or what a cut that
+    splits a key sends of it: _hide_keys), between a pair of markers (see _marker_pairs), never in an armored block
+    that is no private key, with a key line's shape: the whole text of a string literal or of a line, or 40
+    characters or more (see _KeyText.shaped). Between one pair, such runs on lines one after another make blocks (see
+    _KeyPair). A pair holds key text where its blocks hold a key's lines or pieces as keys are written (see
+    _KeyPair.strong), and counts only where it shows a key is there (see _KeyPair.evident: a key's bytes, its
+    header, a marker in the key's own value, lines wrapped at a key's width; never hashes, digests, pins, salts,
+    tokens or a public key alone; with a marker in a sentence or after a label, or a key written a statement per
+    line, only the key's own bytes or header). In such a pair its key blocks, the blocks next to them that go on with
+    the same code and a key's last line in a statement of its own (see _KeyPair.grow), and every key's base64 line
+    are material; a run that also stands outside every such pair is code, not key.
+    Only for a text that holds a private key's marker; a text that cannot be read this way (an error) has none: it
+    is sent as 1.7.11 sends it."""
+    if "PRIVATE KEY" not in raw or not (_PEM_BEGIN.search(raw) or _PEM_END.search(raw)):
+        return NO_MATERIAL
+    try:
+        return _key_material(raw, redacted, diff)
+    except Exception:  # noqa: BLE001 - never stops a send: the text goes as 1.7.11 sent it
+        return NO_MATERIAL
+
+
+_MATERIAL: dict[bytes, KeyMaterial] = {}      # key_material of a file's text as written, by a hash of the text itself
+_MATERIAL_KEPT = 4096
+
+
+def _text_material(raw: str) -> KeyMaterial:
+    """key_material of a file's text as written, kept for the files a run reads again (by a hash of the text: a file
+    rewritten with the same size and time is read anew, and no text is kept)."""
+    if "PRIVATE KEY" not in raw:
+        return NO_MATERIAL
+    h = hashlib.sha256(raw.encode("utf-8", "surrogatepass")).digest()
+    if (m := _MATERIAL.get(h)) is None:
+        m = key_material(raw)
+        try:
+            while len(_MATERIAL) >= _MATERIAL_KEPT:
+                _MATERIAL.pop(next(iter(_MATERIAL)), None)
+        except RuntimeError:            # (another thread changed it: it is only a cache)
+            pass
+        _MATERIAL[h] = m
+    return m
+
+
+def _key_material(raw: str, redacted: str | None, diff: bool) -> KeyMaterial:
+    pairs, opened = _marker_pairs(raw)
+    if not pairs:
+        return NO_MATERIAL
+    t = _KeyText(raw, diff, (redact(raw) if redacted is None else redacted, _hide_keys(raw)))
+    if not t.hidden:
+        return NO_MATERIAL
+    keyed: list[tuple[int, int]] = []        # the pairs that hold key text, and their runs
+    picked: set[str] = set()
+    for p0, p1 in pairs:
+        if (pair := _read_pair(t, p0, p1, (p0, p1) in opened)) is not None and (runs := pair.key_runs()):
+            keyed.append((p0, p1))
+            picked |= runs
+    return t.material(keyed, picked)
+
+
+def _marker_pairs(raw: str) -> tuple[list[tuple[int, int]], set[tuple[int, int]]]:
+    """The pairs of markers key_material reads between, sorted: as redact()'s shape pairs them, and as it pairs them
+    after the secret-value rules took their values, each from the last BEGIN of its kind before the END (a sentence
+    or a marker string, then the key); and an outer BEGIN whose own END is missing (or misspelled) to the next BEGIN,
+    also given apart (its key ends where the next one starts)."""
+    kept, opened = set(), set()
+    for p0, p1 in set(_key_pairs(raw)) | set(_key_pairs(_masked_values(raw)[0])):
+        last = None
+        begin = _PGP_BEGIN if _PGP_BEGIN.match(raw, p0) else _PEM_BEGIN_178
+        for last in begin.finditer(raw, p0 + 1, max(p0 + 1, raw.rfind("-----END", p0, p1))):
+            pass
+        kept.add((last.start() if last is not None else p0, p1))
+        if last is not None and last.start() > p0:
+            kept.add((p0, last.start()))
+            opened.add((p0, last.start()))
+    return sorted(kept), opened
+
+
+class _KeyText:
+    """A text as key_material reads it: its lines (a lone carriage return ends one too), each line's base64 runs and
+    where they stand, the runs that redaction hides there (`reds`: the text as redaction sends it, each way), and,
+    when there are such runs, its markers, each with how it stands on its line (see _marker_kind), and its armored
+    blocks that are no private key. Each line's comment, bounds and body run are read once, when asked."""
+
+    def __init__(self, raw: str, diff: bool, reds: tuple[str, ...]):
+        self.raw, self.diff, self.skip = raw, diff, 1 if diff else 0
+        self.lines = lines = _LINE_BREAK.split(raw)
+        self.runs = [_runs(ln, diff) for ln in lines]
+        self.starts: list[int] = []                         # each line's offset
+        self.at: list[int] = []                             # each run's offset, and its (line, run)
+        self.found: list[tuple[int, re.Match]] = []
+        i = 0
+        for k, ln in enumerate(lines):
+            self.starts.append(i)
+            for m in self.runs[k]:
+                self.at.append(i + m.start())
+                self.found.append((k, m))
+            i += len(ln) + 1
+        seen: dict[str, int] = {}
+        for _, m in self.found:
+            seen[m.group()] = seen.get(m.group(), 0) + 1
+        self.hidden: set[str] = set()
+        for red in reds:
+            shown: dict[str, int] = {}
+            for ln in red.split("\n"):
+                for m in _runs(ln, diff):
+                    shown[m.group()] = shown.get(m.group(), 0) + 1
+            self.hidden |= {r for r, n in seen.items() if n > shown.get(r, 0)}
+        self._comments: dict[int, int] = {}
+        self._headers: dict[int, bool] = {}
+        self._bounds: dict[int, tuple[int, int]] = {}
+        self._body: dict[int, re.Match | None] = {}
+        if not self.hidden:
+            return
+        self.markers = [m.span() for m in _ANY_MARKER.finditer(raw)]
+        self.begins, self.ends = [x for x, _ in self.markers], [y for _, y in self.markers]
+        self.line_of = {x: bisect.bisect_right(self.starts, x) - 1 for x, _ in self.markers}
+        self.kind: dict[int, int] = {}
+        for x, y in self.markers:                           # (in a diff, the line after its mark)
+            k = self.line_of[x]
+            mark = self.mark(k)
+            self.kind[x] = _marker_kind(lines[k][mark:], x - self.starts[k] - mark, y - self.starts[k] - mark,
+                                        self.comment(k) - mark)
+        self.marked: dict[int, int] = {}                    # the lines that hold a marker, each with how its markers
+        for x, k in self.line_of.items():                   # stand there
+            self.marked[k] = min(self.marked.get(k, _PROSE), self.kind[x])
+        self.armor = _armored(raw)
+        self.armor_at = [x for x, _ in self.armor]
+
+    def mark(self, k: int) -> int:
+        """Where line k's text starts: in a diff, after its mark."""
+        return self.skip if self.lines[k][:1] in "+- " else 0
+
+    def comment(self, k: int) -> int:
+        """Where the comment on line k starts (see _comment_at)."""
+        if k not in self._comments:
+            self._comments[k] = _comment_at(self.lines[k], self.mark(k))
+        return self._comments[k]
+
+    def header(self, k: int) -> bool:
+        """Line k holds a key's header (see _ARMOR_HEADER)."""
+        if k not in self._headers:
+            self._headers[k] = bool(_ARMOR_HEADER.search(self.lines[k]))
+        return self._headers[k]
+
+    def in_marker(self, k: int, x: int) -> bool:
+        """The run at `x`, on line k, is a word of a marker (`RSA`, `PRIVATE`, `KEY`)."""
+        return k in self.marked and (j := bisect.bisect_right(self.ends, x)) < len(self.markers) \
+            and self.markers[j][0] <= x
+
+    def in_armor(self, x: int) -> bool:
+        """`x` stands in an armored block that is no private key (a certificate, a public key)."""
+        return (j := bisect.bisect_right(self.armor_at, x) - 1) >= 0 and x < self.armor[j][1]
+
+    def shaped(self, k: int, m: re.Match) -> int:
+        """A hidden run with a key line's shape: _WHOLE, a literal's whole text or a line's; _LONG, 40 characters or
+        more; else 0."""
+        if m.group() not in self.hidden:
+            return 0
+        line = self.lines[k]
+        if k not in self._bounds:
+            self._bounds[k] = _bounds(line)
+        if _literal_run(line, m, *self._bounds[k]):
+            return _WHOLE
+        if k not in self._body:             # (the line before its comment: `"...=="  # last line`; a comment's line
+            c = self.comment(k)             # alone, for a long run: `# MIIE...`)
+            self._body[k] = _body_run(line[:c], [r for r in self.runs[k] if r.end() <= c]) \
+                or c <= self._bounds[k][0] and _body_run(line, self.runs[k])
+        if self._body[k] is m:
+            return _WHOLE if m.end() <= self.comment(k) or len(m.group()) >= _EVIDENCE else 0
+        return _LONG if len(m.group()) >= _EVIDENCE else 0
+
+    def material(self, keyed: list[tuple[int, int]], picked: set[str]) -> KeyMaterial:
+        """The material of the runs `picked` in the pairs `keyed`, less every run that also stands outside all of
+        those pairs (code, not key); with the runs outside them that a piece of a long one would hide (a constant that
+        holds a key's first characters: code)."""
+        if not picked:
+            return NO_MATERIAL
+        spans: list[list[int]] = []
+        for p0, p1 in keyed:
+            if spans and p0 <= spans[-1][1]:
+                spans[-1][1] = max(spans[-1][1], p1)
+            else:
+                spans.append([p0, p1])
+        firsts = [x for x, _ in spans]
+
+        def inside(x: int, n: int) -> bool:
+            return (j := bisect.bisect_right(firsts, x) - 1) >= 0 and x + n <= spans[j][1]
+        outside = {m.group() for x, (_, m) in zip(self.at, self.found) if not inside(x, len(m.group()))}
+        picked = picked - outside
+        if not picked:
+            return NO_MATERIAL
+        material = KeyMaterial(frozenset(r for r in picked if len(r) >= _LONG_RUN),
+                               frozenset(r for r in picked if len(r) < _LONG_RUN))
+        return replace(material, code=frozenset(r for r in outside if len(r) >= _PIECE and material._piece(r)))
+
+
+def _read_pair(t: _KeyText, p0: int, p1: int, opened: bool) -> "_KeyPair | None":
+    """The pair of markers at `p0`-`p1` of `t` as _KeyPair reads it; None: no PEM pair (a PGP block's END stands
+    in a PEM pair's place), a marker on no line, or no candidate run between them."""
+    if not (begin := _PEM_BEGIN.match(t.raw, p0)):
+        return None
+    if opened:
+        b = p1                              # (the next key's BEGIN)
+    elif (b := t.raw.rfind("-----END", begin.end(), p1)) < 0:
+        return None
+    kb, ke = t.line_of.get(p0), t.line_of.get(b)
+    kinds = (t.kind.get(p0, _PROSE), t.kind.get(b, _PROSE))
+    if kb is None or ke is None:
+        return None
+    pair = _KeyPair(t, p0, begin.end(), b, kb, ke, kinds, opened)
+    return pair if pair.cand else None
+
+
+class _KeyPair:
+    """What stands between one pair's markers, at `a`-`b` of a text (see key_material): on each line, its candidate
+    runs (hidden runs with a key line's shape: `cand`; as a key's bytes, an escape's letter before a literal's line
+    left out, `"\\nMIIE...`: `clean`; those that are a literal's whole text or a line's: `whole`) or the code it holds
+    (a run of another shape, before the line's comment; a certificate's base64 is code too); the candidates after a
+    digest's name, and where the first starts and the last ends; the blocks of lines the candidates make, and how
+    each block stands next to the markers (see _next_to_marker)."""
+
+    def __init__(self, t: _KeyText, p0: int, a: int, b: int, kb: int, ke: int, kinds: tuple[int, int], opened: bool):
+        self.t, self.p0, self.a, self.b, self.kinds, self.opened = t, p0, a, b, kinds, opened
+        self.pgp = bool(_PGP_BEGIN.match(t.raw, p0))
+        self.cand: dict[int, list[str]] = {}
+        self.code: dict[int, set[str]] = {}
+        self.clean: dict[int, list[str]] = {}
+        self.whole: dict[int, list[str]] = {}
+        self.digests: set[str] = set()      # those after a digest's name (`sha384-`, `sha256:`), as SRI writes them
+        self.span = (b, a)                  # where the first candidate starts, and where the last one ends
+        for k, m in t.found[bisect.bisect_left(t.at, a):bisect.bisect_left(t.at, b)]:
+            x = t.starts[k] + m.start()
+            if t.starts[k] + m.end() > b or _noise_run(t.lines[k], m) or t.in_marker(k, x):
+                continue
+            in_armor = t.in_armor(x)
+            if not in_armor and (shape := t.shaped(k, m)):
+                self.cand.setdefault(k, []).append(r := m.group())
+                self.span = (min(self.span[0], x), x + len(r))
+                if t.lines[k][m.start() - 1:m.start()] == "\\" and r[0] in "nrt":
+                    r = r[1:]
+                self.clean.setdefault(k, []).append(r)
+                if _DIGEST_NAME.search(t.lines[k], max(0, m.start() - 8), m.start()):
+                    self.digests.add(r)
+                if shape == _WHOLE:
+                    self.whole.setdefault(k, []).append(r)
+            elif in_armor or m.start() < t.comment(k) and not t.header(k):   # (`Version: GnuPG v2` is a PGP block's)
+                self.code.setdefault(k, set()).add(m.group())
+        if not self.cand:
+            return
+        # blocks: lines that hold candidates, one after another (lines of noise alone between them, as `)`), code on
+        # the first alone; a marker's line that holds code too is a block by itself
+        self.blocks: list[list[int]] = []
+        self.apart = t.marked.keys() & self.code.keys()
+        for k in sorted(self.cand):
+            if self.blocks and k not in self.code and self.blocks[-1][-1] not in self.apart \
+                    and not any(j in self.code or j in t.marked for j in range(self.blocks[-1][-1] + 1, k)):
+                self.blocks[-1].append(k)
+            else:
+                self.blocks.append([k])
+        dense = 0                           # the characters of code between the markers (comments left out)
+        for k in range(kb, ke + 1):
+            seg = t.raw[max(a, t.starts[k]):min(b, t.starts[k] + t.comment(k))]
+            dense += len(seg) - sum(seg.count(c) for c in " \t\r\f\v﻿")
+        dense -= sum(y - x for x, y in t.markers[bisect.bisect_left(t.begins, a):bisect.bisect_left(t.begins, b)]
+                     if y <= b)
+        self.total = sum(len(r) for rs in self.cand.values() for r in rs)
+        self.most = self.total >= _SHARE * dense         # key text, most of it
+        self.sides = [_next_to_marker(bl, self.code, t.marked, self.apart, t.lines, t.comment) for bl in self.blocks]
+        self.size = [sum(len(r) for k in bl for r in self.cand[k]) for bl in self.blocks]
+        self.keys = [sum(map(_key_text, self.runs(i))) for i in range(len(self.blocks))]
+        self._named: list[set[str]] | None = None
+
+    def runs(self, i: int) -> list[str]:
+        """Block i's candidates."""
+        return [r for k in self.blocks[i] for r in self.cand[k]]
+
+    def between(self, i: int) -> bool:
+        """Block i stands right between two markers, neither of them in a sentence."""
+        return None not in self.sides[i] and _PROSE not in self.sides[i]
+
+    def near(self, i: int) -> bool:
+        """Block i stands right next to a marker written as a key's, or right between two markers."""
+        return _BARE in self.sides[i] or self.between(i)
+
+    def key_runs(self) -> set[str]:
+        """The pair's key material, when it holds key text and shows a key is there; else nothing."""
+        strong, strict = self.strong()
+        if not strong or not self.evident(strong if strict else None):
+            return set()
+        self.grow(strong)
+        return {r for i in strong for r in self.runs(i) if len(r) >= 4} \
+            | {r for rs in self.cand.values() for r in rs if _key_text(r)}  # (every key's base64 line, whatever code
+        #                                                                     its line holds: `p[3] = "MIIE..."`)
+
+    def strong(self) -> tuple[set[int], bool]:
+        """The blocks that hold key text, and whether only a key's own bytes may show a key is there (see evident):
+        a key's long lines next to a marker, most of what stands between the markers, or three of them, when neither
+        marker is in a sentence and one is a key's (never one long value among code, as a hash or a token); with no
+        long line, a key written as short pieces (or a short test key), with code on its first line alone (`KEY =
+        ("MIIE..."`, then the pieces), right between two markers, or next to a key's marker when they are most of what
+        stands between them (and of its candidates: never one line of many alike) or read as random base64. Else, where
+        one marker is a key's, a key written a statement per line (see chained: wrapped under 16 characters, or with
+        a marker in a sentence, only by the key's own bytes); and, by the key's own bytes alone
+        (strict, see evident), the blocks that start as a DER private key's bytes do wherever they stand (a key of one
+        or two lines with code between it and its markers), and, where a marker stands in a sentence or after a label
+        (`# Test key: -----BEGIN ...`, `# id_rsa -----BEGIN ...`), a key's long lines next to the other marker, most of
+        what stands between the markers or three of them."""
+        if self.kinds != (_PROSE, _PROSE):
+            wide = _PROSE not in self.kinds and _BARE in self.kinds
+            strong = {i for i, n in enumerate(self.keys) if n and (self.near(i) or wide and (n >= 3 or self.most))}
+            if not strong:
+                strong = {i for i in range(len(self.blocks)) if self.size[i] >= _LONG_RUN and (
+                    self.between(i) or _BARE in self.sides[i] and (
+                        self.most and self.size[i] >= _SHARE * self.total or any(map(_random_text, self.runs(i)))))}
+            if strong:
+                return strong, False
+            if _BARE in self.kinds:
+                chain, short = self.chained()
+                if chain or short:
+                    return chain or short, _PROSE in self.kinds or not chain
+        strong = {i for i in range(len(self.blocks)) if self.size[i] >= _LONG_RUN and self.owns_key_bytes(i)}
+        if _PROSE in self.kinds:
+            strong |= {i for i, n in enumerate(self.keys) if n and (n >= 3 or self.most or self.near(i))}
+        return strong, True
+
+    def owns_key_bytes(self, i: int) -> bool:
+        """Block i's runs in order, or one of them, start as a DER private key's bytes do (see _key_start)."""
+        runs = [r for k in self.blocks[i] for r in self.clean[k]]
+        return any(_key_start(r, self.pgp) == _KEY_BYTES
+                   for r in ["".join(runs)] + [r for r in runs if len(r) >= _LONG_RUN])
+
+    def names(self) -> list[set[str]]:
+        """Each block's code names (a number in a name or an index left out: `k4` after `k3` is the same code)."""
+        if self._named is None:
+            names = {k: {r.strip("0123456789") for r in rs} - {""} for k, rs in self.code.items()}
+            self._named = [set().union(*(names.get(k, ()) for k in bl)) for bl in self.blocks]
+        return self._named
+
+    def chained(self) -> tuple[set[int], set[int]]:
+        """A key written a statement per line (`sb.append("MIIE...").append(System.lineSeparator());`, `K = "..."`,
+        then `K += "..."`): blocks next to each other with the same code names make a chain. A chain counts when it
+        holds three of a key's long lines (see _key_text), or three pieces of 16 characters or more and 64 characters
+        in all (a key wrapped short); and, second (only by the key's own bytes, see strong), six pieces of 8
+        characters or more and 64 in all (a key wrapped shorter still)."""
+        named, out, short, i, n = self.names(), set(), set(), 0, len(self.blocks)
+        while i < n:
+            j = i
+            while j + 1 < n and named[i] and named[j + 1] == named[i] \
+                    and _next_block(self.blocks[j], self.blocks[j + 1], self.code, self.t.marked):
+                j += 1
+            size = self.size[i:j + 1]
+            if j > i and (sum(self.keys[i:j + 1]) >= 3
+                          or sum(n >= _LONG_RUN for n in size) >= 3 and sum(size) >= 4 * _LONG_RUN):
+                out |= set(range(i, j + 1))
+            elif sum(n >= _PIECE for n in size) >= 6 and sum(size) >= 4 * _LONG_RUN:
+                short |= set(range(i, j + 1))
+            i = j + 1
+        return out, short
+
+    def evident(self, strong: set[int] | None = None) -> bool:
+        """What stands between the markers shows a key is there (and not hashes, pins, salts, a token or a public
+        key: a key is never needed to hide those): the key's header (see headed); a marker in the key's own value,
+        nothing but the value's quotes and joiners between them (`concat!("MIIE...",` then `"-----END PRIVATE
+        KEY-----")`); the candidates starting as a private key's bytes do (see key_bytes); or lines wrapped at a
+        key's width (see wrapped). With `strong` (the blocks of a strict reading, see strong): only the key's header,
+        or those blocks starting as a DER private key's bytes do (in a PGP block, also as a secret key packet)."""
+        if self.headed():
+            return True
+        if strong is not None:
+            return self.key_bytes(sorted(strong), strict=True)
+        t = self.t
+        if _JOINED.fullmatch(t.raw, self.a, self.span[0]) \
+                or not self.opened and _JOINED.fullmatch(t.raw, self.span[1], self.b):
+            return True
+        return self.key_bytes(list(range(len(self.blocks))), strict=False) or self.wrapped()
+
+    def key_bytes(self, blocks: list[int], strict: bool) -> bool:
+        """The runs of these blocks, all in order (a key wrapped short, a statement per line), a block's in order or
+        one of its runs start as a private key's bytes do (see _key_start); a start that is no more than a DER
+        SEQUENCE's or a PGP packet's counts only for a block right after the BEGIN, as random bytes start one time in
+        300,000, and when `strict` only a PGP packet's."""
+        def least(i: int) -> int:
+            if self.sides[i][0] is None or strict and not self.pgp:
+                return _KEY_BYTES
+            return _KEY_LIKE
+        if _key_start("".join(r for i in blocks for k in self.blocks[i] for r in self.clean[k]), self.pgp) \
+                >= least(blocks[0]):
+            return True
+        for i in blocks:
+            runs = [r for k in self.blocks[i] for r in self.clean[k]]
+            if any(_key_start(r, self.pgp) >= least(i)
+                   for r in ["".join(runs)] + [r for r in runs if len(r) >= _LONG_RUN]):
+                return True
+        return False
+
+    def wrapped(self) -> bool:
+        """A block's whole-line runs are a key's lines wrapped at one width (see _wrapped; the values of a list only
+        at a PEM width), or those of all blocks are, at a PEM width (64, 76), or three runs of the pair are of a PEM
+        width, with a shorter one (on lines with more on them, as `<l>...</l>`). A width never counts for hex (a
+        digest) or for a digest's base64 after its name (`sha384-...`)."""
+        t = self.t
+
+        def wide(r: str) -> bool:
+            return r not in self.digests and not all(c in _HEX for c in r.rstrip("="))
+        whole = [[r for k in bl for r in self.whole.get(k, ()) if wide(r)] for bl in self.blocks]
+        listed = [any("," in t.lines[k][:t.comment(k)] for k in bl) for bl in self.blocks]
+        if any(map(_wrapped, whole, listed)) or _wrapped([r for rows in whole for r in rows]):
+            return True
+        runs = [r for rs in self.clean.values() for r in rs if wide(r)]
+        return any(sum(len(r) == w for r in runs) >= 3 and any(len(r) < w for r in runs) for w in _PEM_WIDTHS)
+
+    def headed(self) -> bool:
+        """The key's text starts with a key's header, as a key holds one: a legacy encrypted key's (`Proc-Type:`,
+        `DEK-Info:`), in a PGP block its armor header (`Version: GnuPG v2`); right after the BEGIN in one literal
+        (`"-----BEGIN ...-----\\nProc-Type: ..."`), or first in the code of a line (in a literal, after the name it is
+        given to: `KEY = ("Proc-Type: 4,ENCRYPTED\\n"`) after the BEGIN's and up to the key's first line (8 at most),
+        never in a comment, a sentence or after other code (`{"accept": "Version: 2"}`). In a PGP block also its
+        checksum (`=AbCd`) as code."""
+        t = self.t
+        names = _ARMOR_HEADER_NAMES if self.pgp else _ENCRYPTED
+        kb, ke = t.line_of[self.p0], t.line_of[self.b]
+        if (m := _HEADER_AFTER.match(t.lines[kb], self.a - t.starts[kb])) and m.group(1) in names:
+            return True
+        for k in range(kb + 1, min(ke, kb + 9, self.blocks[0][0] + 1)):
+            code = t.lines[k][t.mark(k):t.comment(k)][:_NEAR]
+            if _ARMOR_HEADER.search(code) and (m := _HEADER_LINE.match(code)) and m.group(1) in names:
+                return True
+        if self.pgp:
+            for m in _PGP_CHECKSUM.finditer(t.raw, self.a, self.b):
+                k = bisect.bisect_right(t.starts, m.end() - 1) - 1
+                if m.end() - t.starts[k] <= t.comment(k):
+                    return True
+        return False
+
+    def grow(self, strong: set[int]) -> None:
+        """Add to `strong` the blocks next to it that go on with the same code (`KEY += "..."` a line at a time, its
+        checksum; `k4 = "..."` after `k3 = "..."`: a number in a name or an index is the same code), left to right,
+        then right to left; then a key's last line in a statement of its own, right after its lines and next to a
+        key's marker (`KEY_LAST = "..."`, `KEY += "..."` before `# -----END ...`): random base64 of 16 characters or
+        more, or ending in its padding."""
+        blocks, code, marked, named = self.blocks, self.code, self.t.marked, self.names()
+
+        def goes_on(i: int, j: int) -> bool:
+            return _next_block(blocks[min(i, j)], blocks[max(i, j)], code, marked) and named[j] <= named[i]
+        for i in range(len(blocks) - 1):
+            if i in strong and i + 1 not in strong and goes_on(i, i + 1):
+                strong.add(i + 1)
+        for i in range(len(blocks) - 1, 0, -1):
+            if i in strong and i - 1 not in strong and goes_on(i, i - 1):
+                strong.add(i - 1)
+        strong |= {j for i in list(strong) for j in (i - 1, i + 1) if 0 <= j < len(blocks) and j not in strong
+                   and self.size[j] >= _LONG_RUN and self.near(j)
+                   and _next_block(blocks[min(i, j)], blocks[max(i, j)], code, marked)
+                   and any(_random_text(r, _LONG_RUN) or r.endswith("=") for r in self.runs(j))}
+
+
+def _wrapped(rows: list[str], apart: bool = True) -> bool:
+    """These runs, in order, are a key's lines or pieces of one width: two of a PEM width (64, 76), or one and then a
+    shorter last line; or, as pieces of one value (never `apart`, values of a list), three or more of one width of 8
+    characters or more. Values that stand `apart` all of one width count only five or more of them (digests and
+    tokens come a few at a time; a key's last line is shorter, or its bytes show it is a key, see _key_start)."""
+    widths: dict[int, int] = {}
+    for r in rows:
+        widths[len(r)] = widths.get(len(r), 0) + 1
+    if apart and len(widths) < 2 and len(rows) < _APART:
+        return False
+    if any(len(x) in _PEM_WIDTHS and len(y) < len(x) for x, y in zip(rows, rows[1:])):
+        return True
+    return any(n >= 2 and w in _PEM_WIDTHS or n >= 3 and w >= _PIECE and not apart for w, n in widths.items())
+
+
+_KEY_BYTES, _KEY_LIKE = 2, 1            # how a run starts as a private key's bytes (see _key_start)
+
+
+def _key_start(run: str, pgp: bool) -> int:
+    """How `run` (base64, or hex: 16 characters or more) starts as a private key's bytes do: _KEY_BYTES, a DER
+    SEQUENCE whose first element is a version (PKCS#1, PKCS#8, SEC1, DSA) or an encryption's algorithm (an encrypted
+    PKCS#8 key), or OpenSSH's `openssh-key-v1`; _KEY_LIKE, a long DER SEQUENCE whose first element is none of a public
+    key's, a certificate's or a signature's (a SEQUENCE, a SET, an INTEGER that is no version, an OID: a test key's
+    made-up body, `MIIQz...`), or in a PGP block a secret key packet (see _pgp_secret_key); else 0."""
+    if len(run) < _LONG_RUN:
+        return 0
+    if run.startswith(_OPENSSH_MAGIC):
+        return _KEY_BYTES
+    text = run.rstrip("=")[:48]
+    try:
+        data = [binascii.a2b_base64(text[:len(text) // 4 * 4])]
+        if all(c in _HEX for c in text):
+            data.append(bytes.fromhex(text[:len(text) // 2 * 2]))
+    except (binascii.Error, ValueError):
+        return 0
+    found = 0
+    for d in data:
+        if pgp and len(d) >= 6 and _pgp_secret_key(d):
+            found = _KEY_LIKE
+        if len(d) < 7 or d[0] != 0x30:
+            continue
+        if d[1] < 0x80:                     # a short key (Ed25519, a P-256 SEC1 key): its version right after
+            at = 2 if d[1] >= 0x20 else 0
+        elif d[1] == 0x81 and d[2] >= 0x80:
+            at = 3
+        elif d[1] == 0x82 and 0x100 <= (d[2] << 8 | d[3]) < 0x3000:
+            at = 4
+        else:
+            continue
+        if at and d[at:at + 2] == b"\x02\x01" and d[at + 2:at + 3] in (b"\x00", b"\x01", b"\x02") \
+                and _after_version(d, at + 3):
+            return _KEY_BYTES
+        if at and d[at] == 0x30 and any(o in d[at:] for o in _PBE_OIDS):
+            return _KEY_BYTES
+        if at == 4 and d[at] not in (0x02, 0x30, 0x31, 0x06, 0xa0, 0x0a):     # (ENUMERATED: an OCSP response)
+            found = _KEY_LIKE
+    return found
+
+
+def _after_version(d: bytes, i: int) -> bool:
+    """What follows a DER private key's version at `i` of `d`: an INTEGER (PKCS#1, DSA), a SEQUENCE (PKCS#8's
+    algorithm) or, after version 1, an OCTET STRING of an EC key's size (SEC1: 20 to 66 bytes); never a community
+    string (SNMP's `30 29 02 01 01 04 06 public`) or a protocol's tag (LDAP's). Not known when `d` ends first."""
+    if i + 1 >= len(d):
+        return True
+    return d[i] in (0x02, 0x30) or d[i] == 0x04 and d[i - 1] == 1 and 20 <= d[i + 1] <= 66
+
+
+def _pgp_secret_key(d: bytes) -> bool:
+    """`d` starts as a PGP secret key packet does: its tag (5, in the old format or the new), its length, then the
+    key's version (3 to 6)."""
+    if 0x94 <= d[0] <= 0x96:
+        at = 1 + (1, 2, 4)[d[0] - 0x94]
+    elif d[0] == 0xc5:
+        at = 2 if d[1] < 192 else 3 if d[1] < 224 else 6 if d[1] == 255 else 0
+    else:
+        return False
+    return 0 < at < len(d) and 3 <= d[at] <= 6
+
+
+def _key_text(run: str) -> bool:
+    """A run that reads as a key's base64 line: 40 characters or more, with a digit, and capitals for a quarter of
+    its letters or more (random base64 has as many as small ones); never a long name in camelCase
+    (`loadServiceAccountCredentialsFromEnvironment2`), a path or a hex digest."""
+    if len(run) < _EVIDENCE or not any(c.isdigit() for c in run):
+        return False
+    letters = sum(c.isalpha() for c in run)
+    return sum(c.isupper() for c in run) * 4 >= letters
+
+
+def _next_block(first: list[int], then: list[int], code: dict, marked: set[int]) -> bool:
+    """Two blocks of lines (see _KeyPair) with lines of noise alone between them."""
+    return not any(j in code or j in marked for j in range(first[-1] + 1, then[0]))
+
+
+def _next_to_marker(block: list[int], code: dict, marked: dict[int, int], apart: set[int], lines: list[str],
+                    comment: Callable[[int], int]) -> tuple[int | None, int | None]:
+    """How the markers stand (see _marker_kind) on the marker's line a block of lines (see _KeyPair) starts on
+    or right after, and on the one it ends on or right before (lines of noise or comment alone between; before it,
+    also the line that opens the value it is, as `static const char *k =` or `KEY = (`); None: no such line. A line
+    of code with a marker in it (`v = "x"  # -----BEGIN ...`) is next to the lines around it and to itself (its
+    runs after a BEGIN, before an END). After it, a `def` or `class` line whose docstring holds a marker (on the
+    docstring's first line or its second) is no code there (`def after():`, then its docstring `-----END ...`)."""
+    out, n = [], len(lines)
+    for k, step in ((block[0], -1), (block[-1], 1)):
+        head, own = step < 0, marked.get(k)
+        if k not in marked or k in apart:
+            k += step
+            while 0 <= k < n and k not in marked and (k not in code or head and _HEAD.search(lines[k], 0, comment(k))
+                                                      or step > 0 and _doc_marker(lines, k, marked)):
+                head = head and k not in code
+                k += step
+        found = [x for x in (own, marked.get(k)) if x is not None]
+        out.append(min(found) if found else None)
+    return out[0], out[1]
+
+
+def _doc_marker(lines: list[str], k: int, marked: dict[int, int]) -> bool:
+    """Line k is a `def` or `class` line whose docstring holds a marker on its first or its second line, or that
+    docstring's first line, with the marker on the next (see _next_to_marker)."""
+    if _DEF_LINE.match(lines[k]):
+        return k + 1 in marked or k + 2 in marked and k + 1 < len(lines) and bool(_DOC_OPEN.match(lines[k + 1]))
+    return k + 1 in marked and k > 0 and bool(_DOC_OPEN.match(lines[k])) and bool(_DEF_LINE.match(lines[k - 1]))
+
+
+def _random_text(run: str, least: int = 20) -> bool:
+    """A run that reads as random base64 (a short test key's line): 20 characters or more, with a digit, a capital
+    and a small letter, and a change between those (or `+`, `/`) at half of its characters or more; never a name
+    (`MaxRetriesForKeyFetch2`), a path or an algorithm (`RSA/ECB/OAEPWithSHA256AndMGF1Padding`)."""
+    if len(run) < least or not (any(c.isdigit() for c in run) and any(c.isupper() for c in run)
+                             and any(c.islower() for c in run)):
+        return False
+    kind = [c.isupper() + 2 * c.islower() + 3 * c.isdigit() for c in run]
+    return sum(x != y for x, y in zip(kind, kind[1:])) * 2 >= len(run) - 1
+
+
+def material_of(raws: dict[str, KeyMaterial | None]) -> KeyMaterial:
+    """The key material of these files (see Symbol.raws): each as found when it was read, by the text the render
+    read, else (None) as now on disk."""
+    found = []
+    for f, material in raws.items():
+        if material is not None:
+            found.append(material)
+            continue
+        try:
+            if os.stat(f).st_size > MAX_FILE_BYTES:
+                continue
+            found.append(_text_material(Path(f).read_bytes().decode("utf-8", "replace")))
+        except (OSError, ValueError):
+            continue
+    return _joined(found)
+
+
+def scrub_key_material(text: str, material: KeyMaterial, diff: bool = False) -> str:
+    """`text`, final and about to be sent, with every run of base64 characters that `material` hides (see
+    KeyMaterial.hides) as `<redacted>`, and each of its short runs that is the whole run of a line of its own, stands
+    on or next to a line this hid a run on, or is a literal on a line such literals make up 60% of (a key written
+    as short pieces). Nothing else changes: no line is added, removed or moved. (diff: `text`
+    is a change excerpt, read after each line's mark.) A text this cannot read is sent as it is."""
+    if not material or not text:
+        return text
+    try:
+        return _scrub(text, material, diff)
+    except Exception:  # noqa: BLE001 - never stops a send: the text goes as 1.7.11 sent it
+        return text
+
+
+def _scrub(text: str, material: KeyMaterial, diff: bool) -> str:
+    lines = _LINE_BREAK.split(text)
+    breaks = [m.group() for m in _LINE_BREAK.finditer(text)]       # (each kept as it was)
+    found = [_runs(ln, diff) for ln in lines]
+    gone: list[set[int]] = [set() for _ in lines]
+    for k, (ln, runs) in enumerate(zip(lines, found)):
+        body = _body_run(ln, runs) if material.short else None
+        for m in runs:
+            if material.hides(m.group()) or m is body and m.group() in material.short:
+                gone[k].add(m.start())
+        # a line made of key pieces (`"MIIEoQIBAAKC" "AQEAmrGYsuCx" ...`): its short ones, when they are most of it
+        if material.short and not gone[k] and (pieces := [m for m in runs if m.group() in material.short]):
+            first, last = _bounds(ln)
+            if (short := [m for m in pieces if _literal_run(ln, m, first, last)]) and \
+                    sum(len(m.group()) for m in short) >= _SHARE * (len(ln) - sum(ln.count(c) for c in " \t\r")):
+                gone[k].update(m.start() for m in short)
+    hit = [bool(g) for g in gone]
+    for k, runs in enumerate(found):
+        if material.short and any(hit[j] for j in (k - 1, k, k + 1) if 0 <= j < len(lines)):
+            gone[k].update(m.start() for m in runs if m.group() in material.short)
+    for k, runs in enumerate(found):
+        if gone[k]:
+            ln, out, i = lines[k], [], 0
+            for m in runs:
+                if m.start() in gone[k]:
+                    out += [ln[i:m.start()], "<redacted>"]
+                    i = m.end()
+            lines[k] = "".join(out) + ln[i:]
+    return "".join(x for ln, br in zip(lines, breaks + [""]) for x in (ln, br))
 
 
 def _redact_secret_values(text: str) -> str:
@@ -1209,7 +2168,8 @@ def _join(*parts: str) -> str:
     return "/" + "/".join(segs)
 
 
-def _add_route(verb: str, path: str, handler: Symbol | None, how: str, header_extra: str = "") -> Symbol:
+def _add_route(verb: str, path: str, handler: Symbol | None, how: str, header_extra: str = "",
+               extra_raws: dict | None = None) -> Symbol:
     verb = verb.upper()
     path = _join(_fill_placeholders(path))
     name = f"{verb} {path}"
@@ -1220,7 +2180,7 @@ def _add_route(verb: str, path: str, handler: Symbol | None, how: str, header_ex
         head = f"{c} {name}  ({how})" + (f"\n{c} {header_extra}" if header_extra else "")
         return head + ("\n" + h.source if h is not None else "")
 
-    sym = Symbol(name, "route", h.file if h else "", h.line if h else 0, value=verb, loader=render)
+    sym = Symbol(name, "route", h.file if h else "", h.line if h else 0, value=verb, loader=render, raws=extra_raws)
     _ROUTES.setdefault(_norm_path(path), []).append(sym)
     return sym
 
@@ -1295,7 +2255,8 @@ def _finish_config(syms: dict[str, Symbol]) -> None:
             body.append(f"# effective value (default profile): {e['value']}  from {Path(spring_def[0]).as_posix()}:"
                         f"{spring_def[1]}; defaults in code apply only when the key is not set")
         body += [f"{role:<8} {Path(f).as_posix()}:{ln}  {txt}" for role, f, ln, txt in rows]
-        sym = Symbol(e["key"], "config", e["file"], e["line"], source="\n".join(body))
+        sym = Symbol(e["key"], "config", e["file"], e["line"], source="\n".join(body),
+                     raws=dict.fromkeys([e["file"]] + [f for _, f, _, _ in rows]))
         _CONFIG[canon] = sym
         syms.setdefault(e["key"], sym)
 
@@ -1392,10 +2353,14 @@ def index_python_file(p: Path, text: str, syms: dict[str, Symbol], files: set[st
         return start, node.end_lineno
 
     def render(a: int, b: int) -> Callable[[], str]:
-        return lambda: _py_clean("\n".join(lines[a - 1:b]))
+        def go() -> str:
+            _note_read(str(p), text)                # (its key material: see scrub_key_material)
+            return _py_clean("\n".join(lines[a - 1:b]))
+        return go
 
     def render_class(node: ast.ClassDef) -> Callable[[], str]:
         def go() -> str:
+            _note_read(str(p), text)
             a, b = seg(node)
             full = _py_clean("\n".join(lines[a - 1:b]))
             if len(full) <= MAX_CODE_CHARS:
@@ -1631,6 +2596,7 @@ def _ts_render(path: str, a: int, b: int, outline_types: tuple[str, ...] = ()) -
     if loaded is None:
         return ""
     src, tree = loaded
+    _note_read(path, src)                           # (its key material: see scrub_key_material)
     start = src.rfind(b"\n", 0, a) + 1
     scope = tree.root_node.descendant_for_byte_range(a, max(a, b - 1)) or tree.root_node
     while scope.parent is not None and (scope.start_byte > a or scope.end_byte < b):
@@ -2474,7 +3440,7 @@ def _finish_routes() -> None:
                     return "".join(one(part) for part in re.split(r"\s*\+\s*(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", v[6:]))
                 return v
             handler, how = r["handler"], f"Spring {r['owner']}.{r['method']}"
-            extra = ""
+            extra, extra_raws = "", None
             if r["owner_kind"] == "interface_declaration":      # API-first: route on the interface
                 for cls in impl_cache.get(r["owner"], []):
                     impl = next(iter(_BY_NAME.get(f"{cls}.{r['method']}", [])), None)
@@ -2482,11 +3448,12 @@ def _finish_routes() -> None:
                         extra = f"declared on interface {r['owner']}.{r['method']}:\n" + \
                                 "\n".join("// " + ln for ln in r["handler"].source.split("\n")[:6])
                         handler, how = impl, f"Spring {cls}.{r['method']} implementing {r['owner']}"
+                        extra_raws = r["handler"].raws
                         break
             for cp in r["class_paths"]:
                 for mp in r["paths"]:
                     for verb in r["verbs"]:
-                        _add_route(verb, _join(const(cp), const(mp)), handler, how, extra)
+                        _add_route(verb, _join(const(cp), const(mp)), handler, how, extra, extra_raws)
             continue
         if r.get("nest"):
             _add_route(r["verb"], _join(nest_prefix, r["path"]), r["handler"], r["how"])
@@ -3478,7 +4445,8 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
         fail(f"{file!r} names a file whose name is not valid UTF-8 - refused, no request can carry it. "
              f"Rename the file.")
         return None
-    text = strip_comments(path, path.read_text(encoding="utf-8", errors="replace"))
+    raw = path.read_text(encoding="utf-8", errors="replace")       # (its key material: see scrub_key_material)
+    text = strip_comments(path, raw)
     lines, keys = text.split("\n"), _pem_keys(text, written=True)
     if _is_config_file(path):
         suffix = path.suffix.lower()
@@ -3490,13 +4458,14 @@ def _read_ref(ref: str, syms: dict[str, Symbol], bases: list[Path] | None = None
             fail(f"line range {a}-{b} is outside {file} ({len(lines)} lines)")
             return None
         _hide_pem_lines(lines, [(f, t) for f, t in keys if f < a - 1 or t > b - 1])    # nor is a key the range cuts
-        return Symbol(ref, "lines", _shown(path), a, _head(tidy("\n".join(lines[a - 1:b]))))
+        return Symbol(ref, "lines", _shown(path), a, _head(tidy("\n".join(lines[a - 1:b]))),
+                      raws={str(rp): _text_material(raw)})
     if target:
         names = [n for (f, n) in _BY_FILE if f == str(rp)]
         fail(f"{target!r} not found in {file}." + (_close(target, names) or
              (f" It has: {', '.join(names[:8])}" if names else "")))
         return None
-    return Symbol(file, "file", _shown(path), 1, _head(tidy("\n".join(lines))))
+    return Symbol(file, "file", _shown(path), 1, _head(tidy("\n".join(lines))), raws={str(rp): _text_material(raw)})
 
 
 def _shown(path: Path) -> str:
@@ -5659,22 +6628,41 @@ def build_state(c: Claim) -> dict:
 
     When the code does not fit, the part the claim names is preferred over the first N
     characters, and the cut is marked so the model knows it is judging an excerpt."""
-    parts, seen_src, budget = [], set(), MAX_CODE_CHARS
+    parts, seen_src, budget, raws = [], set(), MAX_CODE_CHARS, []
     for s in c.symbols:
         if s.source in seen_src or budget <= 0:
             continue
         seen_src.add(s.source)
+        raws.append(s.raws)
         shown = _shown(Path(s.file)) if os.path.isabs(s.file) else s.file     # never an absolute path
         head = f"# {shown}:{s.line}\n"
         body, _cut = _relevant_slice(s.source, c.text, max(0, budget - len(head)))
         block = head + body
         parts.append(block)
         budget -= len(block)
-    state = {"claim": c.text, "code": redact("\n\n".join(parts))}
+    # the last step: in each symbol's part, the key material of the files it was read from, as written (1.7.12)
+    state = {"claim": c.text, "code": _scrub_parts(redact("\n\n".join(parts)), parts, raws)}
     resolved = [r for s in c.symbols for r in resolve_arithmetic(s.source, Path(s.file).suffix)]
     if resolved:
         state["computed_values"] = "\n".join(dict.fromkeys(resolved))
     return state
+
+
+def _scrub_parts(text: str, parts: list[str], raws: list[dict]) -> str:
+    """`text`, redact() of `parts` joined, with each part's key material hidden in that part alone: the material of
+    the files its symbol was read from (see Symbol.raws), so one file's key never hides another file's code. Each part
+    starts with its own `# file:line` head; when redaction took one away (a key across two parts), or a part's head
+    stands in the text more than once (a part's code that holds it), all of `text` is read with the material of every
+    part."""
+    starts, at = [], 0
+    for k, part in enumerate(parts):
+        head = ("\n\n" if k else "") + part[:part.find("\n") + 1]
+        if (i := text.find(head, at)) < 0 or not k and i or k and text.count(head) != 1:
+            return scrub_key_material(text, _joined([material_of(r) for r in raws]))
+        at = i + len(head)
+        starts.append(at - len(head) + (2 if k else 0))
+    ends = starts[1:] + [len(text)]
+    return "".join(scrub_key_material(text[x:y], material_of(r)) for x, y, r in zip(starts, ends, raws))
 
 
 def estimate_cost(claims: list[Claim], samples: int = 1) -> float:

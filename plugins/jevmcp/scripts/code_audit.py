@@ -966,8 +966,13 @@ class Unit:
     path: str
     start: int            # 1-based, inclusive
     end: int
-    text: str             # as sent (comments removed unless kept; secrets redacted)
+    text: str             # as sent (comments removed unless kept; secrets redacted; key material hidden)
     raw: str = ""
+    # the text before key material was hidden, when that changed it: build_state cuts a long unit where it cut that
+    # text, then hides the material in what is left (so hiding it never lets more, or less, of the unit be sent; a run
+    # shorter than `<redacted>` makes the code that much longer than MAX_CODE_CHARS)
+    unscrubbed: str = field(default="", repr=False)
+    material: dd.KeyMaterial = field(default=dd.NO_MATERIAL, repr=False)
 
 
 _DEF = re.compile(r"^(?:\s{0,4})(?:@\w|def |async def |class |func |fn |pub |impl |struct |enum |trait |"
@@ -1348,6 +1353,7 @@ def collect_units(root: Path, entries: list[dict], scope: str = "changed", base:
                         unread.add(f)
                     continue
                 raw_lines = raw_all.split("\n")
+                material = dd.key_material(raw_all)     # the key material of the file as written (1.7.12)
                 sent_lines = file_text(p, key[1])
                 pem = dd._pem_keys("\n".join(sent_lines), written=not dd._is_config_file(Path(f)))
                 units = []
@@ -1359,8 +1365,14 @@ def collect_units(root: Path, entries: list[dict], scope: str = "changed", base:
                     if cut := [(x, y) for x, y in pem if x < a - 1 <= y or x <= b - 1 < y]:
                         lines = list(sent_lines)
                         dd._hide_pem_lines(lines, cut)
-                    units.append(Unit(f, a, b, unit_text(f, "\n".join(lines[a - 1:b]), key[1]),
-                                      "\n".join(raw_lines[a - 1:b])))
+                    text = unit_text(f, "\n".join(lines[a - 1:b]), key[1])
+                    if len(text) > MAX_CODE_CHARS:      # build_state cuts it where 1.7.11 did, then scrubs what is left
+                        scrubbed, changed = text, bool(material)
+                    else:
+                        scrubbed = dd.scrub_key_material(text, material)      # the last step that changes the text
+                        changed = scrubbed != text
+                    units.append(Unit(f, a, b, scrubbed, "\n".join(raw_lines[a - 1:b]), text if changed else "",
+                                      material if changed else dd.NO_MATERIAL))
                 cache[key] = units
             units = cache[key]
             if units and "tests-only" in (e.get("scope") or []) and f.endswith(".rs"):   # none: never re-read a link
@@ -1405,9 +1417,12 @@ def build_state(rule: str, unit: Unit) -> dict:
     rule = re.sub(r"[ \t]+", " ", rule.strip())
     if len(rule) > MAX_RULE_CHARS:
         rule = rule[:MAX_RULE_CHARS].rsplit(" ", 1)[0] + " ..."
-    code = unit.text
-    if len(code) > MAX_CODE_CHARS:
-        code = code[:MAX_CODE_CHARS].rsplit("\n", 1)[0] + "\n# ... cut here: the rest of this unit was not sent"
+    code, note = unit.text, "\n# ... cut here: the rest of this unit was not sent"
+    if unit.unscrubbed:         # cut where 1.7.11 cut (or not at all), then hide the key material in what is left
+        if len(unit.unscrubbed) > MAX_CODE_CHARS:
+            code = dd.scrub_key_material(unit.unscrubbed[:MAX_CODE_CHARS].rsplit("\n", 1)[0] + note, unit.material)
+    elif len(code) > MAX_CODE_CHARS:
+        code = code[:MAX_CODE_CHARS].rsplit("\n", 1)[0] + note
     return {"a_rule": rule, "b_code": f"# {unit.path}:{unit.start}-{unit.end}\n{code}"}
 
 

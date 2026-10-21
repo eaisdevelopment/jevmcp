@@ -1853,10 +1853,11 @@ def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
             withheld.append(path)
             continue
         cmt = _COMMENT_ONLY.get(Path(path).suffix)
-        lines = []
+        lines, written = [], []
         for ln in p.splitlines():
             if ln.startswith(("index ", "similarity", "old mode", "new mode")):
                 continue
+            written.append(ln)
             if cmt and ln[:1] in "+-" and not ln.startswith(("+++", "---")) \
                     and re.match(rf"^\s*(?:{cmt})", ln[1:]):
                 continue                        # author text: judge the code, not the comments
@@ -1865,18 +1866,21 @@ def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
         # a long line is cut, then cleaned too (as a log line, but with only 1.7.7's workspace cuts: it is code)
         body = "\n".join(_scrub(light_clean(x[:2000], _CHANGE_ROOTS)) for x in body.split("\n"))
         (named if path and any(norm_path(e).endswith(path) or path.endswith(norm_path(e)) for e in f.named or f.files)
-         else other).append(body)
+         else other).append((body, written))
     out, size, cut = [], 0, 0              # (text, cut short) of each file sent
-    for body in named + other:
+    sent = []                              # the file each of `out` is from, as written (see _change_material)
+    for body, written in named + other:
         if size + len(body) > MAX_DIFF_CHARS:
             room = MAX_DIFF_CHARS - size
             if room > 400:
                 keep = _hunks_within(body, room)
                 out.append((keep, True))
+                sent.append(written)
                 size += len(keep)
             cut += 1
             continue
         out.append((body, False))
+        sent.append(written)
         size += len(body)
     # The secret files' note names the first 4 whole while their names fit in 400 characters, and counts the rest.
     names = withheld[:4]
@@ -1897,6 +1901,7 @@ def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
     text = whole(out, cut)
     while out and len(text) > MAX_DIFF_CHARS:
         body, short = out.pop()
+        written = sent.pop()
         cut += 0 if short else 1
         room = MAX_DIFF_CHARS - len(whole(out, cut)) - (1 if out else 0) - len(_REST)
         keep = _hunks_within(body, room) if room > 400 else ""
@@ -1904,8 +1909,31 @@ def _diff_for(f: Failure, diff: str | None) -> tuple[str, list[str]]:
             keep = body[:body.rfind("\n", 0, room) + 1] if room > 400 else ""
         if keep and len(keep) < len(body):
             out.append((keep, True))
+            sent.append(written)
         text = whole(out, cut)
+    # the last step: each file's key material out of its own part of the excerpt (1.7.12); a run shorter than
+    # `<redacted>` makes the excerpt that much longer than MAX_DIFF_CHARS (the cap is kept on the text before it)
+    if text:
+        text = whole([(dd.scrub_key_material(t, _change_material(w), diff=True), short)
+                      for (t, short), w in zip(out, sent)], cut)
     return text or "(the change edits only files that are not sent)", withheld
+
+
+def _change_material(lines: list[str]) -> "dd.KeyMaterial":
+    """The key material of one file's change as written, no line left out (see dd.key_material): over its hunks
+    as _redact_diff reads them, and over the new and the old file's lines, each by itself (a key whose lines a
+    removed line splits)."""
+    text = "\n".join(lines)
+    if "PRIVATE KEY" not in text:
+        return dd.NO_MATERIAL
+    found = [dd.key_material(text, _redact_diff(text), diff=True)]
+    if (shown := "\n".join(light_clean(ln, []) for ln in lines)) != text:
+        # as the excerpt cleans its lines, after redaction (a control character between a key's pieces goes)
+        found.append(dd.key_material(shown, _redact_diff(shown), diff=True))
+    for side in "+-":
+        found.append(dd.key_material("\n".join(ln[1:] for ln in lines if ln[:1] in (side, " ")
+                                                 and not ln.startswith(("+++", "---")))))
+    return dd._joined(found)
 
 
 _REST = "\n# ... the rest of this file's change was not sent"
