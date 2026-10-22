@@ -307,7 +307,7 @@ key into an issue or pull request.
   private key whose marker stood in a removed comment or docstring is no longer sent. 1.7.13 cleans
   a Java, JavaScript or TypeScript file edited during a check from the file as it then is.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (945 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (954 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
