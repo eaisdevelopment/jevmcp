@@ -2148,6 +2148,9 @@ def strip_comments(path: Path, text: str) -> str:
         return "\n".join(lines)
     if path.suffix in TREE_SITTER and (loaded := _ts_load(str(path))) is not None:
         src, tree = loaded
+        if src.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n") != text:
+            src = text.encode("utf-8", "replace")   # the file changed since it was parsed: clean the text given
+            tree = _ts_parser(path.suffix).parse(src)
         return _ts_blank(src, 0, len(src), tree.root_node).decode("utf-8", "replace")
     if path.suffix in C_FAMILY:
         return mask_c_family(text, strings=False, rust=path.suffix == ".rs")
@@ -2554,6 +2557,16 @@ def _ts_load(path: str):
     return src, parser.parse(src)
 
 
+def _ts_at(path: str, src: bytes | None):
+    """The parse of `src`, the bytes a symbol of `path` was indexed from: the cache's when it still holds them,
+    else `src` parsed again (the cache dropped the file, or read it again after an edit during the run)."""
+    loaded = _ts_load(path)
+    if src is None or (loaded is not None and (loaded[0] is src or loaded[0] == src)):
+        return loaded
+    parser = _ts_parser(Path(path).suffix)
+    return (src, parser.parse(src)) if parser is not None else None
+
+
 _COMMENT_TYPES = {"comment", "line_comment", "block_comment", "html_comment"}
 
 
@@ -2574,8 +2587,8 @@ def _ts_blank(src: bytes, a: int, b: int, scope) -> bytes:
     return bytes(buf)
 
 
-def _ts_node_at(path: str, a: int, b: int, types: tuple[str, ...]):
-    loaded = _ts_load(path)
+def _ts_node_at(path: str, a: int, b: int, types: tuple[str, ...], indexed: bytes | None = None):
+    loaded = _ts_at(path, indexed)
     if loaded is None:
         return None, None
     src, tree = loaded
@@ -2589,10 +2602,10 @@ def _ts_node_at(path: str, a: int, b: int, types: tuple[str, ...]):
     return src, node
 
 
-def _ts_render(path: str, a: int, b: int, outline_types: tuple[str, ...] = ()) -> str:
-    """Code from the start of the line holding byte `a` to byte `b`, comments removed.
-    A class too long for the budget is shown as an outline: members, bodies elided."""
-    loaded = _ts_load(path)
+def _ts_render(path: str, a: int, b: int, outline_types: tuple[str, ...] = (), indexed: bytes | None = None) -> str:
+    """Code from the start of the line holding byte `a` to byte `b`, comments removed, of `indexed` (the bytes the
+    offsets were found in; see _ts_at). A class too long for the budget is shown as an outline: members, bodies elided."""
+    loaded = _ts_at(path, indexed)
     if loaded is None:
         return ""
     src, tree = loaded
@@ -2604,7 +2617,7 @@ def _ts_render(path: str, a: int, b: int, outline_types: tuple[str, ...] = ()) -
     full = tidy(_ts_blank(src, start, b, scope).decode("utf-8", "replace"))
     if len(full) <= MAX_CODE_CHARS or not outline_types:
         return full
-    _, node = _ts_node_at(path, a, b, outline_types)
+    _, node = _ts_node_at(path, a, b, outline_types, src)
     body = node.child_by_field_name("body") if node is not None else None
     if body is None:
         return full
@@ -2697,7 +2710,7 @@ def index_java_file(p: Path, syms: dict[str, Symbol]) -> int:
         nonlocal count
         a, b = (start if start is not None else node.start_byte), node.end_byte
         count += 1
-        loader = (lambda a=a, b=b: _ts_render(fs, a, b, _JAVA_TYPES if outline else ()))
+        loader = (lambda a=a, b=b: _ts_render(fs, a, b, _JAVA_TYPES if outline else (), src))
         return _register(syms, Symbol(name, kind, fs, node.start_point[0] + 1, value=value[:400], loader=loader),
                          bare=bare, merge=merge)
 
@@ -2887,7 +2900,7 @@ def index_js_file(p: Path, syms: dict[str, Symbol], root: Path) -> int:
         nonlocal count
         a, b = (start if start is not None else node.start_byte), node.end_byte
         count += 1
-        loader = (lambda a=a, b=b: _ts_render(fs, a, b, _JS_CLASSES if outline else ()))
+        loader = (lambda a=a, b=b: _ts_render(fs, a, b, _JS_CLASSES if outline else (), src))
         return _register(syms, Symbol(name, kind, fs, node.start_point[0] + 1, value=value[:400], loader=loader),
                          bare=bare, merge=merge)
 
@@ -3181,7 +3194,7 @@ def _js_calls(p: Path, src: bytes, tree, root: Path, routers: set[str], clients:
             stmt = stmt.parent
         a, b = stmt.start_byte, stmt.end_byte
         call_sym = Symbol(f"{prop.upper()} {path}", "function", fs, n.start_point[0] + 1,
-                          loader=lambda a=a, b=b: _ts_render(fs, a, b))
+                          loader=lambda a=a, b=b: _ts_render(fs, a, b, (), src))
         last = handlers[-1]
         href = None
         if last.type == "identifier":

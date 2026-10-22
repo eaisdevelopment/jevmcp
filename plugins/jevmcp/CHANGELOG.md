@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.7.13 — 2026-10-22
+
+**A Java, JavaScript or TypeScript file edited during a check is cleaned from the file as it then
+is.** Spec drift parses these files once and keeps up to 48 parses. In 1.7.12 and earlier, a file
+changed while a check ran (a long-running server, an editor saving) was handled from the parse
+made before the change:
+- a line range, and code audit's units, were cleaned from the old parse though the new text was
+  read: a private key the edit had deleted was sent, as its key material was taken from the new
+  text;
+- a symbol whose file the 48 parses no longer held was cut from the new text at the offsets found
+  in the old one: a slice that started after `password =` sent the value without its name.
+
+Now a line range and code audit clean the text they read, parsing it again when it differs from
+the kept parse, and a symbol is shown from the text it was found in, as Python symbols always were.
+The kept parses are never cleared during a check. A file that did not change is handled from the
+same parse as before, so nothing else changes. The server now keeps the text of each Java,
+JavaScript and TypeScript file it has indexed (it already kept each Python file's).
+
+Measured offline against 1.7.12:
+- An edit during a check (line feeds and CRLF, the file's parse kept and dropped): 1.7.12 sends the
+  deleted key and the password; 1.7.13 sends neither, and the line range and units hold the edited
+  file.
+- Every leak fuzzer: only_new 0 (gap_fuzz on 1,000 files and every fuzz_vs_release figure); the
+  over-hide corpus fails the same 12 coverage cases as 1.7.12.
+- jevmcp's own spec, code-audit and CI states are byte-identical to 1.7.12's (954, 4,530 and 121).
+
 ## 1.7.12 — 2026-10-21
 
 **A private key whose marker cleaning removed is no longer sent.** Spec drift and code audit remove
