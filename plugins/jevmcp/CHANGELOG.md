@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.7.14 — 2026-10-23
+
+**A spec sentence that holds `return`, `import`, `def`, `==`, `>=`, `<=` or `->` is a requirement,
+not code.** Spec drift leaves out lines of code that stand outside a code block (an indented block,
+a docstring's example). In 1.7.13 and earlier, any sentence with one of those words or operators
+anywhere was taken for such a line and dropped without a word. A draft left it out, and
+`--strict` and `validate_spec_map` could not report it as unmapped. Of five ordinary requirements
+("must return HTTP 404", "users can import orders", "between >= 0 and <= 50 percent", "each refund
+-> one ledger entry", "must never be charged"), 1.7.13 kept one.
+
+Now a sentence is code only when it has the shape of code: a `def` or `class` line, an import
+statement, a call or an assignment on its own, a doctest, a line that ends in `f(x);` or opens a
+block. Every line read as code is listed, never a problem: `--draft-map` prints `N lines in <spec>
+read as code, so not a spec sentence: lines ...`, and the map check prints the same note, on the
+command line and in `validate_spec_map`'s text and `notes`, with or without `strict`.
+
+Measured offline:
+- 6,000 Markdown, reStructuredText and Python files under one developer's code folder: 3,493 sentences that 1.7.13
+  dropped are now spec sentences. In a sample of 40, about half are requirement-like prose; the rest are
+  code and converter leftovers that a reviewer excludes. 415 lines that 1.7.13 kept are now read as code;
+  all 40 sampled are code.
+- jevmcp's own docs: 3 sentences were never in its map (now mapped); the self-check map has 958
+  claims, and all 958 states are byte-identical to 1.7.13's. CI triage's 121 states are unchanged; code
+  audit uses its own line test and is unchanged.
+- No new kind of data is sent. A spec sentence is sent as written in the map, as before (PRIVACY.md),
+  and a line shaped like code, such as `password = "..."`, is still not a spec sentence.
+
+The maintainers' source and its tests are now in a private repository whose CI runs the whole suite
+on every push. There, on a clean runner, one test of 1.7.13 failed: it assumed a temporary folder
+outside `/home`, which CI triage's cleaning leaves as written. The test now checks the cleaned path;
+the product is unchanged.
+
 ## 1.7.13 — 2026-10-22
 
 **A Java, JavaScript or TypeScript file edited during a check is cleaned from the file as it then

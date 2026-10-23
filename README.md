@@ -7,7 +7,7 @@ screens everything in seconds, at a fraction of a cent per item; the agent spend
 only on what the fast model flags. Jev is a classifier from TypeSafe (<https://typesafe.ai>), not a chat model: it picks one of the
 answers it is offered and gives a probability for each.
 
-Current release: **1.7.13** (2026-10-22) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
+Current release: **1.7.14** (2026-10-23) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
 
 ## One plugin, installed once
 
@@ -305,15 +305,18 @@ key into an issue or pull request.
   1.7.10 was then run on its own code with its own three tools again; 1.7.11 fixes the 44 problems
   that found, in the code or by a corrected sentence. 1.7.12 closes the gap 1.7.11 documented: a
   private key whose marker stood in a removed comment or docstring is no longer sent. 1.7.13 cleans
-  a Java, JavaScript or TypeScript file edited during a check from the file as it then is.
+  a Java, JavaScript or TypeScript file edited during a check from the file as it then is. 1.7.14
+  reads a spec sentence that holds `return`, `import`, `def`, `>=` or `->` as a requirement, not as code.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (954 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (958 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
   on Linux, macOS and Windows, from an empty uv cache, runs the seven free tools and checks that the
   three that send refuse without a key.
-- **3,000 automated tests.**
+- **About 3,200 automated tests**, offline. They live with the source in the maintainers' private repository,
+  where CI runs all of them on every push; this public repository holds the built plugin, and a test there keeps
+  its scripts byte-identical to that source.
 
 ## Repository layout
 

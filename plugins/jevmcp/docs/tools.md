@@ -1723,6 +1723,12 @@ Both run the same checks. These make the map "not ready":
 | `map entry N: spec file 'X' not found - NOT checked` | The `spec` path is relative to where the checker runs. |
 | `map entry N: spec file 'X' looks like a secrets file - refused, never sent - NOT checked.` | The `spec` path names a secret file (`.env`, `.env.md`, a key or credentials file, any case) or a link to one. Its text is never sent. Point the entry at the real spec. |
 | `the map's "specs" names 'X', which is not found` | A spec file or folder the user named was moved, renamed or deleted, so nothing there is looked at. Write its new path in `specs` (ask the user), or draft the map again. Reported with or without `strict`. |
+
+A spec line with the shape of code (a `def` or `class` line, an import statement, a call or an
+assignment on its own, a doctest) is no spec sentence: the map check, with or without `strict`, and
+`--draft-map` list such lines as `N lines in <spec> read as code, so not a spec sentence: lines ...`, a
+note that is never a problem. A sentence is not read as code just because it holds `return`, `import`,
+`def`, `==`, `>=` or `->`. If a listed line is a requirement, reword it or map it by hand.
 | `the map's "specs" names 'X', which cannot be read as a spec: ...` | The named folder has no `.md` or `.rst` file left, or cannot be read, or the named file is a secret file (`... looks like a secrets file - refused, never sent`). Reported with or without `strict`. |
 | `the map's "specs" should be a list ...` / `holds N item(s) that are not paths` | `specs` was edited by hand into something else. Write each named spec file or folder as a string. |
 

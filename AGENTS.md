@@ -61,7 +61,8 @@ nobody writes them by hand. CI triage needs no map.
 ## If you are changing this repository
 
 `plugins/jevmcp/scripts/*.py` (`spec_drift.py`, `jevmcp_server.py`, `jevkit.py`, `ci_triage.py`,
-`code_audit.py`) are copies of the maintainers' working tree, kept byte-identical by a test. Open
+`code_audit.py`) are copies of the maintainers' source, kept byte-identical by a test. The source and its
+tests are in the maintainers' private repository, not here. Open
 an issue or a pull request describing the change rather than only editing the copy, so it can be
 applied at the source. Everything user-visible — tool names, exit codes, key
 sources — is asserted by tests, and the docs above are checked against the code.

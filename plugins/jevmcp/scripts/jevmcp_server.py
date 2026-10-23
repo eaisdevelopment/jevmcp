@@ -92,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.13"
+VERSION = "1.7.14"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -380,7 +380,8 @@ SPEC_DRIFT_TOOLS = [
                           "description": "with strict false, the notes reading the map printed: the coverage and "
                                          "review notes, which strict makes problems, and the note on entries whose "
                                          "sentence moved (also in moved_entries) (cut to fit: notes_total counts them; past 20, the text names "
-                                         "a file that lists every one); empty with strict true"},
+                                         "a file that lists every one); with strict true, only the notes on spec "
+                                         "lines read as code (never a problem)"},
                 "notes_total": {"type": "integer"},
                 "warnings": {"type": "array", "items": {"type": "string"},
                              "description": "spec files in a folder the map's specs names that were NOT used: a "
@@ -1427,6 +1428,9 @@ class Server:
                 every.write_text(json.dumps(notes, indent=1, ensure_ascii=False), encoding="utf-8",
                                  errors="replace")
                 lines.append(f"note: ... and {len(notes) - 20} more (all {len(notes)} notes are listed in {every})")
+        if strict:                                # lines read as code: said, never a problem
+            notes = list(dd.MAP_SKIPPED)
+            lines += [f"note: {n}" for n in notes]
         lines += _warning_text(warnings)
         index_notes = _index_notes(self.unpaired)
         lines += [f"note: {n}" for n in index_notes]
@@ -1451,8 +1455,8 @@ class Server:
                       "full_check_cost_usd": round(dd.estimate_cost(claims), 6),
                       "full_check_cost_usd_max": round(dd.estimate_cost(claims, self.samples), 6),
                       "samples": self.samples, "problems": _fit(problems, INLINE_BUDGET // 3),
-                      "problems_total": len(problems), "notes": [] if strict else _fit(notes, INLINE_BUDGET // 3),
-                      "notes_total": 0 if strict else len(notes), "warnings": warnings,
+                      "problems_total": len(problems), "notes": _fit(notes, INLINE_BUDGET // 3),
+                      "notes_total": len(notes), "warnings": warnings,
                       "moved_entries": moved, "index_notes": index_notes}
         return "\n".join(lines), False, structured
 

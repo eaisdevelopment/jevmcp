@@ -3978,12 +3978,40 @@ def _mentions(sent: str, syms: dict[str, Symbol]) -> tuple[list[Symbol], list[st
     return found, why
 
 
-_CODE_LINE = re.compile(r'[=<>]=|->|\bf"|\{[a-z_]+[.\[]|\breturn\b|\bdef\b|\bimport\b')
+# A line of code that escaped a code block (an indented block, a docstring's example): the sentence has the SHAPE of
+# code. A keyword or an operator somewhere in it is not enough: "must return HTTP 404", "can import orders" and
+# "between >= 0 and <= 50" are requirements, which 1.7.13 dropped unseen.
+_CODE_LINE = re.compile(
+    r"^(?:>>>|\.\.\.\s)"                                                   # a doctest
+    r"|^(?:async\s+)?def\s+\w+\s*\(|^class\s+\w+\s*[(:{<]"                 # def f(, class C(
+    r"|^(?:fn|func|function|let|const|var|val|pub)\s+\w+\s*[(<:=]"         # fn f(, const x =
+    r"|^import\s+(?:static\s+)?[\w.*]+(?:\s+as\s+\w+)?\s*(?:;|$)|^import\s+[{*]|^import\s+\w+\s+from\s+[\"']"  # imports
+    r"|^@[A-Z]\w*(?:\(.*?\))?\s+(?:public|private|protected|static|final|void|class|fun|def|async)\b"   # @Test public void
+    r"|^from\s+[\w.]+\s+import\s+[\w*(]"
+    r"|^(?:return|raise|yield|await|assert)\s+[^\s]*[.(\[]"               # return self.x / raise E(
+    r"|^\S+\s*=\s*\S+$|^[\w.\[\]]+\s*[-+*/%|&]?=\s*[\w.]+\("              # x = y, total = f(
+    r"|^[\w.]+\(.*\)\s*;?$"                                               # a call on its own
+    r"|^(?:if|for|while|switch|catch|else\s+if)\s*\(.*\)\s*\{\s*$"            # if (...) {
+    r"|\w\([^()]*\)\s*[;{]\s*$"                                            # f(x);  f(x) {  - not "...(see 3.1);"
+    r'|\bf"[^"]*\{')                                                     # an f-string with a placeholder
 
 
-def spec_sentences(doc: Path, min_len: int = 5, code_line: re.Pattern = _CODE_LINE):
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def code_lines_note(where: str, skipped: list[tuple[int, str]]) -> str:
+    """What a draft and a map check say about the sentences read as code (never a --strict problem)."""
+    return (f"{_plural(len(skipped), 'line')} in {where} read as code, so not a spec sentence: "
+            + ("line " if len(skipped) == 1 else "lines ") + ", ".join(str(ln) for ln, _ in skipped[:15])
+            + (" ..." if len(skipped) > 15 else "") + " - if one is a requirement, reword it or map it by hand")
+
+
+def spec_sentences(doc: Path, min_len: int = 5, code_line: re.Pattern = _CODE_LINE,
+                   skipped: list | None = None):
     """(line, sentence) for every sentence that could be a requirement: not a
-    heading, not inside a code fence, at least `min_len` words, not code.
+    heading, not inside a code fence, at least `min_len` words, not code. A sentence long enough but
+    read as code goes to `skipped`, so it can be listed: dropping it unseen reads as "not a requirement".
 
     Two shapes need help before they read as requirements at all — found by running this
     tool on its own PRIVACY.md, where they produced three "??" results out of four claims:
@@ -4030,11 +4058,15 @@ def spec_sentences(doc: Path, min_len: int = 5, code_line: re.Pattern = _CODE_LI
                     continue
                 cells = [c.strip() for c in sent.strip().strip("|").split("|") if c.strip()]
                 sent = " - ".join(cells)
+            written = sent.strip()          # a doctest's ">>>" is code: the strip below takes it as a quote mark
             sent = " ".join(sent.strip(" -*|#>").split())
             if first and item and _STEM_HEADING.search(_ANCHOR.sub("", heading) if _CJK_ANY.search(heading) else heading):
                 sent, first = f"{heading}: {sent}", False
-            if _long_enough(sent, min_len) and (ROUTE_RE.search(sent) or not code_line.search(sent)):
-                yield lineno, sent
+            if _long_enough(sent, min_len):
+                if ROUTE_RE.search(sent) or not (code_line.search(sent) or code_line.search(written)):
+                    yield lineno, sent
+                elif skipped is not None:
+                    skipped.append((lineno, sent))
 
 
 def find_claims(doc: Path, syms: dict[str, Symbol], min_len: int = 5,
@@ -4270,9 +4302,11 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
         for w in _parts(s.name):
             inv.setdefault(w, []).append(i)
     entries = []
+    as_code: list[str] = []
     for d in docs:
         paragraphs = dict(prose_blocks(d))
-        for lineno, sent in spec_sentences(d):
+        skipped: list[tuple[int, str]] = []
+        for lineno, sent in spec_sentences(d, skipped=skipped):
             # Every sentence gets an entry - one with no word to match gets no suggestion - so a fresh draft
             # covers the whole spec. Words in any script: требования, 要件; a Latin word stays one next to
             # them (MAX_SIZEは -> max, size).
@@ -4300,6 +4334,8 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
                 "alternatives": [_ref_of(s) for s in best[1:4]],
                 "spec_text": _norm_text(paragraphs.get(lineno, sent)),
             })
+        if skipped:
+            as_code.append(code_lines_note(Path(d).as_posix(), skipped))
     specs = [Path(d).as_posix() for d in docs] if named_specs is None else list(dict.fromkeys(named_specs))
     existed = os.path.lexists(out)                     # a link loop or a link to nothing is there too: never unlinked
     try:
@@ -4318,6 +4354,8 @@ def draft_map(docs: list[Path], syms: dict[str, Symbol], out: Path, named_specs:
           + (": lines " + ", ".join(str(e["line"]) for e in guessed[:25]) + (" ..." if len(guessed) > 25 else "")
              if guessed else ""))
     print(f"  {sum(1 for e in entries if not e['code'])} have no suggestion")
+    for n in as_code:
+        print(f"  {n}")
     print(f"\nNext: open {out}; its \"_readme\" explains every field. Fix each \"code\" and set \"status\" to\n"
           f"\"reviewed\"; for sentences that are not requirements set \"status\" to \"excluded\" with a \"why\"."
           + (f"\nThen check it loads:  spec_drift.py --map {out} --dry-run --strict" if cli else ""))
@@ -4664,6 +4702,7 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
             problems.append(msg)
 
     MAP_WARNINGS.clear()
+    MAP_SKIPPED.clear()
     bases = list({b.resolve(): b for b in [Path.cwd(), src or Path.cwd(), path.parent]}.values())
     spec_cache: dict[str, tuple] = {}
     covered: dict[str, set] = {}                            # real path of a spec file -> sentences the map covers
@@ -4800,7 +4839,10 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
                 if any(_DENSE_LETTER.search(t) for _, t in prose_blocks(Path(f)))   # _spec_index; a space in a code
                 else (lambda t: t))                 # span is the snapshot's business, not coverage's
         texts = {flat(t) for t in texts}
-        sents = list(spec_sentences(Path(f)))
+        as_code: list[tuple[int, str]] = []
+        sents = list(spec_sentences(Path(f), skipped=as_code))
+        if as_code:
+            MAP_SKIPPED.append(code_lines_note(shown.get(f, os.path.relpath(f)), as_code))
         joined = ({ln: flat(_dense_join(" ".join(ts))) for ln, ts in on_line.get(f, {}).items()}
                   if any(_CJK_ANY.search(s) for _, s in sents) else {})      # English: exactly as before
         missing = [(ln, snt) for ln, snt, n in ((ln, snt, flat(_norm_text(snt))) for ln, snt in sents)
@@ -4810,7 +4852,7 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
                          f"checked: lines "
                          + ", ".join(str(ln) for ln, _ in missing[:15]) + (" ..." if len(missing) > 15 else ""))
     MAP_NOTES[:] = notes
-    for n in notes:
+    for n in notes + MAP_SKIPPED:
         print(f"  note: {n}")
     for w in MAP_WARNINGS:
         print(f"  WARNING: {w}")
@@ -4818,6 +4860,7 @@ def claims_from_map(path: Path, syms: dict[str, Symbol], src: Path | None = None
 
 
 MAP_NOTES: list[str] = []      # coverage and review notes from the last map load (--strict turns them into problems)
+MAP_SKIPPED: list[str] = []    # spec lines the last map load read as code: said, never a --strict problem
 MAP_COUNTS: dict[str, int] = {"excluded": 0, "moved": 0}
 MAP_WARNINGS: list[str] = []   # spec files in a folder the map's "specs" names that were NOT used (skipped folder, link, ...)
 
