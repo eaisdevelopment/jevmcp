@@ -43,6 +43,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1586,7 +1587,10 @@ def _rule_key(rule: str) -> str:
 
 
 def load_verdicts(path: Path) -> list[dict]:
-    """The recorded verdicts, oldest first; none when there is no file. A file that is not a verdicts file stops."""
+    """The recorded verdicts, oldest first; none when there is no file. A file that is not a verdicts file stops, and so
+    does a link: a project's verdicts file is its own file, never one a link leads to."""
+    if os.path.islink(path):
+        raise Stop(f"{path.name} is a link - refused; a verdicts file must be a plain file beside the map")
     if not path.is_file():
         return []
     try:
@@ -1652,14 +1656,23 @@ def apply_verdicts(results: list[dict], verdicts: list[dict]) -> list[str]:
 
 
 def record_verdicts(path: Path, new: list[dict]) -> int:
-    """Append verdicts (already checked) to the file, creating it; returns how many it holds."""
+    """Append verdicts (already checked) to the file, creating it; returns how many it holds. Written through a new
+    temporary file of its own (O_EXCL, never through a link a project planted under a predictable name), then moved
+    over the file, which load_verdicts refuses when it is a link."""
     have = load_verdicts(path)
     stamp = datetime.date.today().isoformat()
     have += [{**v, "date": v.get("date") or stamp} for v in new]
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps({"_readme": VERDICTS_README, "version": 1, "verdicts": have}, indent=1,
-                              ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    data = (json.dumps({"_readme": VERDICTS_README, "version": 1, "verdicts": have}, indent=1, ensure_ascii=False)
+            + "\n").encode("utf-8")
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
     return len(have)
 
 

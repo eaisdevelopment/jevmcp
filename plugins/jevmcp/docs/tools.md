@@ -1793,7 +1793,9 @@ use it.` **Structured fields:** `verdicts_file`, `recorded`, `total`.
 are recorded for the findings of the last run.` · `N verdict(s) match no result of the last
 check_code_rules run, so nothing was written: <file>:<lines> (<rule_source>); ... - pass file, lines
 and rule_source exactly as the results show them.` · `rule_map.verdicts.json is not a verdicts file:
-it needs {"verdicts": [...]}` · the map errors of `validate_rule_map`.
+it needs {"verdicts": [...]}` · `rule_map.verdicts.json is a link - refused; a verdicts file must be a
+plain file beside the map` (also from `check_code_rules` and `validate_rule_map`) · the map errors of
+`validate_rule_map`. The file is written through a new temporary file of its own, never through a link.
 
 ## The rule map
 

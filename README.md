@@ -309,7 +309,7 @@ key into an issue or pull request.
   reads a spec sentence that holds `return`, `import`, `def`, `>=` or `->` as a requirement, not as code.
   1.8.0 keeps the verdicts an agent records after investigating code-audit findings, in the repository.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (983 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (984 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
