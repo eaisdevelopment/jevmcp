@@ -649,6 +649,9 @@ conversation: a file in the repository never counts as your consent.
 - Command line, code audit: the results in `audit.json` in the folder you run it from (or
   `--out FILE`).
 - The spec map and the rule map you create, in your project — you decide whether to commit them.
+- Code audit: the verdicts you record (`record_code_audit_verdicts`) in `rule_map.verdicts.json` beside the
+  rule map — each finding's rule, file, lines, a SHA-256 digest of the code as sent (never the code), the
+  verdict, your reason and the date. It is never sent; you decide whether to commit it.
 - Answers from earlier runs of all three families, in `~/.cache/jevmcp/verdicts.json`
   (`$XDG_CACHE_HOME` is respected), so a request that has not changed is not paid for twice. It
   holds a SHA-256 digest of each request and the model's answers - never your code, your logs or

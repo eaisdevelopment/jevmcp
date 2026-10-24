@@ -29,7 +29,7 @@ Three tool families, each with its own skill, all on one MCP server:
   Tools: `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`; skill
   `code-audit`.
 
-**One MCP server** (`jevmcp`) holds all ten tools. It keeps the parsed code in memory, so after an
+**One MCP server** (`jevmcp`) holds all eleven tools. It keeps the parsed code in memory, so after an
 edit only the changed files are read again (a 16,000-file repository: ~2 s instead of ~20 s), and
 it holds your API key so the agent never sees it. Every tool that sends has a free preview, and
 the skills ask for your consent before the first send of each kind of data in a project.
@@ -49,7 +49,7 @@ the skills ask for your consent before the first send of each kind of data in a 
   data. The draft, validate and preview tools work without it. One key serves every tool in the
   plugin.
 - Linux, macOS or Windows. On all three, CI starts the server from an empty uv cache on every
-  change to the plugin, runs the seven free tools and checks that the three that send refuse without a key. The
+  change to the plugin, runs seven of its free tools and checks that the three that send refuse without a key. The
   three that send have been run with a real key on Linux only. Every file is read and written as
   UTF-8, and a CI log, spec or rule file that Windows PowerShell 5.1 saved as UTF-16 is read too, so
   specs, rules and logs in any language work on Windows too; so do non-ASCII file names on Linux

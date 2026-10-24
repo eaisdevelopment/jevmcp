@@ -7,7 +7,7 @@ screens everything in seconds, at a fraction of a cent per item; the agent spend
 only on what the fast model flags. Jev is a classifier from TypeSafe (<https://typesafe.ai>), not a chat model: it picks one of the
 answers it is offered and gives a probability for each.
 
-Current release: **1.7.14** (2026-10-23) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
+Current release: **1.8.0** (2026-10-24) — [what changed in each release](plugins/jevmcp/CHANGELOG.md).
 
 ## One plugin, installed once
 
@@ -18,7 +18,7 @@ no second install and no second API key.
 |---|---|---|
 | **spec-drift** (skill) + tools on the `jevmcp` server (`check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map`) | Checks code against its design spec or requirements. Jev screens every requirement against the code that implements it; the agent investigates only what it flags and says which side to fix. Java/Spring, JavaScript/TypeScript, Python, and any language by line range. Specs in English and other Latin-alphabet languages, and in Chinese, Japanese and Korean (CJK, see below); specs in other scripts are read a paragraph at a time, and Thai, Lao, Khmer and Tibetan mostly not at all ([details](plugins/jevmcp/README.md#languages)). | available |
 | **ci-triage** (skill) + `triage_ci_failure`, `preview_ci_triage` | Reads a failed pipeline and says what actually broke: for each distinct failure, whether the change under test caused it, the error line that says why, and the next step. A GitHub Actions run of your project (read with your own `gh`), or a log from any CI. | available |
-| **code-audit** (skill) + `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map` | Screens a codebase against its own rules and conventions: each rule you approved from CLAUDE.md, AGENTS.md, CONTRIBUTING or a style guide, against each unit of code it covers. | available |
+| **code-audit** (skill) + `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`, `record_code_audit_verdicts` | Screens a codebase against its own rules and conventions: each rule you approved from CLAUDE.md, AGENTS.md, CONTRIBUTING or a style guide, against each unit of code it covers. The verdicts you record after investigating are kept in the repository, so a false alarm on unchanged code is listed last next time, and a rule that mostly raises false alarms is named. | available |
 
 Each tool is its own skill, and all of them share the single `jevmcp` MCP server: one install,
 one server process, one API key. Your client can still approve or disable each tool separately.
@@ -182,7 +182,7 @@ Some limits are choices, and can change when the evidence does:
   how long it was silent and where the same step passed, and the skill tells the agent to look for
   a hang; the question itself stays as it was measured until it is measured on a set of hangs.
 - Codex: the code-audit tools, and a CI triage sent from a Codex session, have not been verified.
-- On macOS and Windows, CI tests the server and the seven free tools on every change to the plugin; the three
+- On macOS and Windows, CI tests the server and seven of its free tools on every change to the plugin; the three
   tools that send have been run with a real key on Linux only.
 - Cursor is not supported (it does not expand `${PLUGIN_ROOT}`). VS Code, GitHub Copilot and Kiro
   may load the portable plugin, but none has been tested end to end.
@@ -307,12 +307,13 @@ key into an issue or pull request.
   private key whose marker stood in a removed comment or docstring is no longer sent. 1.7.13 cleans
   a Java, JavaScript or TypeScript file edited during a check from the file as it then is. 1.7.14
   reads a spec sentence that holds `return`, `import`, `def`, `>=` or `->` as a requirement, not as code.
+  1.8.0 keeps the verdicts an agent records after investigating code-audit findings, in the repository.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (958 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (983 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,
-  on Linux, macOS and Windows, from an empty uv cache, runs the seven free tools and checks that the
+  on Linux, macOS and Windows, from an empty uv cache, runs seven of its free tools and checks that the
   three that send refuse without a key.
 - **About 3,200 automated tests**, offline. They live with the source in the maintainers' private repository,
   where CI runs all of them on every push; this public repository holds the built plugin, and a test there keeps

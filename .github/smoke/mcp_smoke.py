@@ -24,6 +24,7 @@ SERVER = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().par
 FREE = {"draft_spec_map", "validate_spec_map", "preview_spec_check", "draft_rule_map", "validate_rule_map",
         "preview_code_audit", "preview_ci_triage"}
 SENDING = {"check_spec_drift", "triage_ci_failure", "check_code_rules"}
+RECORD = {"record_code_audit_verdicts"}     # free, but only after a check_code_rules run: here it must refuse
 SPEC = ["An order may contain at most 50 items, set by MAX_ITEMS in app.py.",
         "A larger order is refused with the error “too many items — слишком много товаров”.",
         "Заказ не может содержать больше MAX_ITEMS позиций.",
@@ -166,7 +167,7 @@ def main() -> int:
         c.p.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         c.p.stdin.flush()
         names = {t["name"] for t in c.call("tools/list")["result"]["tools"]}
-        assert names == FREE | SENDING, f"tools: {sorted(names)}"
+        assert names == FREE | SENDING | RECORD, f"tools: {sorted(names)}"
         results = []
 
         def check(label: str, ok: bool, detail: str, text: str = "") -> None:
@@ -207,6 +208,9 @@ def main() -> int:
         else:
             check("check_code_rules", False, "its first answer names no confirm_units to agree to", text)
         run("triage_ci_failure", want_error=True, must=("API key",), logs=[LOG])
+        run("record_code_audit_verdicts", want_error=True, must=("no check_code_rules run", "Nothing was written"),
+            map="rule_map.json", verdicts=[{"file": "app.py", "lines": "1-2", "rule_source": "CONTRIBUTING.md:3",
+                                            "verdict": "confirmed", "why": "smoke"}])
         c.close()
     print(f"{sum(results)} of {len(results)} checks passed")
     return 0 if all(results) else 1

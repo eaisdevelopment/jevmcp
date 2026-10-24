@@ -92,7 +92,7 @@ import jevkit  # noqa: E402               # ask -> re-ask -> agreement, cost est
 import ci_triage as ci  # noqa: E402      # CI failure triage
 import code_audit as audit  # noqa: E402  # code audit against the project's own rules
 
-VERSION = "1.7.14"
+VERSION = "1.8.0"
 
 # MCP 2026-07-28 is stateless: every request carries its protocol version and the client's
 # capabilities in _meta, and there is no initialize handshake. Clients of earlier revisions
@@ -131,7 +131,8 @@ Three families, each with a skill that has the details:
   run of this project with the user's gh, or log files), then triage_ci_failure with the
   snapshot the preview returned.
 - Code audit - does the code break the project's own written rules? Works off rule_map.json:
-  draft_rule_map, validate_rule_map, preview_code_audit, check_code_rules.
+  draft_rule_map, validate_rule_map, preview_code_audit, check_code_rules, then
+  record_code_audit_verdicts for what investigating each finding showed.
 A map is drafted by its draft tool and reviewed with the user entry by entry; nothing is
 checked until entries are reviewed.
 
@@ -589,7 +590,12 @@ _AUDIT_RESULT_OUT = {  # one rule on one unit of code (code_audit.result_for)
         "file": _STR, "lines": _STR, "rule": _STR, "rule_source": _STR,
         "label": {"type": "string", "enum": ["BREAKS", "review", "??", "ok", "n/a", "not checked"]},
         "confidence": _NUM, "why": _STR, "p_breaks": _OPT_NUM, "verdict": _OPT_STR,
-        "probabilities": _PROBS, "samples": _INT, "request_id": _OPT_STR, "note": _REASKED_NOTE},
+        "probabilities": _PROBS, "samples": _INT, "request_id": _OPT_STR, "note": _REASKED_NOTE,
+        "code_sha": {**_STR, "description": "the code as sent, hashed: what a recorded verdict is kept for"},
+        "recorded": {"type": "string", "enum": ["confirmed", "false_positive"],
+                     "description": "what the project recorded for this rule and this code, unchanged"},
+        "recorded_note": _STR,
+        "rule_record": {**_STR, "description": "this rule's recorded verdicts were mostly false positives"}},
     "required": ["file", "lines", "rule", "rule_source", "label", "why"]}
 _RULE_MAP_ARG = {"type": "string", "maxLength": 500,
                  "description": "The rule map (rule_map.json: the project's own rules, each with the files it "
@@ -751,12 +757,18 @@ CODE_AUDIT_TOOLS = [
                                  "description": "every result, with the exact code sent"},
                 "flagged": {"type": "array", "items": _AUDIT_RESULT_OUT,
                             "description": "BREAKS, then review from P(breaks) 0.3 up, then ??, then anything not "
-                                           "checked, then the rest of review; cut to fit - the rest is in "
-                                           "results_file (flagged_total counts them all)"},
-                "flagged_total": _INT},
+                                           "checked, then the rest of review, then findings recorded as false "
+                                           "positives for unchanged code; cut to fit - the rest is in results_file "
+                                           "(flagged_total counts them all)"},
+                "flagged_total": _INT,
+                "recorded_false_positives": {**_INT, "description": "flagged results the project recorded as false "
+                                                                    "positives for this rule and this code"},
+                "rule_record_notes": {**_STRS, "description": "rules whose recorded verdicts were mostly false "
+                                                              "positives"}},
             "required": ["summary", "project", "map", "scope", "rules_reviewed", "units", "files", "requests",
                          "checked", "counts", "cost_usd", "complete", "not_checked", "not_checked_total",
-                         "results_file", "flagged", "flagged_total"],
+                         "results_file", "flagged", "flagged_total", "recorded_false_positives",
+                         "rule_record_notes"],
         },
     },
     {
@@ -830,9 +842,12 @@ CODE_AUDIT_TOOLS = [
                                                                  "(claude_notes.md, agents-howto.md) that the map "
                                                                  "does not use and the finder does not take: they "
                                                                  "may hold rules, or be about the agent. Pass them "
-                                                                 "in draft_rule_map's docs if they hold rules"}},
+                                                                 "in draft_rule_map's docs if they hold rules"},
+                "verdicts": {**_INT, "description": "verdicts recorded in the map's .verdicts.json file"},
+                "poor_record": {**_STRS, "description": "reviewed rules whose recorded verdicts were mostly false "
+                                                        "positives: reword or exclude them"}},
             "required": ["project", "map", "ready", "entries", "reviewed", "draft", "excluded", "problems",
-                         "notes", "rule_files_not_in_map", "candidate_rule_files"],
+                         "notes", "rule_files_not_in_map", "candidate_rule_files", "verdicts", "poor_record"],
         },
     },
     {
@@ -869,6 +884,43 @@ CODE_AUDIT_TOOLS = [
                             "description": "how many entries carry each flag (negation, exception, compound, "
                                            "conditional, process, linter, conduct, comments, descriptive)"}},
             "required": ["project", "out", "sources", "entries", "draft", "excluded", "flagged"],
+        },
+    },
+    {
+        "name": "record_code_audit_verdicts",
+        "title": "Record what investigating code-audit findings showed",
+        "annotations": {"title": "Record what investigating code-audit findings showed", "readOnlyHint": False,
+                        "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+        "description": (
+            "Free - sends nothing. After investigating findings of the last check_code_rules run, record each "
+            "one's verdict: confirmed (the code broke the rule) or false_positive (it did not), with why. They "
+            "go to the map's .verdicts.json file (rule_map.verdicts.json), which the project keeps under "
+            "version control. Later audits list a false positive for the same rule and unchanged code after "
+            "everything still to read, say when a confirmed one is still there, and name rules whose findings "
+            "were mostly false positives. Nothing is ever left out. Record only what you investigated."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "verdicts": {"type": "array", "minItems": 1, "maxItems": 500, "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "file": {"type": "string", "maxLength": 1000},
+                        "lines": {"type": "string", "maxLength": 40},
+                        "rule_source": {"type": "string", "maxLength": 1100},
+                        "verdict": {"type": "string", "enum": ["confirmed", "false_positive"]},
+                        "why": {"type": "string", "minLength": 1, "maxLength": 500}},
+                    "required": ["file", "lines", "rule_source", "verdict", "why"]},
+                    "description": "One per investigated finding, with file, lines and rule_source exactly as "
+                                   "the result showed them."},
+                "map": _RULE_MAP_ARG, "project": _PROJECT_ARG,
+            },
+            "required": ["verdicts"],
+            "additionalProperties": False,
+        },
+        "outputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {"verdicts_file": _STR, "recorded": _INT, "total": _INT},
+            "required": ["verdicts_file", "recorded", "total"],
         },
     },
 ]
@@ -988,6 +1040,7 @@ class Server:
         self.map_used = map_path or ""
         self.caches: dict[Path, dict] = {}    # one parsed index per project
         self.cache: dict = {}
+        self.audit_results: tuple | None = None    # (root, map, results) of the last check_code_rules
         self.lock = threading.Lock()          # the checker's index lives in module globals: one user at a time
         self.last_index = ""
         self.unpaired: list[str] = []         # files of a language with no parser, noted as the command line does
@@ -1852,7 +1905,7 @@ class Server:
                       "files": len({u.path for _, u in pairs}), "requests": len(items), "checked": 0,
                       "counts": {k: 0 for k in ("BREAKS", "review", "??", "ok", "n/a")}, "cost_usd": 0.0,
                       "complete": True, "not_checked": [], "not_checked_total": 0, "results_file": None, "flagged": [],
-                      "flagged_total": 0}
+                      "flagged_total": 0, "recorded_false_positives": 0, "rule_record_notes": []}
         if not items:
             text = "\n".join([f"code audit ({rel}): nothing to audit - no reviewed rule applies to the units in scope. "
                               f"That is not a pass: check the rules' scope, or use files / all=true.",
@@ -1871,21 +1924,29 @@ class Server:
                                                for r, s in zip(results, done.results)]},
                                   indent=1, ensure_ascii=False), encoding="utf-8",
                        errors="replace")          # a name that is not UTF-8: '?', as in the reply
+        record_notes = audit.apply_verdicts(results, audit.load_verdicts(audit.verdicts_path(self.root / rel)))
+        self.audit_results = (self.root, rel, results)
         counts = {k: sum(1 for r in results if r["label"] == k) for k in ("BREAKS", "review", "??", "ok", "n/a")}
         flagged = [r for r in audit.in_triage_order(results) if r["label"] in ("BREAKS", "review", "??", "not checked")]
+        recorded_fp = sum(1 for r in flagged if audit.triage_group(r) == "recorded")
         shown = _fit(flagged, INLINE_BUDGET)
         head = (f"code audit ({rel}, {scope}): {len(items)} rule/unit checks on {structured['units']} unit(s) | "
                 f"checked in {time.perf_counter() - t:.1f}s | ${done.cost_usd:.5f}")
         to_read = sum(1 for r in results if audit.triage_group(r) in ("BREAKS", "review"))
         lines = [head, f"BREAKS {counts['BREAKS']} · review {counts['review']} · ?? {counts['??']} · ok {counts['ok']}"
                        f" · n/a {counts['n/a']}   full results (with the exact code sent): {out}",
-                 f"To read: {to_read} (BREAKS, and review from P(breaks) 0.3 up); the rest of review is low risk.",
-                 *(f"note: {n}" for n in audit.NOTES)]
+                 f"To read: {to_read} (BREAKS, and review from P(breaks) 0.3 up); the rest of review is low risk."
+                 + (f" {recorded_fp} more were recorded as false positives for this code, unchanged: listed last."
+                    if recorded_fp else ""),
+                 *(f"note: {n}" for n in audit.NOTES), *(f"note: {n}" for n in record_notes),
+                 "After investigating, record each finding's verdict with record_code_audit_verdicts."]
         titles = {"BREAKS": "BREAKS - investigate each (is the code or the rule wrong?):",
                   "review": "review - P(breaks) 0.3 and up, highest first; investigate each:",
                   "??": "?? - NOT a pass: the code shown cannot settle the rule:",
                   "not checked": "not checked - NOT a pass:",
-                  "low": "review, P(breaks) below 0.3 - low risk; spot-check a few:"}
+                  "low": "review, P(breaks) below 0.3 - low risk; spot-check a few:",
+                  "recorded": "recorded earlier as false positives for this rule and this code, unchanged - "
+                              "read only if the rule changed in meaning:"}
         last = None
         for r in flagged[:20]:
             group = audit.triage_group(r)
@@ -1897,6 +1958,7 @@ class Server:
                       f"    rule ({r['rule_source']}): {r['rule'][:200]}", f"    why: {r['why']}"]
             if r.get("note"):
                 lines.append(f"    note: {r['note']}")
+            lines += [f"    {r[k]}" for k in ("recorded_note", "rule_record") if r.get(k)]
         failed_all = not any(r["label"] != "not checked" for r in results)
         is_error = bool(done.problems) or (bool(done.vendor) and failed_all)
         if len(flagged) > 20:                     # an error reply has no structuredContent
@@ -1911,13 +1973,14 @@ class Server:
         structured.update(summary=head, checked=sum(1 for r in results if r["label"] != "not checked"),
                           counts=counts, cost_usd=done.cost_usd, complete=done.complete, not_checked=kept,
                           not_checked_total=len(not_checked),
-                          results_file=str(out), flagged=shown, flagged_total=len(flagged))
+                          results_file=str(out), flagged=shown, flagged_total=len(flagged),
+                          recorded_false_positives=recorded_fp, rule_record_notes=record_notes)
         return "\n".join(lines), is_error, structured
 
     def validate_rule_map(self, map: str | None = None) -> tuple:
         rel = self.resolve_rule_map(map)
         entries = audit.load_map(self.root / rel)
-        v = audit.validate(entries, self.root)
+        v = audit.validate(entries, self.root, audit.load_verdicts(audit.verdicts_path(self.root / rel)))
         used = {e.get("source") for e in entries}
 
         def real(f: str) -> Path | None:
@@ -1935,7 +1998,7 @@ class Server:
         structured = {"project": str(self.root), "map": rel, "ready": ready, "entries": v["entries"],
                       "reviewed": v["reviewed"], "draft": v["draft"], "excluded": v["excluded"],
                       "problems": v["problems"], "notes": v["notes"], "rule_files_not_in_map": unused,
-                      "candidate_rule_files": maybe}
+                      "candidate_rule_files": maybe, "verdicts": v["verdicts"], "poor_record": v["poor_record"]}
         lines = [f"{rel}: {v['entries']} entries - {v['reviewed']} reviewed (sent by check_code_rules), "
                  f"{v['draft']} still draft (never sent until reviewed), {v['excluded']} excluded"]
         if v["problems"]:
@@ -1949,6 +2012,10 @@ class Server:
         if v["notes"]:
             lines += ["", "Phrasing that tends to come back ?? or as a false alarm - rewrite as one positive "
                           "condition the code shows:"] + [f"  - {x}" for x in v["notes"]]
+        if v["poor_record"]:
+            lines += ["", f"Rules whose recorded verdicts were mostly false positives "
+                          f"({audit.verdicts_path(Path(rel)).name}) - reword or exclude them:"]
+            lines += [f"  - {x}" for x in v["poor_record"]]
         if unused:
             lines += ["", "Rule files in the project that the map does not use: " + ", ".join(unused[:20])]
         if maybe:
@@ -1956,6 +2023,33 @@ class Server:
                           "(pass them in draft_rule_map's docs if they hold rules for the code): "
                       + ", ".join(maybe[:20]) + (f" (+{len(maybe) - 20} more)" if len(maybe) > 20 else "")]
         return "\n".join(lines), False, structured
+
+    def record_code_audit_verdicts(self, verdicts: list[dict], map: str | None = None) -> tuple:
+        rel = self.resolve_rule_map(map)
+        last = self.audit_results
+        if last is None or last[:2] != (self.root, rel):
+            raise ToolError(f"no check_code_rules run of {rel} in this session: verdicts are recorded for the "
+                            f"findings of the last run. Nothing was written.")
+        new, missing = [], []
+        for v in verdicts:
+            hit = next((r for r in last[2] if r.get("code_sha") and r["file"] == v["file"]
+                        and r["lines"] == v["lines"] and r["rule_source"] == v["rule_source"]), None)
+            if hit is None:
+                missing.append(f"{v['file']}:{v['lines']} ({v['rule_source']})")
+                continue
+            new.append({"rule": hit["rule"], "rule_source": hit["rule_source"], "file": hit["file"],
+                        "lines": hit["lines"], "code_sha": hit["code_sha"], "verdict": v["verdict"],
+                        "why": " ".join(v["why"].split())})
+        if missing:
+            raise ToolError(f"{len(missing)} verdict(s) match no result of the last check_code_rules run, so nothing "
+                            f"was written: " + "; ".join(missing[:10])
+                            + " - pass file, lines and rule_source exactly as the results show them.")
+        path = audit.verdicts_path(self.root / rel)
+        total = audit.record_verdicts(path, new)      # call() holds self.lock: one tool at a time
+        name = os.path.relpath(path, self.root)
+        text = (f"recorded {len(new)} verdict(s) in {name} ({total} in all). Commit it with {rel}: later audits "
+                f"use it.")
+        return text, False, {"verdicts_file": name, "recorded": len(new), "total": total}
 
     def draft_rule_map(self, docs: list[str] | None = None, out: str | None = None) -> tuple:
         out = out or "rule_map.json"
@@ -2093,6 +2187,7 @@ class Server:
             "triage_ci_failure": self.triage_ci_failure, "preview_ci_triage": self.preview_ci_triage,
             "check_code_rules": self.check_code_rules, "preview_code_audit": self.preview_code_audit,
             "validate_rule_map": self.validate_rule_map, "draft_rule_map": self.draft_rule_map,
+            "record_code_audit_verdicts": self.record_code_audit_verdicts,
         }.get(name)
         if tool is None:
             raise ProtocolError(INVALID_PARAMS, f"Unknown tool: {name} (the tools are: "

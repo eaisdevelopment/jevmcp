@@ -33,7 +33,9 @@ import argparse
 import codecs
 import contextlib
 import errno
+import datetime
 import fnmatch
+import hashlib
 import json
 import locale
 import os
@@ -407,6 +409,14 @@ FLAGS = {
     "conditional": re.compile(r"(?i)(?:^|[:;]\s+)(?:where|wherever|when|whenever|if)\b"
                               r"(?!\s+(?:in doubt|possible|practical|appropriate|necessary|needed|applicable)\b)"
                               r"[^,]{3,160},|\b(?:that|which)\s+(?:needs?|wants?|requires?)\b"),
+    # a claim about several units at once (1.8.0): one unit cannot show that something happens "in one place only",
+    # is "consistent across" the code, is not duplicated, or that each X has its test - such a rule comes back ?? or
+    # n/a unit by unit. A rule every unit can keep on its own ("No module imports requests") is not one.
+    "cross-unit": re.compile(r"(?i)\b(?:only (?:one|a single)\b|exactly one\b|in (?:one|a single) place|"
+                             r"nowhere else|anywhere else|elsewhere\b|(?:consistent(?:ly)?|the same) across|"
+                             r"across (?:all|every|the (?:code ?base|project|repo(?:sitory)?))|duplicat\w*|"
+                             r"(?:every|each) \w+(?: \w+)? (?:has|must have|should have|gets?) (?:a |an |its own )?"
+                             r"(?:tests?|unit tests?|docs?|documentation|counterpart)\b)"),
 }
 LANG_SCOPES = [(re.compile(r"(?i)\bpython\b|\.py\b"), ["**/*.py"]),
                (re.compile(r"(?i)\btypescript\b|\.tsx?\b"), ["**/*.ts", "**/*.tsx"]),
@@ -799,10 +809,20 @@ def draft_map(root: Path, docs: list[str] | None = None, warnings: list[str] | N
                 e.update(status="excluded", why="about the development process, not the code")
             elif "linter" in flags:
                 e.update(status="excluded", why="a linter or formatter already checks this mechanically")
+            if (twin := next((x for x in entries if _same_rule(x["rule"], sentence)), None)) is not None:
+                e["flags"] = e["flags"] + ["duplicate"]
+                e["duplicate_of"] = f"{twin['source']}:{twin['line']}"
             entries.append(e)
     # the files read, each once: not a second link to one, nor one git lists that is gone from disk
     return {"_readme": MAP_README, "version": 1, "sources": [f for f in dict.fromkeys(sources) if f in read],
             "entries": entries}
+
+
+def _same_rule(a: str, b: str) -> bool:
+    """The same rule written twice (AGENTS.md and CLAUDE.md often repeat each other): equal but for case,
+    punctuation and spacing."""
+    norm = (lambda t: " ".join(re.sub(r"[^\w]+", " ", t.lower()).split()))
+    return bool(norm(a)) and norm(a) == norm(b)
 
 
 MAP_README = [
@@ -817,7 +837,9 @@ MAP_README = [
     "in a separate request. Every other rule sees the code with comments removed.",
     "`flags` say what to look at: negation, exception, compound, conditional (rewrite as one positive condition "
     "the code shows); process, linter, conduct (start excluded); descriptive (no rule wording - a statement, not "
-    "a rule, unless you make it one).",
+    "a rule, unless you make it one); cross-unit (one unit of code cannot settle it - in one place only, consistent "
+    "across the code, each X has a test: exclude it or rewrite it as what every unit must do); duplicate (the same "
+    "rule as `duplicate_of`: keep one).",
 ]
 
 
@@ -918,8 +940,9 @@ def _half_character(e: dict) -> str | None:
     return f"\\u{ord(m.group()):04x}" if m else None
 
 
-def validate(entries: list[dict], root: Path) -> dict:
-    """Free: counts, entries not yet reviewed, rules whose scope matches no file, risky phrasing."""
+def validate(entries: list[dict], root: Path, verdicts: list[dict] | None = None) -> dict:
+    """Free: counts, entries not yet reviewed, rules whose scope matches no file, risky phrasing; with the recorded
+    `verdicts`, the ones a verdicts file cannot hold and the rules with a poor record."""
     files = tracked_files(root)
     problems, notes = [], []
     reviewed = [e for e in entries if e.get("status") == "reviewed"]
@@ -946,6 +969,13 @@ def validate(entries: list[dict], root: Path) -> dict:
             if risky:
                 notes.append(f"{where}: rule reads as {', '.join(risky)} - LIKELY ?? or false alarms; "
                              f"rewrite it as one positive condition")
+            if "cross-unit" in flags:
+                notes.append(f"{where}: rule is about several units at once - one unit of code cannot settle it, so "
+                             f"LIKELY ?? or n/a; exclude it, or rewrite it as what every unit must do")
+            if (twin := next((j for j, x in enumerate(entries[:i]) if x.get("status") == "reviewed"
+                              and _same_rule(str(x.get("rule") or ""), str(e.get("rule") or ""))), None)) is not None:
+                notes.append(f"{where}: the same rule as entry {twin} - every unit is checked against it twice "
+                             f"(and paid twice); exclude one")
             if "conditional" in flags:      # measured: one such rule gave 22 false flags and nothing real
                 notes.append(f"{where}: rule is conditional - LIKELY false alarms, because one unit of code seldom "
                              f"shows whether the condition holds; name a trigger the code shows instead, like "
@@ -953,10 +983,18 @@ def validate(entries: list[dict], root: Path) -> dict:
     # in NOTES, not in `notes`: those are about a rule's phrasing; only entries whose scope is a list of globs
     ok = [e for e in reviewed if isinstance(s := e.get("scope", []), list) and all(isinstance(g, str) for g in s)]
     NOTES[:] = [n] if (n := not_utf8_note(ok, files)) else []
+    record = []
+    if verdicts:
+        problems += [f"verdicts file: {x}" for x in verdict_problems(verdicts)]
+        by_rule = {_rule_key(str(e.get("rule") or "")): e for e in reviewed}
+        for rule, (fp, n) in rule_records(verdicts).items():
+            if poor_record(fp, n) and (e := by_rule.get(rule)) is not None:
+                record.append(f"entry {entries.index(e)} ({e.get('source')}:{e.get('line')}): {fp} of {n} recorded "
+                              f"verdicts were false positives - reword the rule or exclude it")
     return {"entries": len(entries), "reviewed": len(reviewed),
             "draft": sum(e.get("status") == "draft" for e in entries),
             "excluded": sum(e.get("status") == "excluded" for e in entries),
-            "problems": problems, "notes": notes}
+            "problems": problems, "notes": notes, "verdicts": len(verdicts or []), "poor_record": record}
 
 
 # ─────────────────────────────────────────────────────────────── 3. units of code
@@ -1480,7 +1518,7 @@ def check(items: list[jevkit.Item], key: str, jobs: int = 8, samples: int = SAMP
 def result_for(s: jevkit.Screened) -> dict:
     e, u = s.item.meta["entry"], s.item.meta["unit"]
     out = {"file": u.path, "lines": f"{u.start}-{u.end}", "rule": e.get("rule") or e.get("text"),
-           "rule_source": f"{e.get('source')}:{e.get('line')}"}
+           "rule_source": f"{e.get('source')}:{e.get('line')}", "code_sha": code_sha(s.item.state)}
     if s.error:
         return {**out, "label": "not checked", "why": s.error}
     a = s.first
@@ -1492,15 +1530,137 @@ def result_for(s: jevkit.Screened) -> dict:
 
 def triage_group(r: dict) -> str:
     """What the agent does with a result: BREAKS and 'review' (P(breaks) from 0.295 up) are read; 'low'
-    reviews are spot-checked. On a real 92-unit change that is 121 of 1535 checks to read."""
+    reviews are spot-checked. On a real 92-unit change that is 121 of 1535 checks to read. One the project
+    recorded as a false positive, for this rule and this code unchanged, is listed after them (never left out)."""
+    if r.get("recorded") == "false_positive" and r.get("label") in FLAGGED:
+        return "recorded"
     if r.get("label") == "review" and (r.get("p_breaks") or 0) < NOUL_NO:
         return "low"
     return r.get("label") or "not checked"
 
 
 def in_triage_order(results: list[dict]) -> list[dict]:
-    order = {"BREAKS": 0, "review": 1, "??": 2, "not checked": 3, "low": 4, "ok": 5, "n/a": 6}
-    return sorted(results, key=lambda r: (order.get(triage_group(r), 7), -(r.get("p_breaks") or 0)))
+    """By group, then rules with a poor record last within it, then by P(breaks)."""
+    order = {"BREAKS": 0, "review": 1, "??": 2, "not checked": 3, "low": 4, "recorded": 5, "ok": 6, "n/a": 7}
+    return sorted(results, key=lambda r: (order.get(triage_group(r), 8), bool(r.get("rule_record")),
+                                          -(r.get("p_breaks") or 0)))
+
+
+# ─────────────────────────────────────────────────────────────── 5b. verdicts the project recorded (1.8.0)
+#
+# After investigating a finding the agent records whether it was real ("confirmed") or a false alarm
+# ("false_positive") in a file next to the map, which the project keeps under version control like the map. A later
+# audit says so: a false alarm for the same rule on the same code (as sent) is listed after everything still to read,
+# with its reason; a confirmed one still there says it was confirmed; a rule whose recorded flags were mostly false
+# alarms is named, and its flags come last in their group. Nothing is left out or relabelled: changed code, or a
+# reworded rule, is a new finding. Google's AutoCommenter got from about 54% to 80% useful comments this way
+# (per-rule thresholds, rules correct but useless demoted).
+FLAGGED = ("BREAKS", "review", "??")
+VERDICTS = ("confirmed", "false_positive")
+RULE_RECORD_MIN = 5          # verdicts on a rule before its record is stated
+RULE_RECORD_FP = 0.6         # the share of false positives that names it
+VERDICTS_README = [
+    "Verdicts on code_audit / check_code_rules findings, recorded after each was investigated "
+    "(record_code_audit_verdicts writes them). Keep this file under version control with the rule map.",
+    "A verdict holds for its rule, file and `code_sha` (the code exactly as sent): when the code or the rule "
+    "changes, the finding is new again.",
+    "`verdict`: confirmed (the code broke the rule) or false_positive (it did not). `why` says what was found.",
+    f"A rule with {RULE_RECORD_MIN} or more verdicts, at least {RULE_RECORD_FP:.0%} of them false_positive, is named "
+    f"in the audit and in validate_rule_map: reword it or exclude it.",
+]
+
+
+def verdicts_path(map_path: Path) -> Path:
+    """rule_map.json -> rule_map.verdicts.json, beside it."""
+    return map_path.with_name(map_path.stem + ".verdicts.json")
+
+
+def code_sha(state: dict) -> str:
+    """The code of one request as sent, without its `# file:lines` head: the same code moved keeps its verdict."""
+    code = str(state.get("b_code", "")).split("\n", 1)
+    return hashlib.sha256((code[1] if len(code) > 1 else "").encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def _rule_key(rule: str) -> str:
+    return " ".join(str(rule or "").split())
+
+
+def load_verdicts(path: Path) -> list[dict]:
+    """The recorded verdicts, oldest first; none when there is no file. A file that is not a verdicts file stops."""
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise Stop(f"{path.name} cannot be read as a verdicts file ({type(e).__name__}: {e}); fix or remove it")
+    got = data.get("verdicts") if isinstance(data, dict) else None
+    if not isinstance(got, list) or not all(isinstance(v, dict) for v in got):
+        raise Stop(f"{path.name} is not a verdicts file: it needs {{\"verdicts\": [...]}}")
+    return got
+
+
+def verdict_problems(verdicts: list[dict]) -> list[str]:
+    out = []
+    for i, v in enumerate(verdicts):
+        missing = [k for k in ("rule", "file", "code_sha", "verdict") if not isinstance(v.get(k), str) or not v[k]]
+        if missing:
+            out.append(f"verdict {i}: no {', '.join(missing)}")
+        elif v["verdict"] not in VERDICTS:
+            out.append(f"verdict {i}: verdict must be confirmed or false_positive, not {v['verdict']!r}")
+    return out
+
+
+def rule_records(verdicts: list[dict]) -> dict[str, tuple[int, int]]:
+    """Per rule: (false positives, verdicts), the latest verdict of each finding counted once."""
+    latest = {(_rule_key(v["rule"]), v["file"], v["code_sha"]): v["verdict"] for v in verdicts
+              if not verdict_problems([v])}
+    out: dict[str, tuple[int, int]] = {}
+    for (rule, _, _), verdict in latest.items():
+        fp, n = out.get(rule, (0, 0))
+        out[rule] = (fp + (verdict == "false_positive"), n + 1)
+    return out
+
+
+def poor_record(fp: int, n: int) -> bool:
+    return n >= RULE_RECORD_MIN and fp / n >= RULE_RECORD_FP
+
+
+def apply_verdicts(results: list[dict], verdicts: list[dict]) -> list[str]:
+    """Mark each flagged result with what was recorded for it (`recorded`, `recorded_note`) and with its rule's record
+    (`rule_record`); return a note per rule with a poor record. Labels are never changed."""
+    good = [v for v in verdicts if not verdict_problems([v])]
+    latest = {(_rule_key(v["rule"]), v["file"], v["code_sha"]): v for v in good}
+    records = rule_records(good)
+    named: dict[str, str] = {}
+    for r in results:
+        if r.get("label") not in FLAGGED:
+            continue
+        rule = _rule_key(r.get("rule", ""))
+        if (v := latest.get((rule, r.get("file"), r.get("code_sha")))) is not None:
+            r["recorded"] = v["verdict"]
+            when = f" on {v['date']}" if v.get("date") else ""
+            r["recorded_note"] = (f"recorded as a false positive{when} for this rule and this code, unchanged"
+                                  if v["verdict"] == "false_positive" else
+                                  f"confirmed{when} for this rule and this code, and still not fixed") + \
+                                 (f": {v['why']}" if v.get("why") else "")
+        fp, n = records.get(rule, (0, 0))
+        if poor_record(fp, n):
+            r["rule_record"] = (f"{fp} of {n} recorded verdicts on this rule were false positives - reword it or "
+                                f"exclude it")
+            named[rule] = f"rule {r.get('rule_source')}: " + r["rule_record"]
+    return list(named.values())
+
+
+def record_verdicts(path: Path, new: list[dict]) -> int:
+    """Append verdicts (already checked) to the file, creating it; returns how many it holds."""
+    have = load_verdicts(path)
+    stamp = datetime.date.today().isoformat()
+    have += [{**v, "date": v.get("date") or stamp} for v in new]
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"_readme": VERDICTS_README, "version": 1, "verdicts": have}, indent=1,
+                              ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return len(have)
 
 
 def _project_name(root: Path, src: Path, name: str) -> str:
@@ -1574,8 +1734,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"review every entry (status draft -> reviewed/excluded) before any check.")
             return 0
         entries = load_map(a.map)
+        verdicts = load_verdicts(verdicts_path(a.map))
         if a.validate:
-            print(json.dumps(validate(entries, root), indent=1))
+            print(json.dumps(validate(entries, root, verdicts), indent=1))
             for n in NOTES:
                 print(f"code_audit: {n}", file=sys.stderr)
             return 0
@@ -1610,10 +1771,13 @@ def main(argv: list[str] | None = None) -> int:
     except dd.Stop as e:
         print(f"code_audit: {e}", file=sys.stderr)
         return 3 if isinstance(e, dd.VendorStop) else 2
+    for n in apply_verdicts(results, verdicts):
+        print(f"code_audit: {n}", file=sys.stderr)
     results = in_triage_order(results)
     for r in results:
-        if r["label"] in ("BREAKS", "review", "??"):
-            print(f"{r['label']:<7} {r['file']}:{r['lines']:<10} {(r.get('p_breaks') or 0):.2f}  {r['rule'][:70]}")
+        if r["label"] in FLAGGED:
+            print(f"{r['label']:<7} {r['file']}:{r['lines']:<10} {(r.get('p_breaks') or 0):.2f}  {r['rule'][:70]}"
+                  + (f"\n        {r['recorded_note']}" if r.get("recorded_note") else ""))
     print(f"\n{len(results)} rule/unit checks, ${run.cost_usd:.5f}" + ("" if run.complete else "  INCOMPLETE"))
     (a.out or Path("audit.json")).write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
     if run.problems:

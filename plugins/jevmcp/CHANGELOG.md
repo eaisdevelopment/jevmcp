@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.8.0 — 2026-10-24
+
+**Code audit keeps what investigating its findings showed.** A new free tool,
+`record_code_audit_verdicts`, records each investigated finding of the last `check_code_rules` run
+as `confirmed` (the code broke the rule) or `false_positive` (it did not), with why. The verdicts go
+to `rule_map.verdicts.json` beside the map, to commit with it. Each one holds the rule, file, lines,
+a SHA-256 digest of the code as sent (never the code), the verdict, the reason and the date. It is
+never sent. Later audits use it:
+- a finding recorded as a false positive, for the same rule and the same code, keeps its label and
+  is listed after everything still to read, with its reason;
+- a confirmed finding that is still there says so;
+- a rule with 5 or more recorded verdicts, at least 60% of them false positives, is named in the
+  audit and in `validate_rule_map`, and its findings come last within their group: reword it or
+  exclude it.
+
+Changed code or a reworded rule is a new finding. Nothing is left out, and no label changes.
+Google's AutoCommenter raised its share of useful comments from about 54% to 80% by per-rule
+thresholds and demoting rules that were correct but not useful; this is the same idea, kept in the
+repository.
+
+`draft_rule_map` and `validate_rule_map` flag two more kinds of rule:
+- `cross-unit`: a rule one unit of code cannot settle ("in only one place", "the same across the
+  codebase", "each public function has a unit test", "do not duplicate"), which comes back `??` or
+  `n/a` unit by unit;
+- `duplicate`: the same rule twice but for case, punctuation and spacing (AGENTS.md and CLAUDE.md
+  often repeat each other). It is checked and paid twice; `duplicate_of` names the first.
+
+Both are notes, never problems.
+
+What is sent does not change. On jevmcp's own code with six engineering rules, all 4,548 code-audit
+states are byte-identical to 1.7.14's, and CI triage's 121 states too; spec drift's code did not
+change. One more tool: the server now has eleven.
+
 ## 1.7.14 — 2026-10-23
 
 **A spec sentence that holds `return`, `import`, `def`, `==`, `>=`, `<=` or `->` is a requirement,

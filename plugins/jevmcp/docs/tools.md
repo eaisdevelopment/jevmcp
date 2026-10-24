@@ -1,6 +1,6 @@
 # What jevmcp offers: tools, skills, maps, command line
 
-This page is the reference for everything the jevmcp plugin gives you — ten MCP tools in three
+This page is the reference for everything the jevmcp plugin gives you — eleven MCP tools in three
 families (spec drift, CI failure triage, code audit), three skills, the two map files the tools
 work from (`spec_map.json` and `rule_map.json`), the result labels, and the three command-line
 scripts — with exact arguments, exact output and the errors each can return; it is written for
@@ -27,6 +27,7 @@ see [how-to.md](how-to.md). For what leaves the machine, see
 | MCP tool | `preview_code_audit` | No | No |
 | MCP tool | `validate_rule_map` | No | No |
 | MCP tool | `draft_rule_map` | No (writes a file in the project) | No |
+| MCP tool | `record_code_audit_verdicts` | No (writes a file in the project) | No |
 | Skill | `spec-drift`, `ci-triage`, `code-audit` | — | — |
 | File | `spec_map.json` and `rule_map.json` in the project | — | — |
 | Command line | `scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py` | Yes, on a real run | Yes, on a real run |
@@ -36,7 +37,7 @@ sentences with their paired code, `triage_ci_failure` sends CI log excerpts with
 change, and `check_code_rules` sends units of source code. The skills ask the user's consent for
 each kind separately. Every other tool is free and sends nothing.
 
-One MCP server holds all ten tools. It is called `jevmcp` and the client starts it as
+One MCP server holds all eleven tools. It is called `jevmcp` and the client starts it as
 `uv run --quiet --script <plugin>/scripts/jevmcp_server.py`. New tool families are added to this
 same server, so there is never a second install or a second API key.
 
@@ -1065,9 +1066,10 @@ rejected key or credits running out, no new request of the triage starts.
 
 ## The code-audit tools
 
-Four tools, in the order you use them: `draft_rule_map` collects the project's own rules into a
+Five tools, in the order you use them: `draft_rule_map` collects the project's own rules into a
 rule map, `validate_rule_map` checks the map, `preview_code_audit` shows what an audit would send
-and cost, and `check_code_rules` sends it. The skill `code-audit` is the procedure; run an audit
+and cost, `check_code_rules` sends it, and `record_code_audit_verdicts` records what investigating
+each finding showed, so later audits use it. The skill `code-audit` is the procedure; run an audit
 when the user asks or before a pull request, never after every edit.
 
 ### `draft_rule_map`
@@ -1179,7 +1181,12 @@ list: any `Word:` line counts as a key, and a Markdown heading as a comment.
 
 Each entry is flagged where its wording needs care, with `negation`, `exception`, `compound`,
 `conditional` ("When X, ...", "a function that needs X ..."), `process`, `linter`, `comments`,
-`conduct` or `descriptive`. Some start excluded, with a `why`: a rule addressed to the assistant
+`conduct`, `descriptive`, `cross-unit` or `duplicate`. A `cross-unit` rule is about several units at
+once, so no one unit can settle it: "in only one place", "the same across the codebase", "each public
+function has a unit test", "do not duplicate". A rule every unit can keep on its own ("No module imports
+requests") is not one. A `duplicate` entry is the same rule as an earlier one but for case, punctuation
+and spacing (AGENTS.md and CLAUDE.md often repeat each other); its `duplicate_of` names that entry's
+file and line. Some start excluded, with a `why`: a rule addressed to the assistant
 rather than the code (`conduct`: "Never ask the user for the key", "The assistant must get the
 user's consent before it sends code") with "about how the assistant works, not a property of the
 code"; one about process (commits, pull requests, changelogs, branches) with "about the development
@@ -1283,7 +1290,17 @@ it as one positive condition. So is a conditional rule ("Where this code reads t
 environment, it calls `env_key()`"): one unit of code seldom shows whether the condition holds, so
 it tends to come back as false alarms — measured, one such rule gave 22 false flags and nothing
 real. The note suggests naming a trigger the code shows instead, like "Every os.environ[...] read of
-the API key goes through env_key()."
+the API key goes through env_key()." A reviewed `cross-unit` rule gets the note `entry N (...): rule is
+about several units at once - one unit of code cannot settle it, so LIKELY ?? or n/a; exclude it, or
+rewrite it as what every unit must do`, and a reviewed rule that is the same as an earlier reviewed one
+gets `entry N (...): the same rule as entry M - every unit is checked against it twice (and paid twice);
+exclude one`.
+
+With a verdicts file beside the map (`rule_map.verdicts.json`, see `record_code_audit_verdicts`), a
+verdict without a rule, file, `code_sha` or verdict, or with a verdict other than `confirmed` or
+`false_positive`, is a problem (`verdicts file: verdict N: ...`). A reviewed rule with 5 or more
+recorded verdicts, at least 60% of them false positives, is listed under `Rules whose recorded verdicts
+were mostly false positives (rule_map.verdicts.json) - reword or exclude them:`.
 
 **Text:**
 
@@ -1297,8 +1314,9 @@ positive condition the code shows:`, then the rule files the map does not use, t
 documents named after a coding agent, which may hold rules or be about the agent`.
 
 **Structured fields:** `project`, `map`, `ready` (no problems and at least one reviewed rule),
-`entries`, `reviewed`, `draft`, `excluded`, `problems`, `notes`, `rule_files_not_in_map`, and
-`candidate_rule_files` (documents whose name starts with `claude` or `agents`, in any capitals, such
+`entries`, `reviewed`, `draft`, `excluded`, `problems`, `notes`, `rule_files_not_in_map`,
+`verdicts` (how many the verdicts file holds), `poor_record` (the rules with a poor record, as listed
+above), and `candidate_rule_files` (documents whose name starts with `claude` or `agents`, in any capitals, such
 as `claude_notes.md` or `docs/agents.md`, that the finder does not take and the map does not use:
 pass them in `draft_rule_map`'s `docs` if they hold rules for the code). Neither list names a link
 to a file the map uses: `AGENTS.md` linked to `CLAUDE.md` is one file.
@@ -1471,6 +1489,7 @@ count. The refusal happens before anything is sent.
 code audit (rule_map.json, changed): 4 rule/unit checks on 2 unit(s) | checked in 1.4s | $0.00018
 BREAKS 1 · review 0 · ?? 0 · ok 2 · n/a 1   full results (with the exact code sent): /tmp/jevmcp-ab12cd/last-code-audit-shop-affa4090.json
 To read: 1 (BREAKS, and review from P(breaks) 0.3 up); the rest of review is low risk.
+After investigating, record each finding's verdict with record_code_audit_verdicts.
 
 BREAKS - investigate each (is the code or the rule wrong?):
   app/report.py:1-4  P(breaks) 0.93
@@ -1487,7 +1506,8 @@ BREAKS - investigate each (is the code or the rule wrong?):
 | `counts` | `BREAKS`, `review`, `??`, `ok`, `n/a` — a count each. |
 | `cost_usd`, `complete`, `not_checked`, `not_checked_total` | What it cost; whether every request was answered (`complete` is true only when nothing stopped and nothing failed, asking a request again included; a file the audit never reads, one over 1.5 MB for example, is not a request, so `complete` can be true while such a file in scope went unread); what was not, with why the run stopped first, then one line per request that failed or whose asking again failed other than by a stop (cut to fit, about 10,000 characters); and how many lines `not_checked` holds, listed or not — not how many requests went unchecked. A stop gives one line, never one per request: each request it left unsent is a flagged item labelled `not checked`, as is a request that failed (`requests` minus `checked` counts them); each request whose asking again it cut keeps its first answer's label with a `note`, and the stop line gives their number (`re-asking stopped early - N item(s) keep their first answer's label: <reason>`). A stop before asking again cuts the asking again of every answered `review` request: each keeps its first answer's label, with `samples` 1 and the `note` `not decided by agreement: asking again failed (not asked: the run stopped early), so the label is the first answer's`, and the line reads `the run stopped early - N item(s) keep their first answer's label: <reason>` (with none, `the run stopped early: <reason>`). |
 | `results_file` | Every result with the exact code sent, in the server's private folder. |
-| `flagged`, `flagged_total` | BREAKS, then review from P(breaks) 0.3 up, then `??` and anything not checked, then the rest of review, cut to about 30,000 characters; and how many there are in all. |
+| `flagged`, `flagged_total` | BREAKS, then review from P(breaks) 0.3 up, then `??` and anything not checked, then the rest of review, then the findings recorded as false positives for this rule and this code, unchanged; cut to about 30,000 characters; and how many there are in all. |
+| `recorded_false_positives`, `rule_record_notes` | How many flagged items the verdicts file records as false positives for this rule and this code, unchanged; and one line per rule whose recorded verdicts were mostly false positives. |
 
 When TypeSafe rejected the key, or no request got an answer, the reply is an error and has no
 structured fields: its text lists the first 20 flagged items and names only the results file for
@@ -1501,7 +1521,21 @@ Each flagged item has `file`, `lines`, `rule`, `rule_source` (the rule file and 
 `confidence`, `why`, `p_breaks`, `verdict`, `probabilities`, `samples` and `request_id`. An item
 that was not checked has only `file`, `lines`, `rule`, `rule_source`, `label` and `why`. An item
 that could not be asked again also has `note`: its label is the first answer's, and the audit is
-not complete.
+not complete. Every item that got an answer has `code_sha`, a hash of the code as sent: a recorded
+verdict holds for it.
+
+**Recorded verdicts.** When the map has a verdicts file (`rule_map.verdicts.json`), each flagged item
+(BREAKS, review, `??`) is matched against it by rule, file and `code_sha`, the latest verdict
+counting. An item recorded as a false positive keeps its label, gets `recorded: false_positive` and
+`recorded_note` (`recorded as a false positive on <date> for this rule and this code, unchanged: <why>`),
+and is listed after everything else flagged, under `recorded earlier as false positives for this rule
+and this code, unchanged - read only if the rule changed in meaning:`; the `To read:` line adds `N more
+were recorded as false positives for this code, unchanged: listed last.` An item recorded as confirmed
+gets `recorded: confirmed` and `confirmed on <date> for this rule and this code, and still not fixed:
+<why>`, and stays where it is. An item of a rule with 5 or more recorded verdicts, at least 60% of them
+false positives, gets `rule_record` (`3 of 5 recorded verdicts on this rule were false positives -
+reword it or exclude it`), is listed last within its group, and a `note:` line names the rule. Changed
+code or a reworded rule is a new finding. Nothing is left out and no label changes.
 
 **Cost and duration:** charged on input tokens only, at $0.042 per million. A request is typically
 700 to 1,400 tokens, so about $0.00003 to $0.00006; a request the first answer did not settle is
@@ -1737,6 +1771,30 @@ exclusion without saying so in your report.
 
 ---
 
+### `record_code_audit_verdicts`
+
+Records what investigating findings of the last `check_code_rules` run showed: `confirmed` (the code
+broke the rule) or `false_positive` (it did not), with why. Free, sends nothing; writes the map's
+verdicts file, `rule_map.verdicts.json` beside `rule_map.json` (for another map, its name without `.json`, then
+`.verdicts.json`), which the project keeps under version control with the map. Record only findings you
+investigated.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `verdicts` | list of objects, 1 to 500 | required | Each with `file`, `lines` and `rule_source` exactly as the result showed them, `verdict` (`confirmed` or `false_positive`) and `why` (1 to 500 characters; spaces and line breaks become single spaces). |
+| `map` | string | `rule_map.json` | The rule map, relative to the project. |
+| `project` | string | see above | Absolute path of the project. |
+
+Each verdict is stored with the finding's rule, file, lines, `code_sha` and today's date. **Text:**
+`recorded 1 verdict(s) in rule_map.verdicts.json (1 in all). Commit it with rule_map.json: later audits
+use it.` **Structured fields:** `verdicts_file`, `recorded`, `total`.
+
+**Errors** (nothing is written): `no check_code_rules run of rule_map.json in this session: verdicts
+are recorded for the findings of the last run.` · `N verdict(s) match no result of the last
+check_code_rules run, so nothing was written: <file>:<lines> (<rule_source>); ... - pass file, lines
+and rule_source exactly as the results show them.` · `rule_map.verdicts.json is not a verdicts file:
+it needs {"verdicts": [...]}` · the map errors of `validate_rule_map`.
+
 ## The rule map
 
 `rule_map.json` lives in the project (at its root by default) and is committed with the code. It
@@ -1783,7 +1841,7 @@ with signature") is read too, and the drafter writes none.
 | `text` | The sentence from the rule file, without its list marker or bold marks, as `draft_rule_map` takes them out (a list item under a heading that is a statement has that heading in front; a mark it does not take out stays). Not sent while the entry has a `rule`. |
 | `rule` | What is sent. A reviewed entry with no `rule`, or an empty one, sends its `text` instead (`validate_rule_map` reports that as a problem, but an audit does not need a valid map). The drafter copies `text`; in review, rewrite it into one positive condition that a single unit either meets or breaks. |
 | `scope` | Glob patterns of the files the rule applies to, relative to the project; a pattern starting with `!` leaves files out (vendored, generated, test data), and `tests-only` limits the rule to test code. |
-| `flags` | Why the wording needs care — `negation`, `exception`, `compound` or `conditional` (rewrite it as one positive condition the code shows); `process`, `linter` or `conduct` (the entry starts excluded); `comments`; or `descriptive` (no rule wording: a statement, not a rule, unless you make it one). |
+| `flags` | Why the wording needs care — `negation`, `exception`, `compound` or `conditional` (rewrite it as one positive condition the code shows); `process`, `linter` or `conduct` (the entry starts excluded); `comments`; `descriptive` (no rule wording: a statement, not a rule, unless you make it one); `cross-unit` (one unit cannot settle it: exclude it, or rewrite it as what every unit must do); or `duplicate` (the same rule as the entry `duplicate_of` names: keep one). |
 | `keep_comments` | True only for rules about comments or docstrings: those units are sent with their comments, in their own request. |
 | `status` | `draft` until someone decides, then `reviewed` (sent) or `excluded` (not sent). |
 | `why` | Why an entry is excluded. Never sent. |

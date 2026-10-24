@@ -66,7 +66,7 @@ at the repository root, `plugins/jevmcp/.claude-plugin/plugin.json`, and
 why both sets of files exist.
 
 Installed copies live at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.claude/plugins/cache/jev/jevmcp/1.7.14/`. Older versions stay beside the new one.
+`~/.claude/plugins/cache/jev/jevmcp/1.8.0/`. Older versions stay beside the new one.
 
 Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 **"Restart to apply changes"** — the MCP server process is only replaced on restart.
@@ -77,7 +77,7 @@ Update with `claude plugin update jevmcp@jev`. After an update Claude Code says
 (`"sensitive": true`, `"required": false`), so the interactive `/plugin` screen shows a field for
 the key when the plugin is installed or enabled, and Claude Code keeps it out of every settings file
 — macOS Keychain, otherwise `~/.claude/.credentials.json`. The field is optional: with `"required":
-true` Claude Code would not start the server at all until a key was set, so the seven free tools
+true` Claude Code would not start the server at all until a key was set, so the free tools
 would be missing too. Left empty, the server gets `TYPESAFE_API_KEY=""`, the free tools work, and
 the three that send say that no key is set. `plugins/jevmcp/.mcp.json` then passes it to the server as an
 environment variable:
@@ -93,7 +93,7 @@ would end up in the shell history. Never ask the user for the key in chat, and n
 
 ### Tool names and what the model sees
 
-The ten tools appear as:
+The eleven tools appear as:
 
 ```
 mcp__plugin_jevmcp_jevmcp__check_spec_drift
@@ -106,6 +106,7 @@ mcp__plugin_jevmcp_jevmcp__check_code_rules
 mcp__plugin_jevmcp_jevmcp__preview_code_audit
 mcp__plugin_jevmcp_jevmcp__validate_rule_map
 mcp__plugin_jevmcp_jevmcp__draft_rule_map
+mcp__plugin_jevmcp_jevmcp__record_code_audit_verdicts
 ```
 
 (The shape is `mcp__plugin_<plugin>_<server>__<tool>`; plugin and server are both `jevmcp`.)
@@ -216,7 +217,7 @@ Codex merges an overlay entry only when it is a complete server definition; the 
 `mcp.json` still decides the command (checked with `codex mcp list --json`).
 
 Installed copies live at `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, for example
-`~/.codex/plugins/cache/jev/jevmcp/1.7.14/`. `~/.codex/config.toml` gains
+`~/.codex/plugins/cache/jev/jevmcp/1.8.0/`. `~/.codex/config.toml` gains
 `[plugins."jevmcp@jev"] enabled = true` (and a `[marketplaces.jev]` entry).
 
 Update with `codex plugin remove jevmcp@jev && codex plugin add jevmcp@jev`.
@@ -404,7 +405,7 @@ that is the one difference. `ci_triage.py` and `code_audit.py` never read a `.en
 
 | | Version |
 |---|---|
-| jevmcp plugin | 1.7.14 |
+| jevmcp plugin | 1.8.0 |
 | Claude Code | 2.1.278 (the `claude` CLI on the machine used for the final check reports 2.1.280; nothing here is known to have changed); 2.1.281 for the CI-triage and code-audit sessions of 2026-09-24; 2.1.282 for the Chinese, Japanese, Korean and Russian spec sessions of 2026-09-25 |
 | OpenAI Codex | `codex-cli 0.155.1`; `codex-cli 0.156.1` for the CI-triage and `codex exec` checks of 2026-09-24 |
 | uv | 0.11.16 |
@@ -412,7 +413,7 @@ that is the one difference. `ci_triage.py` and `code_audit.py` never read a `.en
 ## Next
 
 - Installing, step by step: [install.md](install.md)
-- The ten tools, their arguments and their output: [tools.md](tools.md)
+- The eleven tools, their arguments and their output: [tools.md](tools.md)
 - Recipes — first set-up, routine checks, CI: [how-to.md](how-to.md)
 - What the plugin is: [the plugin README](../README.md)
 - What is sent and what never is: [../PRIVACY.md](../PRIVACY.md)

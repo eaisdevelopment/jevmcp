@@ -23,7 +23,8 @@ sent. The audit checks only what the map names.
 ## The tools
 
 **Use the MCP tools when they are available** (server `jevmcp`): `draft_rule_map`,
-`validate_rule_map`, `preview_code_audit` (all free) and `check_code_rules` (sends). Pass `project`
+`validate_rule_map`, `preview_code_audit`, `record_code_audit_verdicts` (all free) and
+`check_code_rules` (sends). Pass `project`
 with the absolute path of the project (your working directory) in every call. Where the client
 says which project it is in, `project` must be that folder or one inside it.
 
@@ -167,6 +168,14 @@ from exit 3**, nor from a result that says `INCOMPLETE`.
 
 A result with a `note` could not be asked again: its label is the first answer's, and the audit is
 not complete. Say so.
+
+**Record what you found.** After investigating, call `record_code_audit_verdicts` with each finding
+you investigated: `confirmed` (the code broke the rule) or `false_positive` (it did not), and why.
+Tell the user it writes `rule_map.verdicts.json`, to commit with the map. Later audits list a false
+positive on unchanged code last, under its own heading (read it only if the rule changed in meaning),
+mark a confirmed one still there, and name a rule whose findings were mostly false positives:
+suggest rewording or excluding that rule to the user. Never record a finding you did not
+investigate.
 
 ## Always judge these yourself: the fast model's blind spots
 
