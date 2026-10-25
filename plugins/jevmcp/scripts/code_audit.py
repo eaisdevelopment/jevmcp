@@ -1799,7 +1799,9 @@ def claim_units(root: Path, scope: str = "changed", base: str | None = None,
     for _, u in with_docs:
         c = doc_claim(u.path, u.text, u.raw)
         if c and (k := code.get((u.path, u.start, u.end))) is not None and k.text.strip():
-            out.append((c[0], c[1], k))
+            # a unit over the cap is scrubbed of its file's key material only when its state is built (after the cut),
+            # and that covers its code, not this claim: scrub the claim with the same material, whatever the size
+            out.append((c[0], dd.scrub_key_material(c[1], u.material if u.unscrubbed else k.material), k))
     return out
 
 

@@ -10379,7 +10379,7 @@
    "spec_text": "which code is audited. only files git tracks or would commit — in a folder that is not a git repository, every code file outside the skipped folders, whatever language git prints its messages in (an empty .git folder in it or above it does not make it one, nor does a repository above a gitceilingdirectories entry or, unless gitdiscoveryacrossfilesystem is set, past a mount point); a repository git cannot read (dubious ownership, a broken index, a worktree whose repository folder is gone) stops the audit with git's message, and so does a .git folder in it or above it, up to the repository git finds or such a ceiling or mount point, that is not empty but that git does not take for a repository (its head or refs gone, as a copy or sync tool that drops empty folders can leave it), whose ignored files cannot be told apart, also when git passes it by and takes the files for those of a repository above it; so does an ignore file git cannot read (a .gitignore with no read permission, or one that is a symbolic link, which git 2.32 and later does not follow; .git/info/exclude; the global excludes file, but not git's default one in a folder that cannot be entered while core.excludesfile is not set, from which git applies nothing), as git then lists the files it would ignore, with git could not read <file (<the system's words), so which files it ignores ... cannot be told apart, and no code was read., and that stops draftrulemap and validaterulemap (and the command line's --draft-map and --validate) too, as they list the project's files the same way; a .gitignore in a folder that cannot be entered does not stop any of them — and only code files (python, javascript, typescript, go, rust, java, kotlin, scala, ruby, php, c#, c and c++, swift, shell, sql and similar); symbolic links, secret files and files over 1.5 mb are skipped. a code file whose name is not valid utf-8, in git or outside it, cannot be named in a request, so it is left out, with a note that names the ones a reviewed rule applies to in the scope audited (the bytes that are not utf-8 shown as �): the command line prints it on stderr after a check, a dry run or --validate, and validaterulemap, previewcodeaudit and checkcoderules show it as a note: line. a code file that a reviewed rule's scope applies to and that cannot be read (no read permission, or in a folder that cannot be entered) is left out with a note that names it (n code file(s) could not be read, so they were left out: ...), on stderr after a check or a dry run and as a note: line in previewcodeaudit and checkcoderules (validating a map reads no code, so it does not show this note), and the rest of the audit runs (unless, auditing the change, more changed files that cannot be read, of any kind and each in a folder that can be entered, are in the change than fit on git's command line, tens of thousands on linux: then the audit stops with n changed files cannot be read, too many for git to leave out of the comparison): in every scope (all, files, and the change, with base or not) when the file list holds the file (git lists it, or outside git its folder can be listed). a file the list does not hold (in a folder that cannot be listed, which git does not list, or one git ignores) is not found and is left out without a note, also when files names it, as in 1.7.8. a file git lists that is gone from disk is left out without a note, and so is a name in files that does not exist. on the command line, a name in --files is read from the project folder, and an absolute path inside the project, or one with .. or ./, names the file it leads to without following a link (app/../app/x.py is app/x.py); a name that is outside the project, behind a linked folder or too long to be a file name gets no note either, and is not audited; the mcp tools refuse a file outside the project. when git cannot compare the change for another reason, the audit stops with git could not compare the change, so its changed lines are not known: <git's message - name the files to audit, or audit every unit. instead of auditing part of it. for the uncommitted change on a branch with no commit yet (a new repository, or a branch made with git checkout --orphan), every file git would commit is new and is audited whole: the files added with git add and the untracked files git does not ignore. a rule covers the files its scope matches. a file is split into units at its definitions, at the top level or indented up to four spaces, so a class's methods are units of their own (decorators, attributes such as #[test] and the comments right above a definition stay with it), and a unit longer than 2,600 characters is cut into windows. a window ends where a statement does: before a line where no round or square bracket is open (in python, no curly one either), that is not inside a python triple-quoted string, a backtick string (a javascript template literal, a go raw string) or a / / comment running over lines (other strings over lines, such as kotlin's or java's triple-quoted ones, a rust or shell string over lines or a heredoc, are not seen, so a window can end inside one), that does not continue a method chain (a line starting with .x, ?.x or an arrow, as in php), and whose line before does not end in a backslash. so a call or a builder chain that fits in a window is not split across two; in a brace language, where a curly bracket also opens a block, an object literal can still be. a window ends inside a statement only when it holds no such place, or when that statement would not fit in the next window either. the default scope keeps only the units whose lines the change adds or modifies: against the merge base with base, or the uncommitted changes, new files included, when no base is given. a changed file is found by its real name, one with a space, an accent, a quote or a backslash in it included, whatever the user's git settings for the diff's prefixes (diff.noprefix, diff.mnemonicprefix), and in a project that is a folder of its git repository (a package of a monorepo); a change outside the project's folder is not audited.",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:_project_name",
-    "plugins/jevmcp/scripts/code_audit.py:1953-1958",
+    "plugins/jevmcp/scripts/code_audit.py:1955-1960",
     "plugins/jevmcp/scripts/jevmcp_server.py:Server._project_path",
     "plugins/jevmcp/scripts/jevmcp_server.py:Server._audit_plan",
     "plugins/jevmcp/scripts/code_audit.py:collect_units"
@@ -11566,7 +11566,7 @@
    "line": 2117,
    "text": "`--dry-run`, `--show-payload` - List what would be sent and the cost, optionally with the exact states, without sending anything: the names of the first 50 requests and how many more there are, or, with `--show-payload`, every request with its exact state.",
    "code": [
-    "plugins/jevmcp/scripts/code_audit.py:1969-1979"
+    "plugins/jevmcp/scripts/code_audit.py:1971-1981"
    ],
    "status": "reviewed",
    "spec_text": "| --dry-run, --show-payload | list what would be sent and the cost, optionally with the exact states, without sending anything: the names of the first 50 requests and how many more there are, or, with --show-payload, every request with its exact state. |"
@@ -11586,8 +11586,8 @@
    "line": 2119,
    "text": "`--key-file FILE`, `--jobs N`, `--samples N`, `--no-cache` - As for `spec_drift.py`; the defaults are 8 jobs and 3 samples, and more than 3 samples are read as 3, as `check_code_rules` takes them.",
    "code": [
-    "plugins/jevmcp/scripts/code_audit.py:1920-1923",
-    "plugins/jevmcp/scripts/code_audit.py:1988-1988",
+    "plugins/jevmcp/scripts/code_audit.py:1922-1925",
+    "plugins/jevmcp/scripts/code_audit.py:1990-1990",
     "plugins/jevmcp/scripts/code_audit.py:SAMPLES"
    ],
    "status": "reviewed",
@@ -11849,7 +11849,7 @@
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:utf8_output",
     "plugins/jevmcp/scripts/ci_triage.py:2362-2368",
-    "plugins/jevmcp/scripts/code_audit.py:1888-1896"
+    "plugins/jevmcp/scripts/code_audit.py:1890-1898"
    ],
    "status": "reviewed",
    "spec_text": "every command line prints utf-8, to a terminal, a pipe or a file, whatever the system's code page, and never crashes on the text it prints. a console or viewer set to another code page may show non-ascii text garbled; only a character that cannot be written at all (part of a file name that is not valid utf-8) becomes ?. maps, results and plans are read and written as utf-8; a spec or rule map saved as utf-8 with a byte-order mark is read too, and --update-lines keeps the mark and changes only the digits; a map saved in the system's code page (as 1.7.6 and earlier wrote rule maps on windows) is refused with the one-line command that converts it; a rule map that does not read as text in this system's code page is refused with no command (see validaterulemap's errors). a key file, and the .env specdrift.py reads, is read when saved as utf-8 with a byte-order mark or as utf-16 (notepad's \"unicode\", or and out-file in windows powershell 5.1), and so is a ci log or junit report saved as utf-16 with a byte-order mark."
@@ -11896,7 +11896,7 @@
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:utf8_output",
     "plugins/jevmcp/scripts/ci_triage.py:2362-2368",
-    "plugins/jevmcp/scripts/code_audit.py:1888-1896"
+    "plugins/jevmcp/scripts/code_audit.py:1890-1898"
    ],
    "status": "reviewed",
    "spec_text": "every command line prints utf-8, to a terminal, a pipe or a file, whatever the system's code page, and never crashes on the text it prints. a console or viewer set to another code page may show non-ascii text garbled; only a character that cannot be written at all (part of a file name that is not valid utf-8) becomes ?. maps, results and plans are read and written as utf-8; a spec or rule map saved as utf-8 with a byte-order mark is read too, and --update-lines keeps the mark and changes only the digits; a map saved in the system's code page (as 1.7.6 and earlier wrote rule maps on windows) is refused with the one-line command that converts it; a rule map that does not read as text in this system's code page is refused with no command (see validaterulemap's errors). a key file, and the .env specdrift.py reads, is read when saved as utf-8 with a byte-order mark or as utf-16 (notepad's \"unicode\", or and out-file in windows powershell 5.1), and so is a ci log or junit report saved as utf-16 with a byte-order mark."
@@ -11930,7 +11930,7 @@
    "code": [
     "plugins/jevmcp/scripts/spec_drift.py:utf8_restart",
     "plugins/jevmcp/scripts/spec_drift.py:7126-7126",
-    "plugins/jevmcp/scripts/code_audit.py:1889-1889",
+    "plugins/jevmcp/scripts/code_audit.py:1891-1891",
     "plugins/jevmcp/scripts/ci_triage.py:2363-2363",
     "plugins/jevmcp/scripts/jevmcp_server.py:3034-3034"
    ],
@@ -12085,7 +12085,7 @@
    "line": 2111,
    "text": "Refuses to overwrite, also when FILE is a symbolic link (one to nothing, or a link loop); a write that fails leaves no file behind.",
    "code": [
-    "plugins/jevmcp/scripts/code_audit.py:1920-1941"
+    "plugins/jevmcp/scripts/code_audit.py:1922-1943"
    ],
    "status": "reviewed",
    "spec_text": "| --draft-map file | write a rule map from the project's own rule files, and stop. refuses to overwrite, also when file is a symbolic link (one to nothing, or a link loop); a write that fails leaves no file behind. a named rule file whose name is not valid utf-8 is refused (exit 2); a found one is left out, in a git repository too, with a warning on stderr, and from n file(s) counts only the files read, each once. when it finds no rule file, it writes a map with no entries (0 rule sentence(s) from 0 file(s)): delete it and name the files in --docs. |"
@@ -12098,7 +12098,7 @@
     "plugins/jevmcp/scripts/code_audit.py:727-750",
     "plugins/jevmcp/scripts/code_audit.py:760-796",
     "plugins/jevmcp/scripts/code_audit.py:817-819",
-    "plugins/jevmcp/scripts/code_audit.py:1942-1945"
+    "plugins/jevmcp/scripts/code_audit.py:1944-1947"
    ],
    "status": "reviewed",
    "spec_text": "| --draft-map file | write a rule map from the project's own rule files, and stop. refuses to overwrite, also when file is a symbolic link (one to nothing, or a link loop); a write that fails leaves no file behind. a named rule file whose name is not valid utf-8 is refused (exit 2); a found one is left out, in a git repository too, with a warning on stderr, and from n file(s) counts only the files read, each once. when it finds no rule file, it writes a map with no entries (0 rule sentence(s) from 0 file(s)): delete it and name the files in --docs. |"
@@ -12108,7 +12108,7 @@
    "line": 2111,
    "text": "When it finds no rule file, it writes a map with no entries (`0 rule sentence(s) from 0 file(s)`): delete it and name the files in `--docs`.",
    "code": [
-    "plugins/jevmcp/scripts/code_audit.py:1920-1946"
+    "plugins/jevmcp/scripts/code_audit.py:1922-1948"
    ],
    "status": "reviewed",
    "spec_text": "| --draft-map file | write a rule map from the project's own rule files, and stop. refuses to overwrite, also when file is a symbolic link (one to nothing, or a link loop); a write that fails leaves no file behind. a named rule file whose name is not valid utf-8 is refused (exit 2); a found one is left out, in a git repository too, with a warning on stderr, and from n file(s) counts only the files read, each once. when it finds no rule file, it writes a map with no entries (0 rule sentence(s) from 0 file(s)): delete it and name the files in --docs. |"
@@ -12143,7 +12143,7 @@
    "spec_text": "| --docs file [file ...] | with --draft-map: these rule files instead of the ones it finds. every sentence of a named file becomes an entry, a list item or a line that looks like code included; one with no rule wording is flagged descriptive. a named secrets file (.env, a key file, .netrc, or a link to one) stops the draft with <name looks like a secrets file - refused, never read (exit 2), and none of it is read. a named file that does not exist or cannot be read (a link to nothing, a link loop, no read permission, a folder on its way that cannot be entered) is left out with a line on stderr, codeaudit: <name could not be read (<the system's words), so it was left out; fix it if it holds rules. (fix its permissions for a permission error), and the map is drafted from the others (exit 0); when none of them can be read, the map is written with no entries, and the rule files it would find are not used instead. a named folder is passed over without a word. a name is read from the project folder (--src); an absolute path inside the project, or one with .., is recorded by its name in the project, so its entries' source and scope are those a relative name gives (<project/.claude/claude.md gives /.py, not a scope that matches no file). |",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:_project_name",
-    "plugins/jevmcp/scripts/code_audit.py:1920-1934",
+    "plugins/jevmcp/scripts/code_audit.py:1922-1936",
     "plugins/jevmcp/scripts/code_audit.py:guess_scope"
    ],
    "status": "reviewed"
@@ -12155,8 +12155,8 @@
    "spec_text": "| --docs file [file ...] | with --draft-map: these rule files instead of the ones it finds. every sentence of a named file becomes an entry, a list item or a line that looks like code included; one with no rule wording is flagged descriptive. a named secrets file (.env, a key file, .netrc, or a link to one) stops the draft with <name looks like a secrets file - refused, never read (exit 2), and none of it is read. a named file that does not exist or cannot be read (a link to nothing, a link loop, no read permission, a folder on its way that cannot be entered) is left out with a line on stderr, codeaudit: <name could not be read (<the system's words), so it was left out; fix it if it holds rules. (fix its permissions for a permission error), and the map is drafted from the others (exit 0); when none of them can be read, the map is written with no entries, and the rule files it would find are not used instead. a named folder is passed over without a word. a name is read from the project folder (--src); an absolute path inside the project, or one with .., is recorded by its name in the project, so its entries' source and scope are those a relative name gives (<project/.claude/claude.md gives /.py, not a scope that matches no file). |",
    "code": [
     "plugins/jevmcp/scripts/code_audit.py:751-759",
-    "plugins/jevmcp/scripts/code_audit.py:1931-1941",
-    "plugins/jevmcp/scripts/code_audit.py:1989-1991",
+    "plugins/jevmcp/scripts/code_audit.py:1933-1943",
+    "plugins/jevmcp/scripts/code_audit.py:1991-1993",
     "plugins/jevmcp/scripts/code_audit.py:_secret_file"
    ],
    "status": "reviewed"
