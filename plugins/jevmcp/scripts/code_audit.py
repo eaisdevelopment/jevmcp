@@ -1676,6 +1676,211 @@ def record_verdicts(path: Path, new: list[dict]) -> int:
     return len(have)
 
 
+# ─────────────────────────────────────────────────────────────── 6. doc claims (1.9.0)
+#
+# What a unit's own docs say about it - its docstring, the comment right above it, or a test's name - set against
+# its code. Only the units the change touches by default: a function whose code changed while its docstring did not
+# is where stale docs come from, and stale docs mislead the coding agent that reads them. The claim is taken from the
+# unit as sent with comments (redacted, key material hidden, links and addresses removed); the code is sent as code
+# audit sends it, comments removed, and first: a docstring must not talk the model into reading the code its way.
+# The question asks only for what the code contradicts; a summary that leaves things out is consistent (on plain
+# prompting a published method flagged 98% of all comments as stale; told so, 14%).
+CLAIM_SUFFIXES = {".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".rs", ".java", ".kt", ".kts",
+                  ".scala", ".cs", ".c", ".cc", ".cpp", ".h", ".hpp", ".swift", ".php"}
+MIN_CLAIM_WORDS = 4          # "Helper." or "Returns the id." says too little to be stale
+MIN_TEST_NAME_WORDS = 3      # test_refund_ok: not a claim; test_refund_writes_one_ledger_entry: one
+_CLAIM_ENTRY = {"source": "(doc claims)", "line": 0, "rule": "doc claims", "status": "reviewed",
+                "scope": [f"*{x}" for x in sorted(CLAIM_SUFFIXES)]}
+_COMMENT_MARK = re.compile(r"^\s*(?:///?!?|#(?![\[!])|/\*+!?|\*+/?|--)\s?")
+_COMMENT_LINE = re.compile(r"^\s*(?://|#(?![\[!])|/\*|\*|--\s)")
+_ANNOTATION = re.compile(r"^\s*(?:@\w|#\[|\[\w)")
+_TEST_ANNOTATION = re.compile(r"^\s*(?:@(?:Test|ParameterizedTest|RepeatedTest)\b|#\[(?:\w+::)?test\b|\[(?:Test|Fact|Theory)\b)")
+_FN_NAME = re.compile(r"\b(?:def|fun|fn|func|void|Task|async\s+Task)\s+`?([A-Za-z_][\w ]*?)`?\s*[(<\[]")
+_PY_DOC = re.compile(r'^\s*[rRuUbB]{0,2}("""|\'\'\')')
+
+
+def _name_words(name: str) -> list[str]:
+    """test_refund_writes_one_entry / TestRefundWritesOneEntry / refundWritesOneEntry -> its words, 'test' dropped."""
+    words = re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|\b)|[A-Z]?[a-z]+|\d+", name.replace("_", " "))
+    words = [w.lower() for w in words]
+    while words and words[0] in ("test", "tests", "should", "it"):
+        words = words[1:]
+    return words
+
+
+def doc_claim(path: str, text: str, raw: str | None = None) -> tuple[str, str] | None:
+    """(kind, claim) a unit's own docs make: 'docstring', 'comment' or 'test name'; None when there is none worth
+    asking about. `text` is the unit as sent with comments kept; `raw`, the same lines as written, says where a
+    docstring ends when redaction took its closing quotes (a link removed with them)."""
+    lines = text.split("\n")
+    # the sent text is the raw text line for line, but for trailing blank lines tidied away
+    src = raw.split("\n")[:len(lines)] if raw is not None and raw.count("\n") >= text.count("\n") else lines
+    # the definition: the first line that is no comment, annotation or blank - and it must read as one, so a licence
+    # header above a file's imports is no claim
+    head = next((i for i, ln in enumerate(lines) if ln.strip() and not _COMMENT_LINE.match(ln)
+                 and not _ANNOTATION.match(ln)), None)
+    if head is None or not (_DEF.match(lines[head]) or _FN_NAME.search(lines[head])):
+        return None
+    parts: list[tuple[str, str]] = []
+    above = [ln for ln in lines[:head] if _COMMENT_LINE.match(ln)]
+    said = " ".join(_COMMENT_MARK.sub("", ln).strip(" */") for ln in above).strip()
+    if said and not (RULE_CODE_LINE.search(said) or dd._CODE_LINE.search(said)) and len(said.split()) >= MIN_CLAIM_WORDS:
+        parts.append(("comment", said))
+    if Path(path).suffix in (".py", ".pyi"):
+        i = head
+        while i < len(lines) and not lines[i].split("#", 1)[0].rstrip().endswith(":"):
+            i += 1                                       # the signature may run over several lines
+        body = next((j for j in range(i + 1, len(src)) if src[j].strip()), None)
+        if body is not None and (m := _PY_DOC.match(src[body])) and (t := _PY_DOC.match(lines[body])):
+            q = m.group(1)
+            # where it ends, read as written; its words, read as sent
+            end = body if q in src[body][m.end():] else next((j for j in range(body + 1, len(src)) if q in src[j]),
+                                                             len(src) - 1)
+            doc = [lines[body][t.end():]] + lines[body + 1:end + 1]
+            said = " ".join(" ".join(x.split(q, 1)[0] for x in doc).split())
+            if len(said.split()) >= MIN_CLAIM_WORDS:
+                parts.append(("docstring", said))
+    is_test = any(_TEST_ANNOTATION.match(ln) for ln in lines[:head + 1])
+    m = _FN_NAME.search(lines[head])
+    if m and (is_test or re.match(r"(?:test_|Test[A-Z])", m.group(1).strip())):
+        words = _name_words(m.group(1).strip())
+        if len(words) >= MIN_TEST_NAME_WORDS:
+            parts.append(("test name", " ".join(words)))
+    if not parts:
+        return None
+    kinds = [k for k, _ in parts]
+    return (" + ".join(dict.fromkeys(kinds)),
+            " | ".join(f"{k}: {v}" for k, v in parts) if len(parts) > 1 else parts[0][1])
+
+
+DOC_QUESTIONS = {
+    "verdict": {
+        "type": "choice",
+        "instructions": (
+            "`a_code` is one unit of a project's code. `b_claim` is what that unit's own docstring, comment or test "
+            "name says about it. Judge the claim by the code alone: other names, strings and comments are not "
+            "evidence. Does the code contradict anything the claim states? A claim that leaves details out, or "
+            "describes the code at a higher level, is not contradicted."),
+        "criteria": {
+            "consistent": "Everything the claim states that the code shows is what the code does.",
+            "stale_signature": "The claim names a parameter, argument, return value or exception the code does not "
+                               "have, or gives one a meaning the code contradicts.",
+            "stale_behaviour": "The claim states a behaviour, value, limit, order or effect that the code "
+                               "contradicts. For a test name: the test does not check what its name says.",
+            "too_general": "The claim is too general or too vague to be compared with this code.",
+            "cannot_tell": "The code shown is not enough to tell whether the claim holds. Choose this rather than "
+                           "guessing.",
+        },
+    },
+    "contradicted": {
+        "type": "noul",
+        "instructions": "Does the code in `a_code` contradict a statement in `b_claim`?",
+        "criteria": {"true": "The code does something other than what the claim states.",
+                     "false": "The code does what the claim states, or the claim states nothing the code shows."},
+    },
+}
+DOC_LABELS = {"act": "STALE", "review": "review", "clean": "ok", "na": "vague", "unverifiable": "??"}
+# A review result is read from this P(contradicted) up, the rest spot-checked. Code audit's 0.295 flagged 8 of 30
+# accurate claims on the 1.9.0 calibration set (every stale one too); 0.5 was fixed from that set before a held-out
+# set of other functions was measured once (knowledge/.../features-1.8/NOTES-F2.md).
+DOC_REVIEW_CUT = 0.5
+
+
+def claim_units(root: Path, scope: str = "changed", base: str | None = None,
+                files: list[str] | None = None) -> list[tuple[str, str, Unit]]:
+    """(kind, claim, unit) for every unit in scope that makes a claim: the claim read with comments kept, the unit as
+    code audit sends code (comments removed). Same file selection, links, size cap and redaction as code audit."""
+    with_docs = collect_units(root, [{**_CLAIM_ENTRY, "keep_comments": True}], scope, base, files)
+    notes = list(NOTES)
+    code = {(u.path, u.start, u.end): u
+            for _, u in collect_units(root, [{**_CLAIM_ENTRY, "keep_comments": False}], scope, base, files)}
+    NOTES[:] = notes
+    out = []
+    for _, u in with_docs:
+        c = doc_claim(u.path, u.text, u.raw)
+        if c and (k := code.get((u.path, u.start, u.end))) is not None and k.text.strip():
+            out.append((c[0], c[1], k))
+    return out
+
+
+def claim_state(claim: str, unit: Unit) -> dict:
+    """The code first (cut and scrubbed as code audit's state), then the claim. Fixed keys."""
+    s = build_state(claim, unit)
+    return {"a_code": s["b_code"], "b_claim": s["a_rule"]}
+
+
+def claim_items(found: list[tuple[str, str, Unit]]) -> list[jevkit.Item]:
+    return [jevkit.Item(name=f"{u.path}:{u.start} {kind}", state=claim_state(f"{kind}: {claim}", u),
+                        questions=DOC_QUESTIONS, meta={"kind": kind, "claim": claim, "unit": u})
+            for kind, claim, u in found]
+
+
+def classify_claim(ans: dict) -> tuple[str, float, str]:
+    v = ans.get("verdict", {})
+    choice, conf = v.get("choice"), v.get("confidence", 0.0)
+    p = ans.get("contradicted", {}).get("noul", 0.0)
+    if choice == "cannot_tell":
+        return "unverifiable", conf, "the code shown cannot settle the claim"
+    if choice == "too_general":
+        if p < NOUL_NO:
+            return "na", conf, "the claim is too general to compare with the code"
+        return "review", conf, f"says too general, but P(contradicted) is {p:.2f}"
+    if choice in ("stale_signature", "stale_behaviour"):
+        what = "signature" if choice == "stale_signature" else "behaviour"
+        if conf >= ACT_ABOVE:
+            return "act", conf, f"the code contradicts the claim ({what}), confident"
+        return "review", conf, f"the code contradicts the claim ({what}) at {conf:.2f}, below {ACT_ABOVE}"
+    if conf >= CLEAN_ABOVE and p < NOUL_NO:
+        return "clean", conf, "the code does what the claim says"
+    return "review", conf, f"says consistent at {conf:.2f} but P(contradicted) is {p:.2f}"
+
+
+def classify_claim_samples(answers: list[dict]) -> tuple[str, float, str] | None:
+    """A stability filter, as for rules: every answer the same, each confident."""
+    agreed = jevkit.agreement(answers, "verdict", AGREE_FLOOR)
+    if not agreed:
+        return None
+    choice, conf = agreed
+    n, low = len(answers), max(a.get("contradicted", {}).get("noul", 0) for a in answers) < NOUL_NO
+    if choice in ("stale_signature", "stale_behaviour"):
+        return "act", conf, f"all {n} answers: {choice.replace('_', ' ')}, none below {AGREE_FLOOR}"
+    if choice == "consistent" and low:
+        return "clean", conf, f"all {n} answers: consistent, none below {AGREE_FLOOR}"
+    if choice == "too_general" and low:
+        return "na", conf, f"all {n} answers: too general, none below {AGREE_FLOOR}"
+    return None
+
+
+def check_claims(items: list[jevkit.Item], key: str, jobs: int = 8, samples: int = SAMPLES, use_cache: bool = True,
+                 cancelled=None, on_answer=None) -> tuple[list[dict], jevkit.Run]:
+    run = jevkit.screen(items, key, classify_claim, classify_claim_samples, {"act", "clean", "na", "unverifiable"},
+                        jobs=jobs, samples=samples, use_cache=use_cache, cancelled=cancelled, on_answer=on_answer)
+    return [claim_result_for(s) for s in run.results], run
+
+
+def claim_result_for(s: jevkit.Screened) -> dict:
+    u = s.item.meta["unit"]
+    out = {"file": u.path, "lines": f"{u.start}-{u.end}", "kind": s.item.meta["kind"], "claim": s.item.meta["claim"]}
+    if s.error:
+        return {**out, "label": "not checked", "why": s.error}
+    a = s.first
+    return {**out, "label": DOC_LABELS[s.action], "confidence": round(s.confidence, 3), "why": s.why,
+            "p_contradicted": a.get("contradicted", {}).get("noul"), "verdict": a.get("verdict", {}).get("choice"),
+            "probabilities": a.get("verdict", {}).get("probabilities", {}), "samples": len(s.answers),
+            "request_id": s.request_id, **({"note": s.note} if s.note else {})}
+
+
+def claim_group(r: dict) -> str:
+    if r.get("label") == "review" and (r.get("p_contradicted") or 0) < DOC_REVIEW_CUT:
+        return "low"
+    return r.get("label") or "not checked"
+
+
+def claims_in_order(results: list[dict]) -> list[dict]:
+    order = {"STALE": 0, "review": 1, "??": 2, "not checked": 3, "low": 4, "ok": 5, "vague": 6}
+    return sorted(results, key=lambda r: (order.get(claim_group(r), 7), -(r.get("p_contradicted") or 0)))
+
+
 def _project_name(root: Path, src: Path, name: str) -> str:
     """A name from the command line as the file list has it: an absolute path inside the project, or one with ..
     or ./ in it, made relative with / (no link is followed). It matched no listed name, and audited nothing, or

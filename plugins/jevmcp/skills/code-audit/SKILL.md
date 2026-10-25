@@ -1,6 +1,6 @@
 ---
 name: code-audit
-description: Audit code against the project's own written rules and conventions (CLAUDE.md, AGENTS.md, CONTRIBUTING, style guides). A fast model (TypeSafe's Jev) checks each reviewed rule against each unit of code in scope; you investigate only what it flags. A project is set up once with a rule map (rule_map.json) that lists its rules and the files each applies to; the draft_rule_map tool writes it and you review every entry with the user. Use only when the user asks for a code audit or whether code follows the project's rules or conventions, or before opening a pull request in a project that has a rule_map.json. Never after every edit. Not for whether code matches a spec or requirements (spec-drift), not for CI failures (ci-triage), and not a replacement for a linter or a security review.
+description: Audit code against the project's own written rules and conventions (CLAUDE.md, AGENTS.md, CONTRIBUTING, style guides). A fast model (TypeSafe's Jev) checks each reviewed rule against each unit of code in scope; you investigate only what it flags. A project is set up once with a rule map (rule_map.json) that lists its rules and the files each applies to; the draft_rule_map tool writes it and you review every entry with the user. Use only when the user asks for a code audit or whether code follows the project's rules or conventions, or whether docstrings, comments or test names still match the code, or before opening a pull request in a project that has a rule_map.json. Never after every edit. Not for whether code matches a spec or requirements (spec-drift), not for CI failures (ci-triage), and not a replacement for a linter or a security review.
 ---
 
 # Code audit against the project's own rules
@@ -23,8 +23,8 @@ sent. The audit checks only what the map names.
 ## The tools
 
 **Use the MCP tools when they are available** (server `jevmcp`): `draft_rule_map`,
-`validate_rule_map`, `preview_code_audit`, `record_code_audit_verdicts` (all free) and
-`check_code_rules` (sends). Pass `project`
+`validate_rule_map`, `preview_code_audit`, `record_code_audit_verdicts`, `preview_doc_claims` (all
+free), and `check_code_rules` and `check_doc_claims` (send). Pass `project`
 with the absolute path of the project (your working directory) in every call. Where the client
 says which project it is in, `project` must be that folder or one inside it.
 
@@ -176,6 +176,24 @@ positive on unchanged code last, under its own heading (read it only if the rule
 mark a confirmed one still there, and name a rule whose findings were mostly false positives:
 suggest rewording or excluding that rule to the user. Never record a finding you did not
 investigate.
+
+## Doc claims: do docstrings, comments and test names still match the code?
+
+No map needed. `preview_doc_claims` (free) lists the units the change touches whose docstring,
+comment above them or test name makes a claim, and shows exactly what would be sent;
+`check_doc_claims` sends them. It is source code, the same kind as a code audit: if the user has
+not agreed to sending units of source code in this conversation, show the preview and ask first.
+Use `base` before a pull request, as for an audit.
+
+| Label | Your job |
+|---|---|
+| **STALE** | Investigate every one: read the unit and its doc. Decide which is wrong. If the code is right, fix the doc; if the doc states what was meant, say the code may be the bug and ask the user. |
+| **review** | From P(contradicted) 0.5 up, highest first, as STALE. Below 0.5: spot-check a few. |
+| **??** | Not a pass: the unit shown cannot settle the claim. |
+| **vague** | The claim is too general to compare: suggest a more concrete docstring only if the user wants one. |
+| **ok** | Spot-check a couple. |
+
+A claim that only leaves details out is not stale; do not "fix" a summary into a full description.
 
 ## Always judge these yourself: the fast model's blind spots
 

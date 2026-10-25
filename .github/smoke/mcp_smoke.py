@@ -22,8 +22,8 @@ from pathlib import Path
 
 SERVER = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "plugins/jevmcp/scripts/jevmcp_server.py").resolve()
 FREE = {"draft_spec_map", "validate_spec_map", "preview_spec_check", "draft_rule_map", "validate_rule_map",
-        "preview_code_audit", "preview_ci_triage"}
-SENDING = {"check_spec_drift", "triage_ci_failure", "check_code_rules"}
+        "preview_code_audit", "preview_ci_triage", "preview_doc_claims"}
+SENDING = {"check_spec_drift", "triage_ci_failure", "check_code_rules", "check_doc_claims"}
 RECORD = {"record_code_audit_verdicts"}     # free, but only after a check_code_rules run: here it must refuse
 SPEC = ["An order may contain at most 50 items, set by MAX_ITEMS in app.py.",
         "A larger order is refused with the error “too many items — слишком много товаров”.",
@@ -32,6 +32,7 @@ SPEC = ["An order may contain at most 50 items, set by MAX_ITEMS in app.py.",
 RULES = ["Every function in app.py must have a docstring.",
          "Error messages must name the limit, for example “too many items — слишком много товаров”.",
          "所有函数必须有文档字符串。"]
+DOC_CLAIM = "Places an order — «заказ»: refuses more than MAX_ITEMS items."    # what check_doc_claims reads
 CODE_COMMENT = "# «лимит» → 订单上限"                   # only in app.py: a preview showing it read the code right
 LOG_LINE = "✕ refuses a larger order → «слишком много товаров» (5 ms)"
 LOG = "ci/журнал.log"                                  # a name in UTF-8, as git checks it out
@@ -45,7 +46,8 @@ def git(root: Path, *args: str) -> None:
 def make_project(root: Path) -> None:
     files = {
         "docs/spec.md": "# Orders spec — «Заказы»\n\n" + "\n\n".join(SPEC) + "\n",
-        "app.py": f"MAX_ITEMS = 50  {CODE_COMMENT}\n\n\ndef place(items):\n    if len(items) > MAX_ITEMS:\n"
+        "app.py": f"MAX_ITEMS = 50  {CODE_COMMENT}\n\n\ndef place(items):\n    \"\"\"{DOC_CLAIM}\"\"\"\n"
+                  "    if len(items) > MAX_ITEMS:\n"
                   "        raise ValueError('too many items')\n    return len(items)\n",
         "CLAUDE.md": "# Rules — «Правила»\n\n" + "".join(f"- {r}\n" for r in RULES),
         LOG: "##[group]Run python -m pytest -q\npython -m pytest -q\n##[endgroup]\n"
@@ -198,6 +200,7 @@ def main() -> int:
         run("validate_rule_map", must=("OK - ",), map="rule_map.json")
         run("preview_code_audit", must=("nothing was sent", CODE_COMMENT, RULES[1]), map="rule_map.json", all=True)
         run("preview_ci_triage", must=("1 distinct failure", LOG_LINE), logs=[LOG])
+        run("preview_doc_claims", must=("free, nothing was sent", "1 request(s)", DOC_CLAIM), files=["app.py"])
         # an audit first asks for the unit count the user agreed to; then, with no key, it must refuse
         _, text = c.tool("check_code_rules", map="rule_map.json", all=True)
         units = re.search(r"confirm_units: (\d+)", text)
@@ -208,6 +211,7 @@ def main() -> int:
         else:
             check("check_code_rules", False, "its first answer names no confirm_units to agree to", text)
         run("triage_ci_failure", want_error=True, must=("API key",), logs=[LOG])
+        run("check_doc_claims", want_error=True, must=("API key",), files=["app.py"])
         run("record_code_audit_verdicts", want_error=True, must=("no check_code_rules run", "Nothing was written"),
             map="rule_map.json", verdicts=[{"file": "app.py", "lines": "1-2", "rule_source": "CONTRIBUTING.md:3",
                                             "verdict": "confirmed", "why": "smoke"}])

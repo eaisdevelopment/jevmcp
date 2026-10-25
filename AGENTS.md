@@ -15,10 +15,10 @@ file is the map and the rules.
 
 One plugin, `jevmcp`, installed once: `/plugin install jevmcp@jev` in Claude Code,
 `codex plugin add jevmcp@jev` in Codex, after adding the marketplace
-`eaisdevelopment/jevmcp`. It gives you one MCP server (`jevmcp`) with eleven tools in three
+`eaisdevelopment/jevmcp`. It gives you one MCP server (`jevmcp`) with thirteen tools in three
 families, and one skill per family (`spec-drift`, `ci-triage`, `code-audit`).
 
-Three tools send data to `api.typesafe.ai`, each a different kind. Everything else is free and
+Four tools send data to `api.typesafe.ai`, three kinds of data. Everything else is free and
 sends nothing:
 
 | Family | Sends (costs fractions of a cent) | Free |

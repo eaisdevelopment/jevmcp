@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.9.0 — 2026-10-25
+
+**Do docstrings, comments and test names still match the code?** Two new tools, with no map:
+`preview_doc_claims` (free) and `check_doc_claims`. For each unit of code the change touches whose
+own docs make a claim, the code is checked against it. The claim is the Python docstring, the
+comment right above the unit, or a test's name split into words (`test_refund_writes_one_ledger_entry`
+reads "refund writes one ledger entry"). A stale docstring misleads the coding agent that reads it.
+
+Labels:
+- `STALE`: the code contradicts the claim, with confidence;
+- `review`: sorted by P(contradicted), read from 0.5 up;
+- `??`;
+- `ok`;
+- `vague`: the claim is too general to compare.
+
+What is sent is the unit as code audit sends code (comments removed), first, then the claim, taken
+from the unit as sent with comments: secrets redacted, links and addresses replaced. It is the same
+kind of data as a code audit, units of source code, under the same consent. A unit is sent only when
+it has a claim of 4 or more words (3 for a test name), and never when the comment reads as code.
+
+Measured before release, with the user's consent, on jevmcp's own code and synthetic snippets:
+- first set (60 cases, used to set the 0.5 review cut-off): every stale claim was flagged, but so
+  were 8 of 30 accurate ones at code audit's 0.3 cut-off;
+- **held-out set** (60 other cases, built after the cut-off was fixed): 27 of 30 stale claims and
+  5 of 30 accurate ones flagged (recall 0.90, flag rate 0.17).
+
+The cases were jevmcp functions, each also with one docstring phrase contradicted, test names, and
+Java, Go, TypeScript, Rust and C# snippets. The set and its script are kept with the maintainers'
+release scripts.
+
 ## 1.8.0 — 2026-10-24
 
 **Code audit keeps what investigating its findings showed.** A new free tool,

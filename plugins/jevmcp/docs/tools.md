@@ -1,6 +1,6 @@
 # What jevmcp offers: tools, skills, maps, command line
 
-This page is the reference for everything the jevmcp plugin gives you — eleven MCP tools in three
+This page is the reference for everything the jevmcp plugin gives you — thirteen MCP tools in three
 families (spec drift, CI failure triage, code audit), three skills, the two map files the tools
 work from (`spec_map.json` and `rule_map.json`), the result labels, and the three command-line
 scripts — with exact arguments, exact output and the errors each can return; it is written for
@@ -28,16 +28,18 @@ see [how-to.md](how-to.md). For what leaves the machine, see
 | MCP tool | `validate_rule_map` | No | No |
 | MCP tool | `draft_rule_map` | No (writes a file in the project) | No |
 | MCP tool | `record_code_audit_verdicts` | No (writes a file in the project) | No |
+| MCP tool | `check_doc_claims` | **Yes** — units of source code, each with what its own docstring, comment or test name says | Yes: fractions of a cent per unit |
+| MCP tool | `preview_doc_claims` | No | No |
 | Skill | `spec-drift`, `ci-triage`, `code-audit` | — | — |
 | File | `spec_map.json` and `rule_map.json` in the project | — | — |
 | Command line | `scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py` | Yes, on a real run | Yes, on a real run |
 
-Three tools send data to TypeSafe, and each sends a different kind: `check_spec_drift` sends spec
-sentences with their paired code, `triage_ci_failure` sends CI log excerpts with an excerpt of the
-change, and `check_code_rules` sends units of source code. The skills ask the user's consent for
+Four tools send data to TypeSafe, three kinds: `check_spec_drift` sends spec sentences with their
+paired code, `triage_ci_failure` sends CI log excerpts with an excerpt of the change, and
+`check_code_rules` and `check_doc_claims` send units of source code. The skills ask the user's consent for
 each kind separately. Every other tool is free and sends nothing.
 
-One MCP server holds all eleven tools. It is called `jevmcp` and the client starts it as
+One MCP server holds all thirteen tools. It is called `jevmcp` and the client starts it as
 `uv run --quiet --script <plugin>/scripts/jevmcp_server.py`. New tool families are added to this
 same server, so there is never a second install or a second API key.
 
@@ -215,7 +217,7 @@ sentence and the same code) are asked once and share the answers, each keeping i
 agreement never counts one answer twice, and the shared answers cost nothing more. The same holds
 for CI triage and code audit.
 
-**Every reply is read before it is used.** In all three tools that send, each question asked has
+**Every reply is read before it is used.** In all four tools that send, each question asked has
 an answer, a choice is one of the options offered, its confidence and probabilities are numbers,
 and a score is a number (null, true or false, NaN and infinity are not). A reply that fails this
 is an API error for its item — for a first answer
@@ -261,7 +263,7 @@ Measured runs:
 | `No TypeSafe API key is set for this server, so nothing was sent.` | Nothing was sent. Pass the stored-key command on to the user to run **in their own terminal**. Never ask for the key in chat, never put it in a command you run. See [install.md](install.md). |
 | `TypeSafe rejected the API key (HTTP 401/403)` (inside the `INCOMPLETE` block) | The key is wrong or revoked. Tell the user to check it at <https://console.typesafe.ai> and store it again. The reply is always an error, and these words follow `the run stopped early:` (or `the run stopped early - N item(s) keep their first answer's label:`, or `re-asking stopped early - N item(s) keep their first answer's label:`) in its `INCOMPLETE` block, after the `spec-drift check` line. |
 | `TypeSafe's credits are used up (HTTP 402)` (inside the `INCOMPLETE` block) | Not a fault in the code. Report it, carry on without the check, and never report "no drift". It is an error only when no claim was answered; when any claim was answered, whatever its place in the order, the result is a successful one. Either way the text starts with the `spec-drift check` line, and these words follow `the run stopped early:` (or `the run stopped early - N item(s) keep their first answer's label:`, or `re-asking stopped early - N item(s) keep their first answer's label:`) in the first line of its `INCOMPLETE` block. |
-| `rate limit: at most 20 paid calls a minute` | Wait the stated seconds, or check more files in one call instead of looping. The budget is shared by the three tools that send. |
+| `rate limit: at most 20 paid calls a minute` | Wait the stated seconds, or check more files in one call instead of looping. The budget is shared by the four tools that send. |
 | `rate limit: at most 120 tool calls a minute` | You are calling too fast. Wait the stated seconds. |
 | `this project (...) has no spec map yet (no *spec_map.json)` | If the user named the spec, run `draft_spec_map` with exactly what they named; otherwise run it without `docs` to list the candidate spec files and let the user choose. Then review every entry. Do not invent a map by hand. |
 | `this project has several spec maps - say which one with 'map'` | Pass `map` with one of the paths it lists. |
@@ -971,7 +973,7 @@ that the run stopped early, and each failure that got no answer is a `not checke
 (`not checked: the run stopped early`). In both, every answer that came back is in the results
 file and counted in the cost.
 
-The `INCOMPLETE` block, in all three tools that send, starts with why the run stopped (the run
+The `INCOMPLETE` block, in all four tools that send, starts with why the run stopped (the run
 stopped early, the re-asking stopped early or was cancelled), so the reason, such as credits to top
 up, is never cut; then it lists the first 20 lines and `... and N more (...)`. Past 20 lines, when
 the reply is an error or `structuredContent.not_checked` was cut, it names a file in the results
@@ -1069,8 +1071,10 @@ rejected key or credits running out, no new request of the triage starts.
 Five tools, in the order you use them: `draft_rule_map` collects the project's own rules into a
 rule map, `validate_rule_map` checks the map, `preview_code_audit` shows what an audit would send
 and cost, `check_code_rules` sends it, and `record_code_audit_verdicts` records what investigating
-each finding showed, so later audits use it. The skill `code-audit` is the procedure; run an audit
-when the user asks or before a pull request, never after every edit.
+each finding showed, so later audits use it. Two more need no map: `preview_doc_claims` and
+`check_doc_claims` check what each unit's own docstring, comment or test name says against its code.
+The skill `code-audit` is the procedure; run an audit when the user asks or before a pull request,
+never after every edit.
 
 ### `draft_rule_map`
 
@@ -1796,6 +1800,64 @@ and rule_source exactly as the results show them.` · `rule_map.verdicts.json is
 it needs {"verdicts": [...]}` · `rule_map.verdicts.json is a link - refused; a verdicts file must be a
 plain file beside the map` (also from `check_code_rules` and `validate_rule_map`) · the map errors of
 `validate_rule_map`. The file is written through a new temporary file of its own, never through a link.
+
+### `preview_doc_claims` and `check_doc_claims`
+
+Check what each unit's own docs say about it against its code: its docstring (Python), the comment
+right above it (`//`, `///`, `/** */`, `#`), or, for a test, its name split into words
+(`test_refund_writes_one_ledger_entry` reads "refund writes one ledger entry"; Python `test_` and
+`Test` functions, Go `Test...`, Rust `#[test]`, Java, Kotlin and C# methods marked `@Test`, `[Test]`,
+`[Fact]` or `[Theory]`). A unit with none of them, or with fewer than 4 words of comment or docstring, or a test
+name of fewer than 3 words, or a comment that reads as code, makes no claim and is not sent. No map is needed.
+`preview_doc_claims` is free and sends nothing; `check_doc_claims` sends one request per unit that
+makes a claim, from the same code files code audit reads (the languages above, and JavaScript,
+TypeScript, Scala, Swift, PHP, C and C++ for comments), with the same links, size cap and secrets
+rules.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `base` | string | — | The units the change against this git ref touches. Default: the uncommitted changes, new files included. |
+| `files` | list of strings | — | Every unit of these files instead. |
+| `all` | boolean | false | Every unit of the project's code. Needs `confirm_units` on `check_doc_claims`. |
+| `confirm_units` | integer | — | `check_doc_claims` only: the count `preview_doc_claims` reported, after the user agreed; needed for `all` and above the server's cap (400 requests). |
+| `project` | string | see above | Absolute path of the project. |
+
+**What is sent** for each unit: `a_code`, the unit as code audit sends code (`# file:lines` head,
+comments and docstrings removed, secrets redacted, key material hidden, cut at 2,600 characters),
+first; then `b_claim`, its kind and the claim, taken from the unit as it is sent with comments (secrets
+redacted, links and email addresses replaced), for example `docstring: Sums the price of every item
+and adds 20% tax. See <url>`. The fixed question asks whether the code contradicts the claim, with the
+options consistent, stale_signature, stale_behaviour, too_general and cannot_tell, and says that a claim
+that leaves details out is not contradicted.
+
+**Labels:** `STALE` (the code contradicts the claim, confident: investigate each — is the code or
+the doc wrong?), `review` (sorted by P(contradicted); read from 0.5 up, spot-check below), `??` (not a
+pass: the code shown cannot settle the claim), `ok`, `vague` (the claim is too general to compare),
+`not checked`. A result has `file`, `lines`, `kind` (`docstring`, `comment`, `test name`, or two joined
+with `+`), `claim`, `label`, `confidence`, `why`, `p_contradicted`, `verdict`, `probabilities`, `samples`
+and `request_id`.
+
+**Measured** (1.9.0) on 60 held-out cases (jevmcp's own functions, each also with one docstring phrase
+contradicted; test names; Java, Go, TypeScript, Rust and C# snippets), with the 0.5 cut fixed on a first set of 60
+before they were built: 27 of 30 stale claims read (STALE, or review from 0.5), 5 of 30 accurate ones.
+
+**Preview text:** `doc-claims preview - free, nothing was sent: <scope>`, the number of requests by
+kind, the bytes of code, the cost, then `Examples of exactly what is sent`. Structured fields:
+`project`, `scope`, `units`, `files`, `requests`, `by_kind`, `bytes_sent`, `code_bytes`,
+`estimate_usd`, `estimate_usd_max`, `samples`, `max_requests_without_confirm`, `needs_confirm`,
+`confirm_units`, `model`, `questions`, `examples`.
+
+**Check text:** `doc claims (<scope>): N claim(s) on M unit(s) | checked in Xs | $cost`, the counts
+(`STALE · review · ?? · ok · vague`) and the results file, `To read: N (STALE, and review from
+P(contradicted) 0.5 up); the rest of review is low risk.`, then the flagged items by group. Structured
+fields: `summary`, `project`, `scope`, `units`, `files`, `requests`, `checked`, `counts`, `cost_usd`,
+`complete`, `not_checked`, `not_checked_total`, `results_file`, `flagged`, `flagged_total`.
+
+**Errors:** `this check would send N request(s), about $X (all=true). Nothing was sent. Run
+preview_doc_claims ...` · `confirm_units is N, but this check is M request(s) now. Nothing was sent.` ·
+`pass files or all=true, not both.` · `base only narrows the default scope ...` · the key, rate-limit
+and TypeSafe errors of `check_code_rules`. `doc claims: nothing to check - no unit in scope has a
+docstring, a comment above it or a test name that makes a claim. That is not a pass` is not an error.
 
 ## The rule map
 

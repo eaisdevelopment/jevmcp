@@ -5,13 +5,14 @@ logs of your conversations.
 
 ## What leaves your machine
 
-Three tools send data, each a different kind, and only when they run:
+Four tools send data, three kinds, and only when they run:
 
 | Tool | What it sends |
 |---|---|
 | `check_spec_drift`, or `spec_drift.py` without `--dry-run` | spec sentences, each with the code paired with it |
 | `triage_ci_failure`, or `ci_triage.py` without `--dry-run` | excerpts of a failed CI run's log, with an excerpt of the change under test |
 | `check_code_rules`, or `code_audit.py` without `--dry-run` | units of your source code, each with one of your project's own rules |
+| `check_doc_claims` | units of your source code, each with what its own docstring, the comment above it or a test's name says (the same kind as `check_code_rules`) |
 
 Every other tool, and every `--dry-run`, sends nothing to TypeSafe.
 
@@ -589,6 +590,15 @@ The code is cleaned before it is sent:
 bytes of code, and their share of every file git tracks. The MCP server refuses an audit of more
 than 400 requests (its default cap), or of every unit (`all: true`), until the count is confirmed;
 the command line refuses more than `--max-requests` (500 by default).
+
+**Doc claims** (`check_doc_claims`) sends units of source code too, chosen and cleaned the same way
+(the same files, links, size cap, secrets rules and key material), one request per unit whose own
+docstring, comment above it or test name makes a claim. Each request holds the unit without comments,
+first, and the claim: the docstring or comment text taken from the unit as it is sent with comments
+(secret-looking values redacted, links replaced by `<url>`, email addresses by `<email>`), or the
+test's name split into words. `preview_doc_claims` shows exactly what would go, and the same cap and
+confirmation apply. It is the same kind of data as a code audit: the consent for sending units of
+source code covers both.
 
 ## What is never sent
 

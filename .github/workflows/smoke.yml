@@ -1,6 +1,6 @@
 # Starts the plugin's MCP server exactly as a client does (uv run --quiet --script), on Linux,
 # macOS and Windows, from an empty uv cache and with no API key, and checks that it answers MCP,
-# that seven free tools work, that the three tools that send data refuse without a key, and that
+# that eight free tools work, that the four tools that send data refuse without a key, and that
 # record_code_audit_verdicts refuses with no audit run before it.
 # The throwaway project holds Russian, Chinese and typographic quotes, and a CI log named in Russian.
 # On Windows the server runs in the ANSI code page (cp1252), and on macOS a second run is in the
