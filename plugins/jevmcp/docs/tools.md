@@ -1875,7 +1875,7 @@ request or commit with a description you wrote. `preview_change_claims` is free 
 | `description` | string | the commit message(s) | The text to check, such as the pull-request description you are about to submit. |
 | `base` | string | — | The change is HEAD against its merge base with this ref; its default description is the messages of those commits. |
 | `commit` | string | `HEAD` | Without `base`: this one commit and its message. Not with `base`. |
-| `confirm_units` | integer | — | `check_change_claims` only: needed above the server's cap (400 requests). |
+| `confirm_units` | integer | — | `check_change_claims` only: the count `preview_change_claims` reported, after the user agreed; needed above the server's cap (400 requests), and for every check when the cap is off. |
 | `project` | string | see above | Absolute path of the project. |
 
 **Sentences:** the description's paragraphs and list items, split into sentences. Headings, code
@@ -1886,7 +1886,7 @@ files' hunks; one that names nothing gets the whole change when it fits in 2,600
 is listed as `not paired with any hunk (not sent)`. Also computed and free: the files the change edits
 that no sentence mentions, and, per sentence, files it names that the change does not edit
 (`not_in_change`). The hunks are read and redacted as CI triage's change excerpt; secret files are left
-out.
+out. Each sentence is redacted as a log line is (secret-looking values, email addresses, home folders).
 
 **What is sent** for each paired sentence: `a_change`, its hunks (at most 2,600 characters), and
 `b_claim`, the sentence. The fixed question asks whether the hunks do what the sentence says, with the
@@ -1913,7 +1913,9 @@ does not edit: ...`. Structured fields: `summary`, `project`, `claims`, `request
 `samples`, `needs_confirm`, `confirm_units`, `model`, `questions`, `examples`.
 
 **Errors:** `pass base or commit, not both.` · `could not read the change: ...` · `X is not a commit in
-this repository` · the key, rate-limit and TypeSafe errors of `check_code_rules`. `change claims:
+this repository` · `this check would send N request(s) ... Nothing was sent.` · `confirm_units is N, but
+this check is M request(s) now. Nothing was sent.` · the key, rate-limit and TypeSafe errors of
+`check_code_rules`. `change claims:
 nothing to check - no sentence could be paired with the change. That is not a pass.` is not an error.
 
 ## The rule map

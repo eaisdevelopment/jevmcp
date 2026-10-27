@@ -22,8 +22,10 @@ Computed locally and free, never asked:
 - per sentence, the files it names that the change does not edit.
 
 What is sent is a kind of data of its own: each paired sentence, with its hunks redacted as CI
-triage's change excerpt (secret files left out). Headings, code blocks, tables and trailers are not
-sent. The skill asks consent for this kind separately.
+triage's change excerpt (secret files left out); the sentence itself is redacted as a log line is
+(secret-looking values, email addresses, home folders). Headings, code blocks, tables and trailers are
+not sent. The skill asks consent for this kind separately, and `check_change_claims` sends nothing
+without `confirm_units` when the server's cap is off.
 
 Measured before release, with the user's consent, on synthetic one-file changes, each with an
 accurate and a mutated one-sentence description:

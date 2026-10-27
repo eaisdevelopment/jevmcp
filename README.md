@@ -311,7 +311,7 @@ key into an issue or pull request.
   1.9.0 checks whether each docstring, comment or test name the change touches still matches its code.
   1.10.0 checks each sentence of a pull-request description or commit message against the change.
 - **jevmcp checks its own documentation.** Its tool reference and privacy notes are mapped sentence
-  by sentence to its own code (1051 claims). A free, offline check in CI (no Jev call, no key)
+  by sentence to its own code (1054 claims). A free, offline check in CI (no Jev call, no key)
   validates that map on every push that changes the plugin. In 1.7.1, mapping the new documentation
   to the code, sentence by sentence, found four places where the docs and the code disagreed.
 - **The server on three systems.** On every change to the plugin CI starts the server exactly as a client does,

@@ -604,7 +604,8 @@ source code covers both.
 **Change claims** (`check_change_claims`) sends a kind of its own: the sentences of a pull-request
 description or commit message (the one you pass, or the commits' own messages), each with the hunks
 of the change it is paired with. The hunks are read and redacted as CI triage's excerpt of the change
-(secret-looking values redacted, secret files left out); headings, code blocks, tables and trailers
+(secret-looking values redacted, secret files left out), and each sentence is redacted as a log line
+is (secret-looking values, email addresses and home folders); headings, code blocks, tables and trailers
 of the description are not sent, nor a sentence no hunk could be paired with. `preview_change_claims`
 shows exactly what would go. Consent is asked for this kind separately.
 

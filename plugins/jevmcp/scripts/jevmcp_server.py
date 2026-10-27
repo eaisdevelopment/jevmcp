@@ -2364,7 +2364,7 @@ class Server:
         claims, unpaired, unmentioned, items = self._change_plan(description, base, commit)
         samples = min(self.samples, ci.CHANGE_SAMPLES)
         cap = self.max_audit_requests
-        needs = len(items) > cap if cap else False
+        needs = len(items) > cap if cap else bool(items)      # as check_doc_claims: no cap means every run is confirmed
         sent = sum(len(json.dumps(it.state, ensure_ascii=False).encode()) for it in items)
         nic = {it.meta["claim"]: it.meta["not_in_change"] for it in items if it.meta["not_in_change"]}
         structured = {"project": str(self.root), "claims": len(claims), "requests": len(items), "unpaired": unpaired,
@@ -2391,9 +2391,15 @@ class Server:
                             confirm_units: int | None = None) -> tuple:
         claims, unpaired, unmentioned, items = self._change_plan(description, base, commit)
         cap = self.max_audit_requests
-        if cap and len(items) > cap and confirm_units != len(items):
-            raise ToolError(f"this check would send {len(items)} request(s), more than the cap of {cap}. Nothing was "
-                            f"sent. Run preview_change_claims, show the user, and pass confirm_units: {len(items)}.")
+        needs = len(items) > cap if cap else bool(items)
+        if confirm_units is not None and confirm_units != len(items):
+            raise ToolError(f"confirm_units is {confirm_units}, but this check is {len(items)} request(s) now. Nothing "
+                            f"was sent. Run preview_change_claims again and pass the count it reports.")
+        if needs and confirm_units is None:
+            raise ToolError(f"this check would send {len(items)} request(s)"
+                            + (f", more than the cap of {cap}" if cap else " and the server has no cap set") +
+                            f". Nothing was sent. Run preview_change_claims, show the user, and pass confirm_units: "
+                            f"{len(items)}.")
         structured = {"summary": "", "project": str(self.root), "claims": len(claims), "requests": len(items),
                       "checked": 0, "counts": {k: 0 for k in ("UNSUPPORTED", "review", "??", "ok", "vague")},
                       "unpaired": unpaired, "unmentioned_files": unmentioned, "cost_usd": 0.0, "complete": True,

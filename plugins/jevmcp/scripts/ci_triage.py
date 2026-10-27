@@ -2406,7 +2406,9 @@ def change_claims(description: str) -> list[str]:
     def flush():
         if para:
             for sent in dd._split_sentences(" ".join(para)):
-                sent = " ".join(sent.strip(" -*>").split())
+                # redacted as a log line is (secret-looking values, email addresses, home folders): a description
+                # is text someone wrote, and may quote a token or a path as readily as a log does
+                sent = clean_line(" ".join(sent.strip(" -*>").split()))
                 if len(sent.split()) >= CHANGE_MIN_WORDS:
                     out.append(sent)
             para.clear()
