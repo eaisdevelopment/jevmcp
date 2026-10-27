@@ -2361,6 +2361,232 @@ def load_snapshot(path: Path) -> tuple[list[Failure], Context]:
     return [Failure(**f) for f in data["failures"]], Context(**data["context"])
 
 
+# ─────────────────────────────────────────────────────────────── 7. change claims (1.10.0)
+#
+# What a pull request's description or a commit message says the change does, sentence by sentence, against the
+# change's own hunks. Agent-written PRs that claim changes never made are accepted far less often (28% against 80% in
+# one study), and nothing else checks the author's claims. Each sentence is paired with the hunks of the files and
+# names it mentions, deterministically; a sentence that names nothing gets the whole change when it fits, else it is
+# listed as unpaired and not sent. Files the change edits that no sentence pairs with are computed, never asked.
+# The hunks are read as CI triage reads the change (redacted, secret files left out).
+CHANGE_ROOM = 2_600              # characters of hunks per request, as code audit's unit
+CHANGE_MIN_WORDS = 4
+CHANGE_ACT = 0.905
+CHANGE_CLEAN = 0.905
+CHANGE_NOUL_NO = 0.295
+CHANGE_REVIEW_CUT = 0.5          # fixed on the calibration set before the held-out set (NOTES-F3.md)
+CHANGE_SAMPLES = 3
+_TRAILER = re.compile(r"(?i)^\s*(?:[\w-]+-by|change-id|fixes|closes|refs?|see-also)\s*:")
+_BOILERPLATE = re.compile(r"(?i)^\s*(?:🤖|generated with|\[[ x]\]|<!--|---+$|\|)")
+_NAMED = re.compile(r"`([^`\n]{2,80})`|(?<![\w./-])([\w./-]+\.[A-Za-z]{1,6})(?![\w])|(?<![\w.])([A-Za-z_][A-Za-z0-9_]{3,})")
+
+
+def change_and_description(root: Path, base: str | None, commit: str | None) -> tuple[str, str]:
+    """(diff, default description): base...HEAD and the messages of its commits, else one commit and its message."""
+    def git(*a: str) -> str:
+        return subprocess.run(dd.git_argv("-C", str(root), *a), capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=60, check=True, stdin=subprocess.DEVNULL).stdout
+    try:
+        if base:
+            sha = resolve_base(root, base)
+            mb = git("merge-base", sha, "HEAD").strip()
+            return git_diff(root, base), git("log", "--no-color", "--format=%B", "--end-of-options", f"{mb}..HEAD")
+        sha = resolve_base(root, commit or "HEAD")
+        diff = git("show", "--no-color", "--no-ext-diff", "--format=", "--end-of-options", sha)
+        return diff, git("log", "-1", "--no-color", "--format=%B", "--end-of-options", sha)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise Stop(f"could not read the change: {getattr(e, 'stderr', '') or e}".strip()[:300])
+
+
+def change_claims(description: str) -> list[str]:
+    """The sentences of a description that say what the change does: no headings, code blocks, trailers
+    (Co-Authored-By:), checkboxes, tables or boilerplate, and 4 words at least."""
+    out, para, fence = [], [], False
+
+    def flush():
+        if para:
+            for sent in dd._split_sentences(" ".join(para)):
+                sent = " ".join(sent.strip(" -*>").split())
+                if len(sent.split()) >= CHANGE_MIN_WORDS:
+                    out.append(sent)
+            para.clear()
+    for ln in description.replace("\r\n", "\n").split("\n"):
+        st = ln.strip()
+        if st.startswith("```"):
+            fence = not fence
+            flush()
+            continue
+        if fence or _TRAILER.match(st) or _BOILERPLATE.match(st):
+            continue
+        if not st or st.startswith("#") or re.match(r"^(?:[-*+]|\d+[.)])\s", st):
+            flush()
+            if st and not st.startswith("#"):
+                para.append(re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", st))
+                flush()
+            continue
+        para.append(st)
+    flush()
+    return list(dict.fromkeys(out))
+
+
+def change_sections(diff: str) -> list[tuple[str, str]]:
+    """(path, redacted section) per file the change edits; secret files left out."""
+    out = []
+    for sec in re.split(r"(?m)^(?=diff --git )", diff):
+        if not sec.startswith("diff --git "):
+            continue
+        path = diff_path(sec)
+        if path and not _is_secret_path(path):
+            out.append((path, _redact_diff(sec)))
+    return out
+
+
+def _mentions(claim: str, path: str, section: str) -> bool:
+    low = claim.lower()
+    stem = Path(path).stem.lower()
+    if path.lower() in low or Path(path).name.lower() in low or (len(stem) >= 4 and re.search(rf"\b{re.escape(stem)}\b", low)):
+        return True
+    changed = "\n".join(ln for ln in section.split("\n") if ln[:1] in "+-" and not ln.startswith(("+++", "---")))
+    for m in _NAMED.finditer(claim):
+        tok = next(g for g in m.groups() if g)
+        if (m.group(1) or "_" in tok or re.search(r"[a-z][A-Z]", tok)) and tok in changed:
+            return True
+    return False
+
+
+def pair_claims(claims: list[str], sections: list[tuple[str, str]]) -> tuple[list[tuple[str, list[str], str]],
+                                                                               list[str], list[str]]:
+    """([(claim, paths, hunks text)], unpaired claims, files no claim pairs with)."""
+    whole = "".join(sec for _, sec in sections)
+    paired, unpaired, used = [], [], set()
+    for c in claims:
+        hits = [(p, sec) for p, sec in sections if _mentions(c, p, sec)]
+        if hits:
+            room = max(400, CHANGE_ROOM // len(hits))
+            text = "".join(_hunks_within(sec, room) for _, sec in hits)[:CHANGE_ROOM]
+            paired.append((c, [p for p, _ in hits], text))
+            used |= {p for p, _ in hits}
+        elif whole and len(whole) <= CHANGE_ROOM:
+            paired.append((c, [p for p, _ in sections], whole))
+            used |= {p for p, _ in sections}
+        else:
+            unpaired.append(c)
+    return paired, unpaired, [p for p, _ in sections if p not in used]
+
+
+CHANGE_QUESTIONS = {
+    "verdict": {
+        "type": "choice",
+        "instructions": (
+            "`a_change` holds hunks of a code change (lines starting with + are added, - removed). `b_claim` is one "
+            "sentence of the change's own description: its pull-request text or commit message. Judge the sentence by "
+            "the hunks alone. Do these hunks do what the sentence says the change does?"),
+        "criteria": {
+            "implemented": "The hunks do what the sentence says.",
+            "contradicted": "The hunks do something the sentence contradicts: another value, the opposite effect, "
+                            "something removed that the sentence says is added, or the other way round.",
+            "not_shown": "The sentence says the change does something these hunks do not do at all.",
+            "too_vague": "The sentence is too general to compare with the hunks (a motive, a summary of intent).",
+            "cannot_tell": "The hunks shown are not enough to tell. Choose this rather than guessing.",
+        },
+    },
+    "unsupported": {
+        "type": "noul",
+        "instructions": "Does the sentence in `b_claim` claim something the hunks in `a_change` do not do?",
+        "criteria": {"true": "The hunks do not do, or contradict, what the sentence claims.",
+                     "false": "The hunks do what the sentence claims, or it claims nothing they could show."},
+    },
+}
+CHANGE_LABELS = {"act": "UNSUPPORTED", "review": "review", "clean": "ok", "na": "vague", "unverifiable": "??"}
+
+
+def files_not_in_change(claim: str, sections: list[tuple[str, str]]) -> list[str]:
+    """File names the sentence mentions (a path with a folder or a code suffix) that the change does not edit:
+    computed, never asked."""
+    edited = {p for p, _ in sections} | {Path(p).name for p, _ in sections}
+    named = [m.group(2) or m.group(1) for m in _NAMED.finditer(claim) if m.group(2) or (m.group(1) and "." in m.group(1)
+                                                                                       and "/" in m.group(1))]
+    return [n for n in dict.fromkeys(named) if "/" in n or Path(n).suffix.lower() in _CODE_EXT
+            if n not in edited and Path(n).name not in edited]
+
+
+_CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".kt", ".go", ".rs", ".c", ".h", ".cpp", ".cs", ".rb",
+             ".php", ".swift", ".scala", ".md", ".yml", ".yaml", ".json", ".toml", ".sql", ".sh"}
+
+
+def change_items(paired: list[tuple[str, list[str], str]], sections: list[tuple[str, str]] | None = None) -> list[jevkit.Item]:
+    return [jevkit.Item(name=f"claim {i + 1}", state={"a_change": text, "b_claim": c}, questions=CHANGE_QUESTIONS,
+                        meta={"claim": c, "files": paths, "not_in_change": files_not_in_change(c, sections or [])})
+            for i, (c, paths, text) in enumerate(paired)]
+
+
+def classify_change(ans: dict) -> tuple[str, float, str]:
+    v = ans.get("verdict", {})
+    choice, conf = v.get("choice"), v.get("confidence", 0.0)
+    p = ans.get("unsupported", {}).get("noul", 0.0)
+    if choice == "cannot_tell":
+        return "unverifiable", conf, "the hunks shown cannot settle the sentence"
+    if choice == "too_vague":
+        if p < CHANGE_NOUL_NO:
+            return "na", conf, "the sentence is too general to compare with the change"
+        return "review", conf, f"says too vague, but P(unsupported) is {p:.2f}"
+    if choice in ("contradicted", "not_shown"):
+        what = "contradicts it" if choice == "contradicted" else "does not do it"
+        if conf >= CHANGE_ACT:
+            return "act", conf, f"the change {what}, confident"
+        return "review", conf, f"the change {what} at {conf:.2f}, below {CHANGE_ACT}"
+    if conf >= CHANGE_CLEAN and p < CHANGE_NOUL_NO:
+        return "clean", conf, "the change does what the sentence says"
+    return "review", conf, f"says implemented at {conf:.2f} but P(unsupported) is {p:.2f}"
+
+
+def classify_change_samples(answers: list[dict]) -> tuple[str, float, str] | None:
+    agreed = jevkit.agreement(answers, "verdict", AGREE_FLOOR)
+    if not agreed:
+        return None
+    choice, conf = agreed
+    low = max(a.get("unsupported", {}).get("noul", 0) for a in answers) < CHANGE_NOUL_NO
+    n = len(answers)
+    if choice in ("contradicted", "not_shown"):
+        return "act", conf, f"all {n} answers: {choice.replace('_', ' ')}, none below {AGREE_FLOOR}"
+    if choice == "implemented" and low:
+        return "clean", conf, f"all {n} answers: implemented, none below {AGREE_FLOOR}"
+    if choice == "too_vague" and low:
+        return "na", conf, f"all {n} answers: too vague, none below {AGREE_FLOOR}"
+    return None
+
+
+def check_change(items: list[jevkit.Item], key: str, jobs: int = 4, samples: int = CHANGE_SAMPLES,
+                 use_cache: bool = True, cancelled=None, on_answer=None) -> tuple[list[dict], jevkit.Run]:
+    run = jevkit.screen(items, key, classify_change, classify_change_samples, {"act", "clean", "na", "unverifiable"},
+                        jobs=jobs, samples=samples, use_cache=use_cache, cancelled=cancelled, on_answer=on_answer)
+    return [change_result_for(s) for s in run.results], run
+
+
+def change_result_for(s: jevkit.Screened) -> dict:
+    out = {"claim": s.item.meta["claim"], "files": s.item.meta["files"]}
+    if s.item.meta.get("not_in_change"):
+        out["not_in_change"] = s.item.meta["not_in_change"]
+    if s.error:
+        return {**out, "label": "not checked", "why": s.error}
+    a = s.first
+    return {**out, "label": CHANGE_LABELS[s.action], "confidence": round(s.confidence, 3), "why": s.why,
+            "p_unsupported": a.get("unsupported", {}).get("noul"), "verdict": a.get("verdict", {}).get("choice"),
+            "probabilities": a.get("verdict", {}).get("probabilities", {}), "samples": len(s.answers),
+            "request_id": s.request_id, **({"note": s.note} if s.note else {})}
+
+
+def change_group(r: dict) -> str:
+    if r.get("label") == "review" and (r.get("p_unsupported") or 0) < CHANGE_REVIEW_CUT:
+        return "low"
+    return r.get("label") or "not checked"
+
+
+def change_in_order(results: list[dict]) -> list[dict]:
+    order = {"UNSUPPORTED": 0, "review": 1, "??": 2, "not checked": 3, "low": 4, "ok": 5, "vague": 6}
+    return sorted(results, key=lambda r: (order.get(change_group(r), 7), -(r.get("p_unsupported") or 0)))
+
+
 def main(argv: list[str] | None = None) -> int:
     dd.utf8_restart()                           # LC_ALL=C and UTF-8 mode off: ci/журнал.log would be misnamed
     for stream in (sys.stdout, sys.stderr):     # log text is any language: never fail printing it to a pipe

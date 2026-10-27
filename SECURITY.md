@@ -23,9 +23,10 @@ The latest release of each plugin.
   run yourself, also reads a `TYPESAFE_API_KEY=` line from the `.env` of the folder you run it in;
   the CI-triage and code-audit command lines never do.
 - The key is never placed in the model's context, in tool arguments or in tool results.
-- Data is sent to `api.typesafe.ai` only by the four tools that send — `check_spec_drift` (spec
+- Data is sent to `api.typesafe.ai` only by the five tools that send — `check_spec_drift` (spec
   sentences with their paired code), `triage_ci_failure` (CI log excerpts with an excerpt of the
-  change), and `check_code_rules` and `check_doc_claims` (units of source code) — after the user's consent for that kind
+  change), `check_code_rules` and `check_doc_claims` (units of source code), and
+  `check_change_claims` (a change's description with its hunks) — after the user's consent for that kind
   of data, and cleaned first: secret-looking values redacted, and comments left out of code in
   the languages and cases `PRIVACY.md` lists (a rule about comments keeps them). Files
   such as `.env`, key and certificate files, and anything outside the project (apart from CI logs

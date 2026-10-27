@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.10.0 — 2026-10-27
+
+**Does the description match the change?** Two new tools: `preview_change_claims` (free) and
+`check_change_claims`. They check each sentence of a pull-request description or commit message
+against the hunks of the change it is paired with. Pass the description you are about to submit;
+by default it is the commits' own messages. Agent-written pull requests that claim changes never
+made are accepted far less often, and nothing else checks the author's claims.
+
+Labels:
+- `UNSUPPORTED`: the hunks contradict or do not do what the sentence says, with confidence;
+- `review`: sorted by P(unsupported), read from 0.5 up;
+- `??`;
+- `ok`;
+- `vague`.
+
+Computed locally and free, never asked:
+- which sentences name a changed file, or a name in the changed lines, and so get those hunks;
+- the sentences no hunk could be paired with (not sent);
+- the files no sentence mentions;
+- per sentence, the files it names that the change does not edit.
+
+What is sent is a kind of data of its own: each paired sentence, with its hunks redacted as CI
+triage's change excerpt (secret files left out). Headings, code blocks, tables and trailers are not
+sent. The skill asks consent for this kind separately.
+
+Measured before release, with the user's consent, on synthetic one-file changes, each with an
+accurate and a mutated one-sentence description:
+- the first 40 cases set the 0.5 cut-off;
+- **on 40 held-out cases, every mutated sentence and no accurate one was flagged.**
+
+Real multi-file pull requests are harder, and how it does on them is not measured.
+
 ## 1.9.0 — 2026-10-25
 
 **Do docstrings, comments and test names still match the code?** Two new tools, with no map:

@@ -1,6 +1,6 @@
 # What jevmcp offers: tools, skills, maps, command line
 
-This page is the reference for everything the jevmcp plugin gives you — thirteen MCP tools in three
+This page is the reference for everything the jevmcp plugin gives you — fifteen MCP tools in three
 families (spec drift, CI failure triage, code audit), three skills, the two map files the tools
 work from (`spec_map.json` and `rule_map.json`), the result labels, and the three command-line
 scripts — with exact arguments, exact output and the errors each can return; it is written for
@@ -30,16 +30,19 @@ see [how-to.md](how-to.md). For what leaves the machine, see
 | MCP tool | `record_code_audit_verdicts` | No (writes a file in the project) | No |
 | MCP tool | `check_doc_claims` | **Yes** — units of source code, each with what its own docstring, comment or test name says | Yes: fractions of a cent per unit |
 | MCP tool | `preview_doc_claims` | No | No |
+| MCP tool | `check_change_claims` | **Yes** — the sentences of a change's description, each with the hunks it is paired with | Yes: fractions of a cent per sentence |
+| MCP tool | `preview_change_claims` | No | No |
 | Skill | `spec-drift`, `ci-triage`, `code-audit` | — | — |
 | File | `spec_map.json` and `rule_map.json` in the project | — | — |
 | Command line | `scripts/spec_drift.py`, `scripts/ci_triage.py`, `scripts/code_audit.py` | Yes, on a real run | Yes, on a real run |
 
-Four tools send data to TypeSafe, three kinds: `check_spec_drift` sends spec sentences with their
-paired code, `triage_ci_failure` sends CI log excerpts with an excerpt of the change, and
-`check_code_rules` and `check_doc_claims` send units of source code. The skills ask the user's consent for
+Five tools send data to TypeSafe, four kinds: `check_spec_drift` sends spec sentences with their
+paired code, `triage_ci_failure` sends CI log excerpts with an excerpt of the change,
+`check_code_rules` and `check_doc_claims` send units of source code, and `check_change_claims` sends
+the sentences of a change's description with the hunks each is paired with. The skills ask the user's consent for
 each kind separately. Every other tool is free and sends nothing.
 
-One MCP server holds all thirteen tools. It is called `jevmcp` and the client starts it as
+One MCP server holds all fifteen tools. It is called `jevmcp` and the client starts it as
 `uv run --quiet --script <plugin>/scripts/jevmcp_server.py`. New tool families are added to this
 same server, so there is never a second install or a second API key.
 
@@ -217,7 +220,7 @@ sentence and the same code) are asked once and share the answers, each keeping i
 agreement never counts one answer twice, and the shared answers cost nothing more. The same holds
 for CI triage and code audit.
 
-**Every reply is read before it is used.** In all four tools that send, each question asked has
+**Every reply is read before it is used.** In all five tools that send, each question asked has
 an answer, a choice is one of the options offered, its confidence and probabilities are numbers,
 and a score is a number (null, true or false, NaN and infinity are not). A reply that fails this
 is an API error for its item — for a first answer
@@ -263,7 +266,7 @@ Measured runs:
 | `No TypeSafe API key is set for this server, so nothing was sent.` | Nothing was sent. Pass the stored-key command on to the user to run **in their own terminal**. Never ask for the key in chat, never put it in a command you run. See [install.md](install.md). |
 | `TypeSafe rejected the API key (HTTP 401/403)` (inside the `INCOMPLETE` block) | The key is wrong or revoked. Tell the user to check it at <https://console.typesafe.ai> and store it again. The reply is always an error, and these words follow `the run stopped early:` (or `the run stopped early - N item(s) keep their first answer's label:`, or `re-asking stopped early - N item(s) keep their first answer's label:`) in its `INCOMPLETE` block, after the `spec-drift check` line. |
 | `TypeSafe's credits are used up (HTTP 402)` (inside the `INCOMPLETE` block) | Not a fault in the code. Report it, carry on without the check, and never report "no drift". It is an error only when no claim was answered; when any claim was answered, whatever its place in the order, the result is a successful one. Either way the text starts with the `spec-drift check` line, and these words follow `the run stopped early:` (or `the run stopped early - N item(s) keep their first answer's label:`, or `re-asking stopped early - N item(s) keep their first answer's label:`) in the first line of its `INCOMPLETE` block. |
-| `rate limit: at most 20 paid calls a minute` | Wait the stated seconds, or check more files in one call instead of looping. The budget is shared by the four tools that send. |
+| `rate limit: at most 20 paid calls a minute` | Wait the stated seconds, or check more files in one call instead of looping. The budget is shared by the five tools that send. |
 | `rate limit: at most 120 tool calls a minute` | You are calling too fast. Wait the stated seconds. |
 | `this project (...) has no spec map yet (no *spec_map.json)` | If the user named the spec, run `draft_spec_map` with exactly what they named; otherwise run it without `docs` to list the candidate spec files and let the user choose. Then review every entry. Do not invent a map by hand. |
 | `this project has several spec maps - say which one with 'map'` | Pass `map` with one of the paths it lists. |
@@ -973,7 +976,7 @@ that the run stopped early, and each failure that got no answer is a `not checke
 (`not checked: the run stopped early`). In both, every answer that came back is in the results
 file and counted in the cost.
 
-The `INCOMPLETE` block, in all four tools that send, starts with why the run stopped (the run
+The `INCOMPLETE` block, in all five tools that send, starts with why the run stopped (the run
 stopped early, the re-asking stopped early or was cancelled), so the reason, such as credits to top
 up, is never cut; then it lists the first 20 lines and `... and N more (...)`. Past 20 lines, when
 the reply is an error or `structuredContent.not_checked` was cut, it names a file in the results
@@ -1073,6 +1076,8 @@ rule map, `validate_rule_map` checks the map, `preview_code_audit` shows what an
 and cost, `check_code_rules` sends it, and `record_code_audit_verdicts` records what investigating
 each finding showed, so later audits use it. Two more need no map: `preview_doc_claims` and
 `check_doc_claims` check what each unit's own docstring, comment or test name says against its code.
+And `preview_change_claims` and `check_change_claims` check what a pull-request description or
+commit message says against the change.
 The skill `code-audit` is the procedure; run an audit when the user asks or before a pull request,
 never after every edit.
 
@@ -1858,6 +1863,58 @@ preview_doc_claims ...` · `confirm_units is N, but this check is M request(s) n
 `pass files or all=true, not both.` · `base only narrows the default scope ...` · the key, rate-limit
 and TypeSafe errors of `check_code_rules`. `doc claims: nothing to check - no unit in scope has a
 docstring, a comment above it or a test name that makes a claim. That is not a pass` is not an error.
+
+### `preview_change_claims` and `check_change_claims`
+
+Check what a change's own description says against the change: each sentence of a pull-request
+description or commit message, against the hunks it is paired with. Run it before you open a pull
+request or commit with a description you wrote. `preview_change_claims` is free and sends nothing.
+
+| Argument | Type | Default | Meaning |
+|---|---|---|---|
+| `description` | string | the commit message(s) | The text to check, such as the pull-request description you are about to submit. |
+| `base` | string | — | The change is HEAD against its merge base with this ref; its default description is the messages of those commits. |
+| `commit` | string | `HEAD` | Without `base`: this one commit and its message. Not with `base`. |
+| `confirm_units` | integer | — | `check_change_claims` only: needed above the server's cap (400 requests). |
+| `project` | string | see above | Absolute path of the project. |
+
+**Sentences:** the description's paragraphs and list items, split into sentences. Headings, code
+blocks, tables, checkboxes, `<!-- -->` comments, trailers (`Co-Authored-By:`, `Signed-off-by:`,
+`Fixes:`) and sentences of fewer than 4 words are left out. **Pairing**, computed: a sentence that
+names a changed file (its path, name or stem) or a name in its added or removed lines gets those
+files' hunks; one that names nothing gets the whole change when it fits in 2,600 characters, else it
+is listed as `not paired with any hunk (not sent)`. Also computed and free: the files the change edits
+that no sentence mentions, and, per sentence, files it names that the change does not edit
+(`not_in_change`). The hunks are read and redacted as CI triage's change excerpt; secret files are left
+out.
+
+**What is sent** for each paired sentence: `a_change`, its hunks (at most 2,600 characters), and
+`b_claim`, the sentence. The fixed question asks whether the hunks do what the sentence says, with the
+options implemented, contradicted, not_shown, too_vague and cannot_tell.
+
+**Labels:** `UNSUPPORTED` (the hunks contradict or do not do what the sentence says, confident:
+investigate each — is the description or the change wrong?), `review` (sorted by P(unsupported); read
+from 0.5 up), `??`, `ok`, `vague`, `not checked`. A result has `claim`, `files`, `not_in_change` when
+there are any, `label`, `confidence`, `why`, `p_unsupported`, `verdict`, `probabilities`, `samples` and
+`request_id`.
+
+**Measured** (1.10.0) on 40 held-out cases, short synthetic one-file changes each with an accurate
+and a mutated one-sentence description (a wrong value, the opposite direction, the wrong target, a
+change not made), with the 0.5 cut fixed on a first set of 40: every mutated sentence and no accurate
+one read. Real multi-file pull requests are harder; that is not measured.
+
+**Text** of the check: `change claims: N sentence(s) checked against the change | checked in Xs |
+$cost`, the counts, `To read: N (UNSUPPORTED, and review from P(unsupported) 0.5 up).`, the unpaired
+sentences and unmentioned files, then the flagged sentences with their files and `names files the change
+does not edit: ...`. Structured fields: `summary`, `project`, `claims`, `requests`, `checked`,
+`counts`, `unpaired`, `unmentioned_files`, `cost_usd`, `complete`, `not_checked`, `not_checked_total`,
+`results_file`, `flagged`, `flagged_total`. The preview's: `project`, `claims`, `requests`,
+`unpaired`, `unmentioned_files`, `not_in_change`, `bytes_sent`, `estimate_usd`, `estimate_usd_max`,
+`samples`, `needs_confirm`, `confirm_units`, `model`, `questions`, `examples`.
+
+**Errors:** `pass base or commit, not both.` · `could not read the change: ...` · `X is not a commit in
+this repository` · the key, rate-limit and TypeSafe errors of `check_code_rules`. `change claims:
+nothing to check - no sentence could be paired with the change. That is not a pass.` is not an error.
 
 ## The rule map
 

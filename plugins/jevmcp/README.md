@@ -29,7 +29,7 @@ Three tool families, each with its own skill, all on one MCP server:
   Tools: `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`; skill
   `code-audit`.
 
-**One MCP server** (`jevmcp`) holds all thirteen tools. It keeps the parsed code in memory, so after an
+**One MCP server** (`jevmcp`) holds all fifteen tools. It keeps the parsed code in memory, so after an
 edit only the changed files are read again (a 16,000-file repository: ~2 s instead of ~20 s), and
 it holds your API key so the agent never sees it. Every tool that sends has a free preview, and
 the skills ask for your consent before the first send of each kind of data in a project.
@@ -45,12 +45,12 @@ the skills ask for your consent before the first send of each kind of data in a 
   in a git project), the change under test for CI triage with `base`, this project's GitHub remote
   to triage a run by its URL, and the last commit of each spec. Without it, name the files for a
   spec check, and triage a saved log without `base`.
-- A TypeSafe API key — get one at <https://console.typesafe.ai> — for the four tools that send
+- A TypeSafe API key — get one at <https://console.typesafe.ai> — for the five tools that send
   data. The draft, validate and preview tools work without it. One key serves every tool in the
   plugin.
 - Linux, macOS or Windows. On all three, CI starts the server from an empty uv cache on every
-  change to the plugin, runs eight of its free tools and checks that the four that send refuse without a key. The
-  four that send have been run with a real key on Linux only. Every file is read and written as
+  change to the plugin, runs nine of its free tools and checks that the five that send refuse without a key. The
+  five that send have been run with a real key on Linux only. Every file is read and written as
   UTF-8, and a CI log, spec or rule file that Windows PowerShell 5.1 saved as UTF-16 is read too, so
   specs, rules and logs in any language work on Windows too; so do non-ASCII file names on Linux
   under a locale whose file names are not UTF-8 (an 8-bit one, or C with Python's UTF-8 mode off),
@@ -99,7 +99,7 @@ never sees it. `--show-key-source` says where the key would come from, without p
 `export TYPESAFE_API_KEY=...` in the shell that starts Codex works too, but then Codex's own shell
 tool inherits it, so the model *could* read it with `env`; the skill tells it never to.
 
-The four tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims`) are marked as
+The four tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims`, `check_change_claims`) are marked as
 write actions, because data leaves your machine: Codex asks you before each call — that is your
 consent. The free tools can run without asking if you add to `~/.codex/config.toml`:
 
@@ -233,7 +233,7 @@ Workarounds and the measurements are in [docs/tools.md](docs/tools.md#the-spec-m
 
 ## What is sent, and what never is
 
-Four tools send data to `api.typesafe.ai`, three kinds of data, and the agent asks for your
+Five tools send data to `api.typesafe.ai`, four kinds of data, and the agent asks for your
 consent before the first send of each kind in a project:
 
 - **Spec drift**, per requirement: the spec sentence; the code paired with it, with **comments
@@ -248,6 +248,8 @@ consent before the first send of each kind in a project:
   removed (except for rules about comments) and secret-looking values redacted. Only files git
   tracks or would commit, never ignored ones. **Doc claims** sends the same kind of units, each
   with what its own docstring, comment above it or test name says (redacted, links removed).
+- **Change claims**, per sentence of a pull-request description or commit message: the sentence and the
+  hunks of the change it is paired with, redacted as CI triage's change excerpt; secret files never.
 
 A `.env` file, key and credentials files (`.netrc`, `.npmrc`, `kubeconfig`, Terraform state, ...),
 and anything outside the project (apart from CI logs you save in the server's private inbox) are

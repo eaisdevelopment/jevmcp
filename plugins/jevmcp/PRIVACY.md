@@ -5,7 +5,7 @@ logs of your conversations.
 
 ## What leaves your machine
 
-Four tools send data, three kinds, and only when they run:
+Five tools send data, four kinds, and only when they run:
 
 | Tool | What it sends |
 |---|---|
@@ -13,6 +13,7 @@ Four tools send data, three kinds, and only when they run:
 | `triage_ci_failure`, or `ci_triage.py` without `--dry-run` | excerpts of a failed CI run's log, with an excerpt of the change under test |
 | `check_code_rules`, or `code_audit.py` without `--dry-run` | units of your source code, each with one of your project's own rules |
 | `check_doc_claims` | units of your source code, each with what its own docstring, the comment above it or a test's name says (the same kind as `check_code_rules`) |
+| `check_change_claims` | the sentences of a pull-request description or commit message, each with the hunks of the change it is paired with |
 
 Every other tool, and every `--dry-run`, sends nothing to TypeSafe.
 
@@ -599,6 +600,13 @@ first, and the claim: the docstring or comment text taken from the unit as it is
 test's name split into words. `preview_doc_claims` shows exactly what would go, and the same cap and
 confirmation apply. It is the same kind of data as a code audit: the consent for sending units of
 source code covers both.
+
+**Change claims** (`check_change_claims`) sends a kind of its own: the sentences of a pull-request
+description or commit message (the one you pass, or the commits' own messages), each with the hunks
+of the change it is paired with. The hunks are read and redacted as CI triage's excerpt of the change
+(secret-looking values redacted, secret files left out); headings, code blocks, tables and trailers
+of the description are not sent, nor a sentence no hunk could be paired with. `preview_change_claims`
+shows exactly what would go. Consent is asked for this kind separately.
 
 ## What is never sent
 

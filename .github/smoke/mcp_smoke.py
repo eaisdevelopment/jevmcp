@@ -22,8 +22,9 @@ from pathlib import Path
 
 SERVER = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "plugins/jevmcp/scripts/jevmcp_server.py").resolve()
 FREE = {"draft_spec_map", "validate_spec_map", "preview_spec_check", "draft_rule_map", "validate_rule_map",
-        "preview_code_audit", "preview_ci_triage", "preview_doc_claims"}
-SENDING = {"check_spec_drift", "triage_ci_failure", "check_code_rules", "check_doc_claims"}
+        "preview_code_audit", "preview_ci_triage", "preview_doc_claims",
+        "preview_change_claims"}
+SENDING = {"check_spec_drift", "triage_ci_failure", "check_code_rules", "check_doc_claims", "check_change_claims"}
 RECORD = {"record_code_audit_verdicts"}     # free, but only after a check_code_rules run: here it must refuse
 SPEC = ["An order may contain at most 50 items, set by MAX_ITEMS in app.py.",
         "A larger order is refused with the error “too many items — слишком много товаров”.",
@@ -212,6 +213,9 @@ def main() -> int:
             check("check_code_rules", False, "its first answer names no confirm_units to agree to", text)
         run("triage_ci_failure", want_error=True, must=("API key",), logs=[LOG])
         run("check_doc_claims", want_error=True, must=("API key",), files=["app.py"])
+        claim = "Places an order and refuses more than MAX_ITEMS items in app.py."
+        run("preview_change_claims", must=("free, nothing was sent", "1 request(s)"), description=claim)
+        run("check_change_claims", want_error=True, must=("API key",), description=claim)
         run("record_code_audit_verdicts", want_error=True, must=("no check_code_rules run", "Nothing was written"),
             map="rule_map.json", verdicts=[{"file": "app.py", "lines": "1-2", "rule_source": "CONTRIBUTING.md:3",
                                             "verdict": "confirmed", "why": "smoke"}])
