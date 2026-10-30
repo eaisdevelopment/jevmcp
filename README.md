@@ -35,9 +35,11 @@ sentences. Since 1.7.3 jevmcp reads all three sentence by sentence.
 
 Every result gets a label, and your agent acts on the label:
 
-- **DRIFT** (spec drift), **CHANGE** (CI triage), **BREAKS** (code audit): Jev is sure there is a
-  problem — the spec and the code disagree, the change under test caused the failure, or the code
-  breaks a rule. The agent investigates each one.
+- **DRIFT** (spec drift), **CHANGE** (CI triage), **BREAKS** (code audit), **STALE** (doc claims),
+  **UNSUPPORTED** (change claims): Jev is sure there is a problem — the spec and the code disagree,
+  the change under test caused the failure, the code breaks a rule, a docstring, comment or test
+  name says something the code contradicts, or the change does not do what a sentence of its
+  description says. The agent investigates each one.
 - **review**: Jev leans one way but is not sure. In CI triage this also covers every failure Jev
   blames on something other than the change. The agent reads these from the most likely down (in
   spec drift, grouped by the code they are about) and says how far it got.
@@ -45,8 +47,9 @@ Every result gets a label, and your agent acts on the label:
   real problems.
 - **ok** (spec drift and code audit; CI triage never clears a failure): Jev is sure there is no
   problem. The agent spot-checks a couple.
-- **n/a** (code audit): the rule is not about that code. **not checked** (CI triage): TypeSafe did
-  not answer. Neither is a pass.
+- **vague** (doc claims and change claims): the doc or the sentence is too general to compare.
+- **n/a** (code audit): the rule is not about that code. **not checked**: TypeSafe did not answer.
+  Neither is a pass.
 
 In CI triage, the *lean* is Jev's best guess at the cause: the change, the environment, a
 dependency or a flaky test. In spec drift, a *claim* is one spec sentence together with the code
@@ -181,7 +184,14 @@ Some limits are choices, and can change when the evidence does:
   environment option names a cancelled or timed-out job. The facts now say how long the step ran,
   how long it was silent and where the same step passed, and the skill tells the agent to look for
   a hang; the question itself stays as it was measured until it is measured on a set of hangs.
-- Codex: the code-audit tools, and a CI triage sent from a Codex session, have not been verified.
+- Change claims: each file a sentence names gets a share of 2,600 characters of hunks, and only the
+  whole hunks that fit are sent, without a note that the rest was left out; on a large change an
+  UNSUPPORTED may be about a hunk Jev never saw. It was measured on short one-file changes only.
+  The agent reads the change before it trusts an UNSUPPORTED.
+- Doc claims flags some accurate docs: on 60 held-out cases, 5 of 30 accurate claims were flagged
+  along with 27 of 30 stale ones.
+- Codex: the code-audit tools (doc claims and change claims included), and a CI triage sent from a
+  Codex session, have not been verified.
 - On macOS and Windows, CI tests the server and nine of its free tools on every change to the plugin; the five
   tools that send have been run with a real key on Linux only.
 - Cursor is not supported (it does not expand `${PLUGIN_ROOT}`). VS Code, GitHub Copilot and Kiro
@@ -348,7 +358,10 @@ human reading over its shoulder:
 - [How each client behaves](plugins/jevmcp/docs/clients.md) — approvals, unattended runs, sandbox
   and network, the verified limits.
 - [Recipes](plugins/jevmcp/docs/how-to.md) — set a project up, routine checks, triage a failed
-  CI run, audit before a pull request, what to do with each result.
+  CI run, audit before a pull request, check docstrings and a pull-request description, what to do
+  with each result.
+- [Questions and answers](plugins/jevmcp/docs/faq.md) — short answers: cost, the key, what is sent,
+  what each label means, why `??` is not a pass.
 - [AGENTS.md](AGENTS.md) — the short version, and the rules an agent must not break.
 - [What is sent, and what never is](plugins/jevmcp/PRIVACY.md).
 - [CHANGELOG](plugins/jevmcp/CHANGELOG.md) — every release, with how it was measured.

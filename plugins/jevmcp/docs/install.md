@@ -15,9 +15,9 @@ These are not style preferences. Break them and the user's API key ends up in a 
 | Ask the user for the API key in chat | Everything in the conversation is stored and re-read. The key would be in your context, in the transcript, and possibly in a summary. | Tell the user which **one command** to run in their own terminal, or which client prompt to use. Then wait. |
 | Run `jevmcp_server.py --set-key` yourself | It asks for the key without echoing it. It refuses to run unless both stdin and stdout are a terminal, so your attempt will fail with exit code 2 anyway. | Give the user the command. They run it. |
 | Put the key in a command, an environment assignment, or a file you write | Shell history, process listings and your own tool log all capture it. There is no flag that accepts the key as an argument, on purpose. | `--set-key` (interactive), or the client's own credential prompt. |
-| Run `check_spec_drift`, `triage_ci_failure` or `check_code_rules` "just to test the install" | Each sends code or CI logs to TypeSafe and spends credits. | Use the free tools: `validate_spec_map`, `preview_spec_check`, or `--show-key-source`. |
+| Run `check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims` or `check_change_claims` "just to test the install" | Each sends code, CI logs or a change to TypeSafe and spends credits. | Use the free tools: `validate_spec_map`, `preview_spec_check`, or `--show-key-source`. |
 
-The validate, preview and draft tools, `--help`, `--dry-run` and `--show-key-source` are free and send nothing to TypeSafe. Only `check_spec_drift`, `triage_ci_failure` and `check_code_rules` (and the command-line scripts without `--dry-run`) send anything to TypeSafe. Reading a GitHub Actions run for CI triage (`preview_ci_triage` or `triage_ci_failure` with `run`, or `ci_triage.py --run`) sends GET requests to GitHub with the user's own `gh` login; that costs nothing.
+The validate, preview and draft tools, `--help`, `--dry-run` and `--show-key-source` are free and send nothing to TypeSafe. Only `check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims` and `check_change_claims` (and the command-line scripts without `--dry-run`) send anything to TypeSafe. Reading a GitHub Actions run for CI triage (`preview_ci_triage` or `triage_ci_failure` with `run`, or `ci_triage.py --run`) sends GET requests to GitHub with the user's own `gh` login; that costs nothing.
 
 ---
 
@@ -191,7 +191,7 @@ plugin:jevmcp:jevmcp: uv run --quiet --script /…/plugins/jevmcp/scripts/jevmcp
 
 **b. The tools are there.**
 
-Ten tools, no more and no fewer: `check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map` (spec drift); `triage_ci_failure`, `preview_ci_triage` (CI failure triage); `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map` (code audit). In Claude Code they are addressed as:
+Fifteen tools, no more and no fewer: `check_spec_drift`, `validate_spec_map`, `preview_spec_check`, `draft_spec_map` (spec drift); `triage_ci_failure`, `preview_ci_triage` (CI failure triage); `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`, `record_code_audit_verdicts`, `check_doc_claims`, `preview_doc_claims`, `check_change_claims`, `preview_change_claims` (code audit). In Claude Code they are addressed as:
 
 ```
 mcp__plugin_jevmcp_jevmcp__check_spec_drift
@@ -204,6 +204,11 @@ mcp__plugin_jevmcp_jevmcp__check_code_rules
 mcp__plugin_jevmcp_jevmcp__preview_code_audit
 mcp__plugin_jevmcp_jevmcp__validate_rule_map
 mcp__plugin_jevmcp_jevmcp__draft_rule_map
+mcp__plugin_jevmcp_jevmcp__record_code_audit_verdicts
+mcp__plugin_jevmcp_jevmcp__check_doc_claims
+mcp__plugin_jevmcp_jevmcp__preview_doc_claims
+mcp__plugin_jevmcp_jevmcp__check_change_claims
+mcp__plugin_jevmcp_jevmcp__preview_change_claims
 ```
 
 **c. The skills loaded.** In Claude Code they are `jevmcp:spec-drift`, `jevmcp:ci-triage` and `jevmcp:code-audit`. You do not need to mention the plugin for them to trigger; their frontmatter descriptions do that.
@@ -287,7 +292,7 @@ Neither removes the stored key. To remove it, the user deletes `~/.config/jevmcp
 | `claude mcp list` shows anything but `✔ Connected`, or `/mcp` shows the server as failed | The server exited at start-up. Everything it prints that is not protocol goes to stderr, and Claude Code keeps it. | Read `~/.cache/claude-cli-nodejs/<encoded-project-path>/mcp-logs-plugin-jevmcp-jevmcp/`. Then reproduce by hand: `uv run --quiet --script <installed path>/scripts/jevmcp_server.py --help`. A traceback there is the real error. |
 | The tools work but a tool call says *this client did not tell the server which project it is working in* | Codex starts the server in the plugin's own folder, so the server has no default project. | Pass `project` with the **absolute** path of the project folder in every tool call. Relative paths, the home folder and the filesystem root are all refused. |
 | The first read of `SKILL.md` in Codex fails with a duplicated path segment, then succeeds on retry | The plugin was installed from the pre-1.5.0 marketplace, when the marketplace and the plugin were both called `jevmcp`. | Reinstall from the current marketplace: `codex plugin remove jevmcp@jev` (or `jevmcp@jevmcp`), `codex plugin marketplace remove jevmcp`, then add `eaisdevelopment/jevmcp` again and `codex plugin add jevmcp@jev`. |
-| Codex asks before, or refuses, `check_spec_drift`, `triage_ci_failure` or `check_code_rules` | Intended. Each is declared a **write** action (`readOnlyHint: false`, `openWorldHint: true`) because data leaves the machine, so Codex asks every time — that approval *is* the user's consent for that call. Under `codex exec` the approval policy is `never`, which blocks these tools (*MCP tool call requires approval, but approval policy is never*; with Codex 0.156.1 the free read-only tools still ran), and `--approve-for-me` does not help: Codex's automatic reviewer refuses a tool that *may transmit project spec and code to the untrusted TypeSafe destination*. | Interactively: approve it. Unattended: see [clients.md](clients.md). The free tools can be allowed to run unattended with this in `~/.codex/config.toml`:<br>`[plugins."jevmcp@jev".mcp_servers.jevmcp]`<br>`default_tools_approval_mode = "auto"` |
+| Codex asks before, or refuses, `check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims` or `check_change_claims` | Intended. Each is declared a **write** action (`readOnlyHint: false`, `openWorldHint: true`) because data leaves the machine, so Codex asks every time — that approval *is* the user's consent for that call. Under `codex exec` the approval policy is `never`, which blocks these tools (*MCP tool call requires approval, but approval policy is never*; with Codex 0.156.1 the free read-only tools still ran), and `--approve-for-me` does not help: Codex's automatic reviewer refuses a tool that *may transmit project spec and code to the untrusted TypeSafe destination*. | Interactively: approve it. Unattended: see [clients.md](clients.md). The free tools can be allowed to run unattended with this in `~/.codex/config.toml`:<br>`[plugins."jevmcp@jev".mcp_servers.jevmcp]`<br>`default_tools_approval_mode = "auto"` |
 | A check inside a Codex session reports no drift suspiciously fast, or you are tempted to fall back to `spec_drift.py` there | **Codex's sandbox has no network.** A command-line run inside it silently reaches nothing. The MCP server runs *outside* the sandbox, which is why the tools work. | Never fall back to the command line inside a Codex session, and never report "no drift" from a run that could not reach TypeSafe (exit code **3**) — say the check did not run. |
 | `--set-key` exits 2 with *asks for the key without echoing it, so run it in your own terminal* | You (an agent, or a pipe) tried to run it where stdin or stdout is not a terminal. | Correct behaviour. Hand the command to the user. |
 | `--key-file …: give an absolute path` | The server was registered with a relative `--key-file`. A relative path would be read from inside the project being checked. | Use an absolute path, outside the project. |
@@ -300,6 +305,6 @@ Exit codes for the command-line scripts, for CI: **0** nothing found (no drift, 
 
 ## What happens next
 
-The plugin is installed; the project is not yet set up. For spec drift, a project is set up once, with a `spec_map.json` that pairs each sentence of the spec with the code that implements it; for code audit, with a `rule_map.json` that lists the project's own rules. The draft tools write them; the user never writes them by hand; every entry then needs review. CI triage needs no set-up. That is [how-to.md](how-to.md).
+The plugin is installed; the project is not yet set up. For spec drift, a project is set up once, with a `spec_map.json` that pairs each sentence of the spec with the code that implements it; for code audit, with a `rule_map.json` that lists the project's own rules. The draft tools write them; the user never writes them by hand; every entry then needs review. CI triage, doc claims and change claims need no set-up. That is [how-to.md](how-to.md).
 
-What each tool sends and what its labels mean: [tools.md](tools.md). Exactly what leaves the machine and what never does: [../PRIVACY.md](../PRIVACY.md).
+What each tool sends and what its labels mean: [tools.md](tools.md). Exactly what leaves the machine and what never does: [../PRIVACY.md](../PRIVACY.md). Short answers to common questions: [faq.md](faq.md).

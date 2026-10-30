@@ -1114,8 +1114,9 @@ every call.
 
 ### Approval — **every call of a tool that sends, by design**
 
-`check_spec_drift`, `triage_ci_failure` and `check_code_rules` are write actions
-(`readOnlyHint: false`, `openWorldHint: true`) because they send data to `api.typesafe.ai`, so
+`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims` and
+`check_change_claims` are write actions (`readOnlyHint: false`, `openWorldHint: true`) because they
+send data to `api.typesafe.ai`, so
 **Codex prompts before each call**. That prompt *is* the user's consent for that call. Do not try
 to route around it.
 
@@ -1246,7 +1247,8 @@ worth knowing when you read them:
 | Page | What is in it |
 |---|---|
 | `plugins/jevmcp/docs/install.md` | Installing, step by step, per client |
-| `plugins/jevmcp/docs/tools.md` | The ten tools, arguments and output in detail |
+| `plugins/jevmcp/docs/tools.md` | The fifteen tools, arguments and output in detail |
 | `plugins/jevmcp/docs/clients.md` | Every client difference, side by side |
-| `plugins/jevmcp/docs/how-to.md` | Recipes: set-up, routine checks, CI triage, code audit |
+| `plugins/jevmcp/docs/how-to.md` | Recipes: set-up, routine checks, CI triage, code audit, doc claims, change claims |
+| `plugins/jevmcp/docs/faq.md` | Short questions and answers |
 | `plugins/jevmcp/PRIVACY.md` | What is sent, what never is |

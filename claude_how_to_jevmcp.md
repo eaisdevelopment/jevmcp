@@ -26,7 +26,7 @@ There are **four layers**, and they load at different moments — which matters,
 | 3 | Each skill's body — the procedure | spec-drift 16.9 kB, ci-triage 13.6 kB, code-audit 17.5 kB | only when that skill fires |
 | 4 | The 15 tools' descriptions and JSON schemas | 68,034 characters in all | at call time |
 
-In Claude Code the wrapper is thin: the client starts the server in your project, asks you for the key when you enable the plugin, and applies its ordinary MCP permission to the three tools that send data. Most of what follows is therefore the instructions themselves.
+In Claude Code the wrapper is thin: the client starts the server in your project, asks you for the key when you enable the plugin, and applies its ordinary MCP permission to the five tools that send data. Most of what follows is therefore the instructions themselves.
 
 ---
 
@@ -1100,12 +1100,13 @@ A home folder or a filesystem root is refused as a project anywhere.
 
 ### Approval
 
-`check_spec_drift`, `triage_ci_failure` and `check_code_rules` are annotated
-`readOnlyHint: false`, `openWorldHint: true` because data leaves the machine, so Claude Code
-applies its normal MCP tool permission to them. **That prompt is about the tool, not about the
-data** — the consent for *sending* is the skills' own rule, one consent per kind of data: for spec
-drift, ask once per project unless `CLAUDE.md` / `AGENTS.md` already records it; for CI logs and
-source code, only the user in the conversation can give it.
+`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims` and
+`check_change_claims` are annotated `readOnlyHint: false`, `openWorldHint: true` because data
+leaves the machine, so Claude Code applies its normal MCP tool permission to them. **That prompt is
+about the tool, not about the data** — the consent for *sending* is the skills' own rule, one
+consent per kind of data: for spec drift, ask once per project unless `CLAUDE.md` / `AGENTS.md`
+already records it; for CI logs, source code and changes, only the user in the conversation can
+give it.
 
 ### Network
 
@@ -1188,7 +1189,8 @@ worth knowing when you read them:
 | Page | What is in it |
 |---|---|
 | `plugins/jevmcp/docs/install.md` | Installing, step by step, per client |
-| `plugins/jevmcp/docs/tools.md` | The ten tools, arguments and output in detail |
+| `plugins/jevmcp/docs/tools.md` | The fifteen tools, arguments and output in detail |
 | `plugins/jevmcp/docs/clients.md` | Every client difference, side by side |
-| `plugins/jevmcp/docs/how-to.md` | Recipes: set-up, routine checks, CI triage, code audit |
+| `plugins/jevmcp/docs/how-to.md` | Recipes: set-up, routine checks, CI triage, code audit, doc claims, change claims |
+| `plugins/jevmcp/docs/faq.md` | Short questions and answers |
 | `plugins/jevmcp/PRIVACY.md` | What is sent, what never is |

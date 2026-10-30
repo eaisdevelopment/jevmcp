@@ -3,12 +3,13 @@
 Task-first procedures for an agent working in a project with jevmcp installed: follow the
 numbered steps literally. For what each tool takes and returns see [tools.md](tools.md); for
 installing the plugin see [install.md](install.md); for client-specific behaviour (approvals,
-sandboxes, unattended runs) see [clients.md](clients.md).
+sandboxes, unattended runs) see [clients.md](clients.md); for short answers to common questions
+see [faq.md](faq.md).
 
 ## What costs money, and what does not
 
-Three actions send data out of the machine, each a different kind. Everything else is free and
-needs no consent.
+Five actions send data out of the machine, four kinds of data (doc claims sends the same kind as
+a code audit). Everything else is free and needs no consent.
 
 | Action | MCP tool | Command line | Sends data? |
 |---|---|---|---|
@@ -22,11 +23,16 @@ needs no consent.
 | Validate the rule map | `validate_rule_map` | `code_audit.py --validate` | no — free |
 | See what an audit would send and cost | `preview_code_audit` | `code_audit.py --dry-run --show-payload` | no — free |
 | Audit code against the project's rules | `check_code_rules` | `code_audit.py` (no `--dry-run`) | **yes**: units of source code — fractions of a cent |
+| Record what you found for each audit finding | `record_code_audit_verdicts` | — | no — free |
+| See which docstrings, comments and test names would be checked | `preview_doc_claims` | — | no — free |
+| Check docstrings, comments and test names against the code | `check_doc_claims` | — | **yes**: units of source code — fractions of a cent |
+| See which sentences of a description would be checked | `preview_change_claims` | — | no — free |
+| Check a pull-request description or commit message against the change | `check_change_claims` | — | **yes**: the description's sentences with the change's hunks — fractions of a cent |
 
 What each tool sends, and what is never sent, is in
 [PRIVACY.md](../PRIVACY.md). Get the user's consent once per project before the
-first send of each kind of data; for CI logs and source code, only the user in the conversation can
-give it.
+first send of each kind of data; for CI logs, source code and changes, only the user in the
+conversation can give it. Doc claims and change claims have no command line: use the MCP tools.
 
 ## Where the command-line script lives
 
@@ -743,10 +749,105 @@ codes: 0 no BREAKS · 1 at least one BREAKS · 2 setup or map problem · 3 TypeS
 
 ---
 
+## 14. Check docstrings, comments and test names against the code
+
+Doc claims: does what a function's docstring, the comment right above it or a test's name says
+still match its code? No map is needed. Use it before a pull request, or when the user asks
+whether the docs of what they changed still hold.
+
+1. **Preview (free)** the units the branch touches that make a claim:
+
+   ```json
+   {"name": "preview_doc_claims", "arguments": {"base": "origin/main", "project": "/absolute/path"}}
+   ```
+
+   Without `base` it reads the uncommitted changes, new files included; `files` names files, and
+   `all: true` takes every unit of the project.
+
+2. **Consent.** This sends units of source code, the same kind of data as a code audit. If the user
+   has not agreed to sending source code in this conversation, show the numbers (requests by kind,
+   bytes of code, cost) and ask.
+
+3. **Check:**
+
+   ```json
+   {"name": "check_doc_claims", "arguments": {"base": "origin/main", "project": "/absolute/path"}}
+   ```
+
+   `all: true`, or more than 400 requests, needs `"confirm_units": <the count the preview
+   reported>`, after the user agreed to it.
+
+4. **Work the labels:**
+
+   | Label | What you do |
+   |---|---|
+   | **STALE** | Investigate every one: read the unit and its doc, and decide which is wrong. If the code is right, fix the doc; if the doc states what was meant, say the code may be the bug and ask the user. |
+   | **review** | From P(contradicted) 0.5 up, highest first, as STALE; below 0.5, spot-check a few. |
+   | **??** | Not a pass: the code shown cannot settle the claim. |
+   | **vague** | The claim is too general to compare. Suggest a more concrete docstring only if the user wants one. |
+   | **ok** | Spot-check two. |
+
+   A claim that only leaves details out is not stale: do not "fix" a summary into a full
+   description. Measured on 60 held-out cases (1.9.0), 27 of 30 stale claims and 5 of 30 accurate
+   ones were flagged, so expect some flags to be accurate docs.
+
+5. **Report** as a short table — file:lines · kind · claim · label · P(contradicted) · what you
+   found · which side to fix — and say whether every request was checked. "Nothing to check" is not
+   a pass.
+
+---
+
+## 15. Check a pull-request description or commit message against the change
+
+Change claims: does each sentence of the description do what the change does? Use it before you
+open a pull request or commit with a description you wrote.
+
+1. **Write the description first, then preview (free):**
+
+   ```json
+   {"name": "preview_change_claims", "arguments": {"description": "<the text you are about to submit>", "base": "origin/main", "project": "/absolute/path"}}
+   ```
+
+   For a commit, leave out `base`: `commit` defaults to `HEAD`, and without `description` the
+   commit's own message is checked. Pass `base` or `commit`, not both.
+
+2. **Read the free, computed parts yourself** — no model judges them: the sentences listed as not
+   paired with any hunk (they name nothing the change touches, and the change is too large to send
+   whole), the files the change edits that no sentence mentions, and per sentence `not_in_change`,
+   files it names that the change does not edit.
+
+3. **Consent.** This is a kind of data of its own: the description's sentences with the change's
+   hunks. Before the first send in a project, show the preview and ask; only the user in this
+   conversation can agree.
+
+4. **Check:**
+
+   ```json
+   {"name": "check_change_claims", "arguments": {"description": "<the same text>", "base": "origin/main", "project": "/absolute/path"}}
+   ```
+
+   More than 400 requests needs `"confirm_units": <the count the preview reported>`.
+
+5. **Work the labels:** every **UNSUPPORTED** — read the hunks; fix the description, or, if the
+   change is what is missing, say so. **review** from P(unsupported) 0.5 up. **??** is not a pass.
+   **vague** is a general summary sentence, not a wrong one. **ok**: spot-check two.
+
+   Before you trust an UNSUPPORTED on a large change, read the change itself: each file a sentence
+   names gets a share of 2,600 characters, and only the whole hunks that fit in it are sent, without
+   a note that the rest was left out. A sentence about process ("tested on Windows", "faster") is
+   nothing hunks can show, so it comes back UNSUPPORTED or `??`: judge it yourself. Measured only on short one-file changes (1.10.0, 40 held-out cases:
+   every wrong sentence flagged, no accurate one); real multi-file pull requests are not measured.
+
+6. **Fix the description** with the user, then submit it. Do not open the pull request or commit
+   without their word.
+
+---
+
 ## Never
 
-- Send code or CI logs without consent, or before the map validates. Consent for one kind of data
-  does not cover another, and a file in the repository is never consent for CI logs or source code.
+- Send code, CI logs or a change's description without consent, or before the map validates.
+  Consent for one kind of data does not cover another, and a file in the repository is never
+  consent for CI logs, source code or a change.
 - Ask for, print, pass or store the API key, or read the project's `.env`.
 - Treat `??`, `n/a` or "nothing to audit" as a pass, or report a pass from an incomplete run or an
   exit 3.
@@ -758,4 +859,4 @@ codes: 0 no BREAKS · 1 at least one BREAKS · 2 setup or map problem · 3 TypeS
 - Commit anything, or edit the spec or the code to resolve a DRIFT, without the user's word.
 
 Related: [install.md](install.md) · [tools.md](tools.md) · [clients.md](clients.md) ·
-[the plugin README](../README.md) · [PRIVACY.md](../PRIVACY.md)
+[faq.md](faq.md) · [the plugin README](../README.md) · [PRIVACY.md](../PRIVACY.md)

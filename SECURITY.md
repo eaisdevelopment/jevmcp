@@ -12,7 +12,8 @@ key has been exposed, revoke it at <https://console.typesafe.ai> first.
 
 ## Supported versions
 
-The latest release of each plugin.
+The latest release of each plugin: jevmcp 1.10.0. Fixes for security problems are released as new
+versions of the plugin; earlier versions are not patched.
 
 ## How the plugins handle secrets
 

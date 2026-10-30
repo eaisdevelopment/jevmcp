@@ -26,8 +26,11 @@ Three tool families, each with its own skill, all on one MCP server:
   a log from any CI. Tools: `triage_ci_failure`, `preview_ci_triage`; skill `ci-triage`.
 - **Code audit** — does the code break the project's own written rules (CLAUDE.md, AGENTS.md,
   CONTRIBUTING, style guides)? Jev checks one reviewed rule against one unit of code at a time.
-  Tools: `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`; skill
-  `code-audit`.
+  Tools: `check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`,
+  `record_code_audit_verdicts`; skill `code-audit`. The same skill has two checks that need no map:
+  **doc claims** — do docstrings, the comment above a function and test names still match the code?
+  (`check_doc_claims`, `preview_doc_claims`) — and **change claims** — does a pull-request
+  description or commit message match the change? (`check_change_claims`, `preview_change_claims`).
 
 **One MCP server** (`jevmcp`) holds all fifteen tools. It keeps the parsed code in memory, so after an
 edit only the changed files are read again (a 16,000-file repository: ~2 s instead of ~20 s), and
@@ -99,7 +102,7 @@ never sees it. `--show-key-source` says where the key would come from, without p
 `export TYPESAFE_API_KEY=...` in the shell that starts Codex works too, but then Codex's own shell
 tool inherits it, so the model *could* read it with `env`; the skill tells it never to.
 
-The four tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims`, `check_change_claims`) are marked as
+The five tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims`, `check_change_claims`) are marked as
 write actions, because data leaves your machine: Codex asks you before each call — that is your
 consent. The free tools can run without asking if you add to `~/.codex/config.toml`:
 
@@ -204,6 +207,10 @@ In any project, ask your agent, for example:
   whether your change caused it and what to do next.
 - *"Set up a code audit for this project"*, then *"Audit my branch against our rules before I open
   the pull request"* — it checks the units your branch touches against each rule you approved.
+- *"Do the docstrings and test names I touched still match the code?"* — it previews the units your
+  change touches that make a claim, and with your yes flags the ones the code contradicts (STALE).
+- *"Check my pull-request description against the change"* — before you open it: each sentence
+  against the hunks it names, flagging what the change does not do (UNSUPPORTED).
 - *"Run a full spec-drift check before the release"* — every requirement, with a report of what
   to fix and on which side (code or spec).
 
@@ -291,7 +298,7 @@ else a `TYPESAFE_API_KEY=` line in the `.env` of the folder you run it from; `ci
 
 - [Install and set up](docs/install.md) · [Tools, skills and maps](docs/tools.md) ·
   [Client behaviour and limits](docs/clients.md) · [Recipes](docs/how-to.md) ·
-  [Privacy](PRIVACY.md)
+  [Questions and answers](docs/faq.md) · [Privacy](PRIVACY.md)
 - These pages ship with the plugin, so an agent can read them after installing it.
 
 ## Support

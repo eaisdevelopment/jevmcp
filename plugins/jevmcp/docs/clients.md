@@ -21,7 +21,7 @@ approval, as designed. Where something was not verified, it says so.
 | Tool names | `mcp__plugin_jevmcp_jevmcp__<tool>` | `<tool>` on server `jevmcp` of plugin `jevmcp@jev` | the client's own scheme, over server `jevmcp` |
 | Skills | `jevmcp:spec-drift`, `jevmcp:ci-triage`, `jevmcp:code-audit` | listed in the session's skill catalogue | depends on the client's skill support |
 | Must a call pass `project`? | no (but see the boundary rule below) | **yes, always**, absolute path | yes, unless the client starts the server in the project |
-| Approval for the tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`) | the client's normal MCP tool permission | **every time, by design** | the client's own rule |
+| Approval for the tools that send (`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims`, `check_change_claims`) | the client's normal MCP tool permission | **every time, by design** | the client's own rule |
 | Reading a GitHub run for CI triage | the server's `gh`, with the user's environment | the server's `gh`, with Codex's minimal environment (no token variables) | the server's `gh`, with whatever environment the client passes |
 | Unattended / CI | not established here — use the command line | `codex exec` (0.156.1): the read-only `preview_ci_triage` ran; the tools that send are blocked unless approvals and the sandbox are switched off — use the command line | unknown |
 | Network in the agent's shell | yes | **no** (sandboxed) | unknown |
@@ -127,13 +127,14 @@ which is generated from the shipped plugin on every build.
 
 ### Approvals and consent
 
-`check_spec_drift`, `triage_ci_failure` and `check_code_rules` are annotated
-`readOnlyHint: false`, `openWorldHint: true` because data leaves the machine, so Claude Code treats
+`check_spec_drift`, `triage_ci_failure`, `check_code_rules`, `check_doc_claims` and
+`check_change_claims` are annotated `readOnlyHint: false`, `openWorldHint: true` because data
+leaves the machine, so Claude Code treats
 them as write actions and applies its normal MCP permission prompt. That prompt is about the tool,
 not about the data: the **consent for sending** is the skills' own rule, one consent per kind of
 data. For spec drift, ask the user once per project before the first real check, unless the
-project's `CLAUDE.md`/`AGENTS.md` already records it. For CI logs and for source-code units only
-the user, in the conversation, can give it — never a file in the repository. The preview tools
+project's `CLAUDE.md`/`AGENTS.md` already records it. For CI logs, for source-code units and for
+a change's description with its hunks only the user, in the conversation, can give it — never a file in the repository. The preview tools
 show exactly what would be sent and need no consent. `preview_ci_triage` is read-only but marked
 open-world, because it calls GitHub.
 
@@ -255,8 +256,9 @@ hash (`~/.codex/plugins/data/agent-plugins/<64 hex characters>/`), which is exac
 
 The tools keep their plain names on server `jevmcp`: `check_spec_drift`, `validate_spec_map`,
 `preview_spec_check`, `draft_spec_map`, `triage_ci_failure`, `preview_ci_triage`,
-`check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`. In
-`~/.codex/config.toml` the table for them is
+`check_code_rules`, `preview_code_audit`, `validate_rule_map`, `draft_rule_map`,
+`record_code_audit_verdicts`, `check_doc_claims`, `preview_doc_claims`, `check_change_claims`,
+`preview_change_claims`. In `~/.codex/config.toml` the table for them is
 `[plugins."jevmcp@jev".mcp_servers.jevmcp]`. If a tool was approved by name before 1.3.0, that approval no
 longer matches (`check_drift` → `check_spec_drift`, `validate_map` → `validate_spec_map`,
 `show_payload` → `preview_spec_check`, `draft_map` → `draft_spec_map`): approve the new name once.
@@ -269,8 +271,9 @@ do?") did not. The ci-triage and code-audit skills have not been tested this way
 ### Approvals and consent
 
 **In Codex, every call of a tool that sends asks for approval.** `check_spec_drift`,
-`triage_ci_failure` and `check_code_rules` are write actions (`readOnlyHint: false`,
-`openWorldHint: true`) because they send data to `api.typesafe.ai`, so Codex prompts before each
+`triage_ci_failure`, `check_code_rules`, `check_doc_claims` and `check_change_claims` are write
+actions (`readOnlyHint: false`, `openWorldHint: true`) because they send data to
+`api.typesafe.ai`, so Codex prompts before each
 call — that prompt *is* the user's consent for that call. Do not try to route around it.
 
 The free tools can run unattended if the user adds to `~/.codex/config.toml`:
@@ -422,3 +425,4 @@ that is the one difference. `ci_triage.py` and `code_audit.py` never read a `.en
 - Recipes — first set-up, routine checks, CI: [how-to.md](how-to.md)
 - What the plugin is: [the plugin README](../README.md)
 - What is sent and what never is: [../PRIVACY.md](../PRIVACY.md)
+- Short questions and answers: [faq.md](faq.md)
