@@ -303,7 +303,8 @@ else a `TYPESAFE_API_KEY=` line in the `.env` of the folder you run it from; `ci
 
 ## Support
 
-Questions and bugs: <https://github.com/eaisdevelopment/jevmcp/issues>. Security problems: see
+Questions: [docs/faq.md](docs/faq.md), then the Q&A discussions at <https://github.com/eaisdevelopment/jevmcp/discussions/categories/q-a>.
+Bugs: <https://github.com/eaisdevelopment/jevmcp/issues>. Security problems: see
 [SECURITY.md](https://github.com/eaisdevelopment/jevmcp/blob/main/SECURITY.md).
 
 ## License

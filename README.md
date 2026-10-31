@@ -368,7 +368,9 @@ human reading over its shoulder:
 
 ## Support
 
-- Questions and bugs: [GitHub Issues](https://github.com/eaisdevelopment/jevmcp/issues)
+- Questions: [Questions and answers](plugins/jevmcp/docs/faq.md) first, then the
+  [Q&A discussions](https://github.com/eaisdevelopment/jevmcp/discussions/categories/q-a)
+- Bugs: [GitHub Issues](https://github.com/eaisdevelopment/jevmcp/issues)
 - Security problems: [SECURITY.md](SECURITY.md)
 
 ## License

@@ -192,6 +192,7 @@ Claude Code: `claude plugin update jevmcp@jev`, then restart. Codex: `codex plug
 upgrade`, then remove and add `jevmcp@jev` again. Your key and your maps are not touched. See
 [install.md](install.md#7-updating).
 
-**Where do I report a bug or ask something not answered here?**
+**Where do I ask something not answered here, or report a bug?**
+Questions: the [Q&A discussions](https://github.com/eaisdevelopment/jevmcp/discussions/categories/q-a), where an answer can be marked as the answer. Bugs:
 [GitHub Issues](https://github.com/eaisdevelopment/jevmcp/issues). Security problems: see
 [SECURITY.md](https://github.com/eaisdevelopment/jevmcp/blob/main/SECURITY.md).
